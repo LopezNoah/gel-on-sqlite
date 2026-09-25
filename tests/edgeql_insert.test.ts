@@ -5,7 +5,7 @@ import {
   queryRows,
   querySingle,
   unorderedBag,
-  unorderedSet
+  unorderedSet,
 } from "./python_query_test_helpers.js";
 
 describe("TestInsert", () => {
@@ -13,7 +13,7 @@ describe("TestInsert", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "insert"
+      schema: "insert",
     });
   });
 
@@ -22,9 +22,11 @@ describe("TestInsert", () => {
       h.script(
         `
                 INSERT InsertTest;
-            `
+            `,
       );
-    }).toThrow(new RegExp("missing value for required property 'l2' of object type 'default::InsertTest'"));
+    }).toThrow(
+      new RegExp("missing value for required property 'l2' of object type 'default::InsertTest'"),
+    );
   });
 
   it("test_edgeql_insert_fail_02", () => {
@@ -34,9 +36,11 @@ describe("TestInsert", () => {
                 INSERT InsertTest {
                     l2 := assert_single({})
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("missing value for required property 'l2' of object type 'default::InsertTest'"));
+    }).toThrow(
+      new RegExp("missing value for required property 'l2' of object type 'default::InsertTest'"),
+    );
   });
 
   it("test_edgeql_insert_fail_03", () => {
@@ -48,9 +52,13 @@ describe("TestInsert", () => {
                     last := "bar",
                     name := "something else",
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("modification of computed property 'name' of object type 'default::Person2b' is prohibited"));
+    }).toThrow(
+      new RegExp(
+        "modification of computed property 'name' of object type 'default::Person2b' is prohibited",
+      ),
+    );
   });
 
   it("test_edgeql_insert_fail_04", () => {
@@ -58,7 +66,7 @@ describe("TestInsert", () => {
       h.script(
         `
                 INSERT Person { name };
-            `
+            `,
       );
     }).toThrow(new RegExp("mutation queries must specify values with ':='"));
   });
@@ -68,7 +76,7 @@ describe("TestInsert", () => {
       h.script(
         `
                 INSERT Person.notes { name := "note1" };
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT only works with object types, not arbitrary expressions"));
   });
@@ -78,7 +86,7 @@ describe("TestInsert", () => {
       h.script(
         `
                 INSERT Person { name := .name };
-            `
+            `,
       );
     }).toThrow(new RegExp("could not resolve partial path"));
   });
@@ -88,7 +96,7 @@ describe("TestInsert", () => {
       h.script(
         `
                 INSERT schema::Migration { script := 'foo' };
-            `
+            `,
       );
     }).toThrow(new RegExp("insert standard library type"));
   });
@@ -98,7 +106,7 @@ describe("TestInsert", () => {
       h.script(
         `
                 insert Note {name := 'bad note'} union DerivedNote;
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT only works with object types, not arbitrary expressions"));
   });
@@ -110,7 +118,7 @@ describe("TestInsert", () => {
                 insert Note {
                     name := 'bad note'
                 } if not exists DerivedNote else DerivedNote;
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT only works with object types, not conditional expressions"));
   });
@@ -140,7 +148,7 @@ describe("TestInsert", () => {
                 l3 := '\\"Test\\'3\\'\\"',
                 l2 := 3
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -155,23 +163,23 @@ describe("TestInsert", () => {
                     InsertTest.l2;
             `,
       [
-            {
-              "l2": 0,
-              "l3": "test",
-            },
-            {
-              "l2": 1,
-              "l3": "Test\"1\"",
-            },
-            {
-              "l2": 2,
-              "l3": "Test'2'",
-            },
-            {
-              "l2": 3,
-              "l3": "\"Test'3'\"",
-            },
-          ]
+        {
+          l2: 0,
+          l3: "test",
+        },
+        {
+          l2: 1,
+          l3: 'Test"1"',
+        },
+        {
+          l2: 2,
+          l3: "Test'2'",
+        },
+        {
+          l2: 3,
+          l3: "\"Test'3'\"",
+        },
+      ],
     );
   });
 
@@ -183,7 +191,7 @@ describe("TestInsert", () => {
             INSERT DefaultTest1 { foo := '02' };
 
             INSERT DefaultTest1 { foo := '02' };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -191,16 +199,16 @@ describe("TestInsert", () => {
                 SELECT DefaultTest1 { num } FILTER DefaultTest1.foo = '02';
             `,
       [
-            {
-              "num": 42,
-            },
-            {
-              "num": 42,
-            },
-            {
-              "num": 42,
-            },
-          ]
+        {
+          num: 42,
+        },
+        {
+          num: 42,
+        },
+        {
+          num: 42,
+        },
+      ],
     );
   });
 
@@ -218,7 +226,7 @@ describe("TestInsert", () => {
             INSERT DefaultTest1 { num := 102 };
 
             INSERT DefaultTest2;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -227,16 +235,16 @@ describe("TestInsert", () => {
                 ORDER BY DefaultTest2.num;
             `,
       [
-            {
-              "num": 101,
-            },
-            {
-              "num": 102,
-            },
-            {
-              "num": 103,
-            },
-          ]
+        {
+          num: 101,
+        },
+        {
+          num: 102,
+        },
+        {
+          num: 103,
+        },
+      ],
     );
   });
 
@@ -249,7 +257,7 @@ describe("TestInsert", () => {
                     l2 := 0,
                 }
             ), select 1;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -262,10 +270,10 @@ describe("TestInsert", () => {
                     InsertTest.name = 'insert simple 01'
             `,
       [
-            {
-              "l2": 0,
-            },
-          ]
+        {
+          l2: 0,
+        },
+      ],
     );
     h.script(
       `
@@ -279,7 +287,7 @@ describe("TestInsert", () => {
                 name := 'insert simple 01',
                 l2 := 2,
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -293,16 +301,16 @@ describe("TestInsert", () => {
                 ORDER BY .l2
             `,
       [
-            {
-              "l2": 0,
-            },
-            {
-              "l2": 1,
-            },
-            {
-              "l2": 2,
-            },
-          ]
+        {
+          l2: 0,
+        },
+        {
+          l2: 1,
+        },
+        {
+          l2: 2,
+        },
+      ],
     );
   });
 
@@ -325,7 +333,7 @@ describe("TestInsert", () => {
                     FILTER Subordinate.name LIKE 'subtest%'
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -340,19 +348,19 @@ describe("TestInsert", () => {
                     InsertTest.name = 'insert nested';
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "subtest 1",
-                  "@comment": null,
-                },
-                {
-                  "name": "subtest 2",
-                  "@comment": null,
-                },
-              ],
+              name: "subtest 1",
+              "@comment": null,
             },
-          ]
+            {
+              name: "subtest 2",
+              "@comment": null,
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -377,7 +385,7 @@ describe("TestInsert", () => {
                     FILTER Subordinate.name IN {'subtest 3', 'subtest 4'}
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -392,19 +400,19 @@ describe("TestInsert", () => {
                     InsertTest.name = 'insert nested 2';
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "subtest 3",
-                  "@comment": "comment subtest 3",
-                },
-                {
-                  "name": "subtest 4",
-                  "@comment": "comment subtest 4",
-                },
-              ],
+              name: "subtest 3",
+              "@comment": "comment subtest 3",
             },
-          ]
+            {
+              name: "subtest 4",
+              "@comment": "comment subtest 4",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -418,7 +426,7 @@ describe("TestInsert", () => {
                     name := 'nested sub 3.1'
                 })
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -432,14 +440,14 @@ describe("TestInsert", () => {
                     InsertTest.name = 'insert nested 3';
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "nested sub 3.1",
-                },
-              ],
+              name: "nested sub 3.1",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -454,7 +462,7 @@ describe("TestInsert", () => {
                     @comment := 'comment 4.1'
                 })
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -469,15 +477,15 @@ describe("TestInsert", () => {
                     InsertTest.name = 'insert nested 4';
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "nested sub 4.1",
-                  "@comment": "comment 4.1",
-                },
-              ],
+              name: "nested sub 4.1",
+              "@comment": "comment 4.1",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -500,7 +508,7 @@ describe("TestInsert", () => {
                     FILTER Subordinate.name = 'only subordinate'
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -514,16 +522,16 @@ describe("TestInsert", () => {
                 } FILTER InsertTest.name = 'insert nested 5';
             `,
       [
+        {
+          name: "insert nested 5",
+          l2: 0,
+          subordinates: [
             {
-              "name": "insert nested 5",
-              "l2": 0,
-              "subordinates": [
-                {
-                  "name": "only subordinate",
-                },
-              ],
+              name: "only subordinate",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -544,7 +552,7 @@ describe("TestInsert", () => {
                     LIMIT 1
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -559,15 +567,15 @@ describe("TestInsert", () => {
                     InsertTest.name = 'insert nested 6';
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "linkprop test target 6",
-                  "@comment": "comment 6",
-                },
-              ],
+              name: "linkprop test target 6",
+              "@comment": "comment 6",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -581,7 +589,7 @@ describe("TestInsert", () => {
                         @comment := 'comment 7.1',
                     }
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("Unexpected 'Subordinate'"));
   });
@@ -610,15 +618,15 @@ describe("TestInsert", () => {
             };
         `,
       [
+        {
+          name: "insert nested 8",
+          subordinates: [
             {
-              "name": "insert nested 8",
-              "subordinates": [
-                {
-                  "name": "nested sub 8.1",
-                },
-              ],
+              name: "nested sub 8.1",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -635,7 +643,7 @@ describe("TestInsert", () => {
                     }
                 )
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -650,14 +658,14 @@ describe("TestInsert", () => {
                 .name = 'insert nested 9'
         `,
       [
-            {
-              "name": "insert nested 9",
-              "sub": {
-                "name": "nested sub 9",
-                "@note": "sub note 9",
-              },
-            },
-          ]
+        {
+          name: "insert nested 9",
+          sub: {
+            name: "nested sub 9",
+            "@note": "sub note 9",
+          },
+        },
+      ],
     );
   });
 
@@ -680,7 +688,7 @@ describe("TestInsert", () => {
                     LIMIT 1
                 )
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -695,14 +703,14 @@ describe("TestInsert", () => {
                 .name = 'insert nested 10'
         `,
       [
-            {
-              "name": "insert nested 10",
-              "sub": {
-                "name": "nested sub 10",
-                "@note": "sub note 10",
-              },
-            },
-          ]
+        {
+          name: "insert nested 10",
+          sub: {
+            name: "nested sub 10",
+            "@note": "sub note 10",
+          },
+        },
+      ],
     );
   });
 
@@ -712,7 +720,7 @@ describe("TestInsert", () => {
             INSERT Subordinate {
                 name := 'linkprop test target 6'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -732,15 +740,15 @@ describe("TestInsert", () => {
                 }
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "linkprop test target 6",
-                  "@comment": "comment 6",
-                },
-              ],
+              name: "linkprop test target 6",
+              "@comment": "comment 6",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -751,14 +759,14 @@ describe("TestInsert", () => {
               ALTER LINK subordinates
                 ALTER PROPERTY comment
                   SET default := "!!!";
-        `
+        `,
     );
     h.script(
       `
             INSERT Subordinate {
                 name := 'linkprop test target 6'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -776,15 +784,15 @@ describe("TestInsert", () => {
                 }
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "linkprop test target 6",
-                  "@comment": "!!!",
-                },
-              ],
+              name: "linkprop test target 6",
+              "@comment": "!!!",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -795,7 +803,7 @@ describe("TestInsert", () => {
                 foo := 'ret1',
                 num := 1,
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -806,10 +814,10 @@ describe("TestInsert", () => {
                 }) {foo};
             `,
       [
-            {
-              "foo": "ret2",
-            },
-          ]
+        {
+          foo: "ret2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -819,7 +827,7 @@ describe("TestInsert", () => {
                     num := 3
                 }).num;
             `,
-      [3]
+      [3],
     );
   });
 
@@ -833,10 +841,10 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "id": "UUID",
-            },
-          ]
+        {
+          id: "UUID",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -847,10 +855,10 @@ describe("TestInsert", () => {
                 }) {foo};
             `,
       [
-            {
-              "foo": "ret2",
-            },
-          ]
+        {
+          foo: "ret2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -860,9 +868,12 @@ describe("TestInsert", () => {
                     num := 3
                 }).num;
             `,
-      [3]
+      [3],
     );
-    let obj = queryRows<Record<string, unknown>>(h, "\n                INSERT DefaultTest1 {\n                    foo := 'ret1',\n                    num := 1,\n                };\n            ");
+    let obj = queryRows<Record<string, unknown>>(
+      h,
+      "\n                INSERT DefaultTest1 {\n                    foo := 'ret1',\n                    num := 1,\n                };\n            ",
+    );
     expect(Object.prototype.hasOwnProperty.call(obj[0], "id")).toBeTruthy();
     expect(Object.prototype.hasOwnProperty.call(obj[0], "__tid__")).toBeTruthy();
     expect(obj[0].__tname__).toEqual("default::DefaultTest1");
@@ -874,7 +885,7 @@ describe("TestInsert", () => {
             INSERT Subordinate {
                 name := 'sub returning 3'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -897,16 +908,16 @@ describe("TestInsert", () => {
                 };
             `,
       [
+        {
+          name: "insert nested returning 3",
+          l2: 0,
+          subordinates: [
             {
-              "name": "insert nested returning 3",
-              "l2": 0,
-              "subordinates": [
-                {
-                  "name": "sub returning 3",
-                },
-              ],
+              name: "sub returning 3",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -920,11 +931,11 @@ describe("TestInsert", () => {
                 }) {foo, num};
             `,
       [
-            {
-              "foo": "DT returning 4",
-              "num": 33,
-            },
-          ]
+        {
+          foo: "DT returning 4",
+          num: 33,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -938,7 +949,7 @@ describe("TestInsert", () => {
                     DefaultTest1 {foo, num}
                     FILTER DefaultTest1.num > I.l2;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -953,11 +964,11 @@ describe("TestInsert", () => {
                     FILTER DefaultTest1.num > I.l2;
             `,
       [
-            {
-              "foo": "DT returning 4",
-              "num": 33,
-            },
-          ]
+        {
+          foo: "DT returning 4",
+          num: 33,
+        },
+      ],
     );
   });
 
@@ -974,11 +985,11 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "foo": "DT returning 5",
-              "num": 42,
-            },
-          ]
+        {
+          foo: "DT returning 5",
+          num: 42,
+        },
+      ],
     );
   });
 
@@ -988,7 +999,7 @@ describe("TestInsert", () => {
             INSERT Subordinate {
                 name := 'DefaultTest5/Sub'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1004,13 +1015,13 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "ret6/DT5",
-              "other": {
-                "name": "DefaultTest5/Sub",
-              },
-            },
-          ]
+        {
+          name: "ret6/DT5",
+          other: {
+            name: "DefaultTest5/Sub",
+          },
+        },
+      ],
     );
   });
 
@@ -1020,7 +1031,7 @@ describe("TestInsert", () => {
             INSERT Subordinate {
                 name := 'DefaultTest5/Sub'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1039,16 +1050,16 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "ret7/DT6",
-              "other": {
-                "name": "DefaultTest6/5",
-                "other": {
-                  "name": "DefaultTest5/Sub",
-                },
-              },
+        {
+          name: "ret7/DT6",
+          other: {
+            name: "DefaultTest6/5",
+            other: {
+              name: "DefaultTest5/Sub",
             },
-          ]
+          },
+        },
+      ],
     );
   });
 
@@ -1058,7 +1069,7 @@ describe("TestInsert", () => {
             INSERT Subordinate {
                 name := 'DefaultTest5/Sub'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1080,19 +1091,19 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "ret8/DT7",
-              "other": {
-                "name": "DefaultTest7/6",
-                "other": {
-                  "name": "DefaultTest6/5",
-                  "other": {
-                    "name": "DefaultTest5/Sub",
-                  },
-                },
+        {
+          name: "ret8/DT7",
+          other: {
+            name: "DefaultTest7/6",
+            other: {
+              name: "DefaultTest6/5",
+              other: {
+                name: "DefaultTest5/Sub",
               },
             },
-          ]
+          },
+        },
+      ],
     );
   });
 
@@ -1110,15 +1121,15 @@ describe("TestInsert", () => {
 
             `,
       [
+        {
+          name: "Phil Emarg",
+          notes: [
             {
-              "name": "Phil Emarg",
-              "notes": [
-                {
-                  "name": "!",
-                },
-              ],
+              name: "!",
             },
-          ]
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1134,18 +1145,18 @@ describe("TestInsert", () => {
 
             `,
       [
+        {
+          name: "Madeline Hatch",
+          notes: [
             {
-              "name": "Madeline Hatch",
-              "notes": [
-                {
-                  "name": "!",
-                  "subject": {
-                    "name": "sub",
-                  },
-                },
-              ],
+              name: "!",
+              subject: {
+                name: "sub",
+              },
             },
-          ]
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1160,17 +1171,17 @@ describe("TestInsert", () => {
             )) { person: { name, notes: {name} } };
             `,
       [
-            {
-              "person": {
-                "name": "Emmanuel Villip",
-                "notes": [
-                  {
-                    "name": "!",
-                  },
-                ],
+        {
+          person: {
+            name: "Emmanuel Villip",
+            notes: [
+              {
+                name: "!",
               },
-            },
-          ]
+            ],
+          },
+        },
+      ],
     );
   });
 
@@ -1185,13 +1196,13 @@ describe("TestInsert", () => {
                 { name, subject };
             `,
       [
-            {
-              "name": "test",
-              "subject": {
-                "id": "str",
-              },
-            },
-          ]
+        {
+          name: "test",
+          subject: {
+            id: "str",
+          },
+        },
+      ],
     );
   });
 
@@ -1199,7 +1210,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Note { name := "note", note := "a" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1215,15 +1226,15 @@ describe("TestInsert", () => {
                 { name, notes: {note} };
             `,
       [
+        {
+          name: "test",
+          notes: [
             {
-              "name": "test",
-              "notes": [
-                {
-                  "note": "b",
-                },
-              ],
+              note: "b",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1231,7 +1242,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedNote { name := "note", note := "a" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1247,15 +1258,15 @@ describe("TestInsert", () => {
                 { name, notes: {note} };
             `,
       [
+        {
+          name: "test",
+          notes: [
             {
-              "name": "test",
-              "notes": [
-                {
-                  "note": "b",
-                },
-              ],
+              note: "b",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1264,7 +1275,7 @@ describe("TestInsert", () => {
       `
             INSERT DerivedNote { name := "dnote", note := "a" };
             INSERT DerivedNote { name := "anote", note := "some note" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1281,24 +1292,24 @@ describe("TestInsert", () => {
             { name, notes: {name, note} ORDER BY .name };
             `,
       [
+        {
+          name: "test",
+          notes: [
             {
-              "name": "test",
-              "notes": [
-                {
-                  "name": "anote",
-                  "note": "some note",
-                },
-                {
-                  "name": "dnote",
-                  "note": "b",
-                },
-                {
-                  "name": "new note",
-                  "note": "hi",
-                },
-              ],
+              name: "anote",
+              note: "some note",
             },
-          ]
+            {
+              name: "dnote",
+              note: "b",
+            },
+            {
+              name: "new note",
+              note: "hi",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -1307,7 +1318,7 @@ describe("TestInsert", () => {
       `
             INSERT DerivedNote { name := "dnote", note := "a" };
             INSERT DerivedNote { name := "anote", note := "some note" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1328,24 +1339,24 @@ describe("TestInsert", () => {
             }
             `,
       [
+        {
+          name: "test",
+          dnotes: [
             {
-              "name": "test",
-              "dnotes": [
-                {
-                  "name": "anote",
-                  "note": "some note",
-                },
-                {
-                  "name": "dnote",
-                  "note": "b",
-                },
-                {
-                  "name": "new note",
-                  "note": "hi",
-                },
-              ],
+              name: "anote",
+              note: "some note",
             },
-          ]
+            {
+              name: "dnote",
+              note: "b",
+            },
+            {
+              name: "new note",
+              note: "hi",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -1355,7 +1366,7 @@ describe("TestInsert", () => {
             alter type Person {
                 create access policy ok allow all using (true);
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1366,12 +1377,12 @@ describe("TestInsert", () => {
             )) { person: { name } };
             `,
       [
-            {
-              "person": {
-                "name": "Emmanuel Villip",
-              },
-            },
-          ]
+        {
+          person: {
+            name: "Emmanuel Villip",
+          },
+        },
+      ],
     );
   });
 
@@ -1385,7 +1396,7 @@ describe("TestInsert", () => {
                 create link tgt -> Tgt;
                 create constraint exclusive on (.tgt);
             };
-        `
+        `,
     );
     h.script(
       `
@@ -1393,7 +1404,7 @@ describe("TestInsert", () => {
                 tgt := (SELECT Tgt LIMIT 1)
             }
             UNLESS CONFLICT ON (.tgt)
-        `
+        `,
     );
   });
 
@@ -1404,20 +1415,20 @@ describe("TestInsert", () => {
                 create access policy yes allow all using (true);
                 create access policy no deny select using (true);
             };
-        `
+        `,
     );
     h.script(
       `
             insert Person { name := "test" }
             unless conflict on (.name) else (Person);
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             insert Person { name := "test" }
             unless conflict on (.name) else (Person);
-        `
+        `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     h.script(
@@ -1425,7 +1436,7 @@ describe("TestInsert", () => {
             insert Person {
                 name := "test2", note := (insert Note { name := "" }) }
             unless conflict on (.name) else (Person);
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -1433,7 +1444,7 @@ describe("TestInsert", () => {
             insert Person {
                 name := "test2", note := (insert Note { name := "" }) }
             unless conflict on (.name) else (Person);
-        `
+        `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -1448,14 +1459,17 @@ describe("TestInsert", () => {
                     (.subject in global sub) ?? false
                 )
             };
-        `
+        `,
     );
-    let sub = querySingle<{ id: string }>(h, "\n            insert Subordinate { name := \"asdf\" };\n        ");
+    let sub = querySingle<{ id: string }>(
+      h,
+      '\n            insert Subordinate { name := "asdf" };\n        ',
+    );
     expect(() => {
       h.script(
         `
                 insert Person { notes := (insert Note { name := "" }) };
-            `
+            `,
       );
     }).toThrow(new RegExp("violation on insert of default::Note"));
     expect(() => {
@@ -1468,14 +1482,14 @@ describe("TestInsert", () => {
                           (select Subordinate filter .name = 'asdf'))
                     })
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("violation on insert of default::Note"));
     h.script(
       `
             set global sub_id := <uuid>$0
         `,
-      [sub.id]
+      [sub.id],
     );
     h.script(
       `
@@ -1486,7 +1500,7 @@ describe("TestInsert", () => {
                       (select Subordinate filter .name = 'asdf'))
                 })
             };
-        `
+        `,
     );
   });
 
@@ -1506,7 +1520,7 @@ describe("TestInsert", () => {
                 l2 := 35 % Q.l2,
                 l3 := Q.foo,
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1516,47 +1530,47 @@ describe("TestInsert", () => {
                 ORDER BY .l2 THEN .l3;
             `,
       [
-            {
-              "name": "insert for 1",
-              "l2": 0,
-              "l3": "foo5",
-            },
-            {
-              "name": "insert for 1",
-              "l2": 0,
-              "l3": "foo7",
-            },
-            {
-              "name": "insert for 1",
-              "l2": 1,
-              "l3": "foo2",
-            },
-            {
-              "name": "insert for 1",
-              "l2": 2,
-              "l3": "foo3",
-            },
-            {
-              "name": "insert for 1",
-              "l2": 2,
-              "l3": "test",
-            },
-            {
-              "name": "insert for 1",
-              "l2": 3,
-              "l3": "test",
-            },
-            {
-              "name": "insert for 1",
-              "l2": 5,
-              "l3": "test",
-            },
-            {
-              "name": "insert for 1",
-              "l2": 7,
-              "l3": "test",
-            },
-          ]
+        {
+          name: "insert for 1",
+          l2: 0,
+          l3: "foo5",
+        },
+        {
+          name: "insert for 1",
+          l2: 0,
+          l3: "foo7",
+        },
+        {
+          name: "insert for 1",
+          l2: 1,
+          l3: "foo2",
+        },
+        {
+          name: "insert for 1",
+          l2: 2,
+          l3: "foo3",
+        },
+        {
+          name: "insert for 1",
+          l2: 2,
+          l3: "test",
+        },
+        {
+          name: "insert for 1",
+          l2: 3,
+          l3: "test",
+        },
+        {
+          name: "insert for 1",
+          l2: 5,
+          l3: "test",
+        },
+        {
+          name: "insert for 1",
+          l2: 7,
+          l3: "test",
+        },
+      ],
     );
   });
 
@@ -1567,7 +1581,7 @@ describe("TestInsert", () => {
             # as having a randomly generated value for 'foo'
             FOR x IN {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
             UNION (INSERT DefaultTest3);
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1579,7 +1593,7 @@ describe("TestInsert", () => {
                 SELECT count(
                     DefaultTest3 FILTER DefaultTest3.foo != DT3.foo) > 0;
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
@@ -1592,7 +1606,7 @@ describe("TestInsert", () => {
             # new objects.
             FOR x IN {1, 2, 3, 4, 5}
             UNION (INSERT DefaultTest4);
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1600,7 +1614,7 @@ describe("TestInsert", () => {
                 SELECT DefaultTest4.bar
                 ORDER BY DefaultTest4.bar;
             `,
-      [0, 0, 0, 0, 0]
+      [0, 0, 0, 0, 0],
     );
   });
 
@@ -1618,7 +1632,7 @@ describe("TestInsert", () => {
                     }
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1632,133 +1646,115 @@ describe("TestInsert", () => {
                 FILTER .name = 'nested-insert-for'
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "sub1",
-                  "@comment": "first",
-                },
-                {
-                  "name": "sub2",
-                  "@comment": "second",
-                },
-              ],
+              name: "sub1",
+              "@comment": "first",
             },
-          ]
+            {
+              name: "sub2",
+              "@comment": "second",
+            },
+          ],
+        },
+      ],
     );
   });
 
   it("test_edgeql_insert_for_06", () => {
-    let res = queryRows(h, "\n            FOR a IN {\"a\", \"b\"}\n            FOR b IN {\"c\", \"d\"}\n            INSERT Note {name := b};\n        ");
-    expect((res).length).toEqual(4);
+    let res = queryRows(
+      h,
+      '\n            FOR a IN {"a", "b"}\n            FOR b IN {"c", "d"}\n            INSERT Note {name := b};\n        ',
+    );
+    expect(res.length).toEqual(4);
     assertQueryResult(
       h,
       `
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      ["c", "c", "d", "d"]
+      ["c", "c", "d", "d"],
     );
   });
 
   it("test_edgeql_insert_for_07", () => {
-    let res = queryRows(h, "\n            FOR a IN {\"a\", \"b\"}\n            FOR b IN {a++\"c\", a++\"d\"}\n            INSERT Note {name := b};\n        ");
-    expect((res).length).toEqual(4);
+    let res = queryRows(
+      h,
+      '\n            FOR a IN {"a", "b"}\n            FOR b IN {a++"c", a++"d"}\n            INSERT Note {name := b};\n        ',
+    );
+    expect(res.length).toEqual(4);
     assertQueryResult(
       h,
       `
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      ["ac", "ad", "bc", "bd"]
+      ["ac", "ad", "bc", "bd"],
     );
   });
 
   it("test_edgeql_insert_for_08", () => {
-    let res = queryRows(h, "\n            FOR a IN {\"a\", \"b\"}\n            FOR b IN {\"a\", \"b\"}\n            FOR c IN {a++b++\"a\", a++b++\"b\"}\n            INSERT Note {name := c};\n        ");
-    expect((res).length).toEqual(8);
+    let res = queryRows(
+      h,
+      '\n            FOR a IN {"a", "b"}\n            FOR b IN {"a", "b"}\n            FOR c IN {a++b++"a", a++b++"b"}\n            INSERT Note {name := c};\n        ',
+    );
+    expect(res.length).toEqual(8);
     assertQueryResult(
       h,
       `
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      [
-            "aaa",
-            "aab",
-            "aba",
-            "abb",
-            "baa",
-            "bab",
-            "bba",
-            "bbb",
-          ]
+      ["aaa", "aab", "aba", "abb", "baa", "bab", "bba", "bbb"],
     );
   });
 
   it("test_edgeql_insert_for_09", () => {
-    let res = queryRows(h, "\n            FOR a in {\"a\", \"b\"} UNION (\n                FOR b in {\"a\", \"b\"} UNION (\n                    FOR c in {\"a\", \"b\"} UNION (\n                        INSERT Note {name := a++b++c})));\n        ");
-    expect((res).length).toEqual(8);
+    let res = queryRows(
+      h,
+      '\n            FOR a in {"a", "b"} UNION (\n                FOR b in {"a", "b"} UNION (\n                    FOR c in {"a", "b"} UNION (\n                        INSERT Note {name := a++b++c})));\n        ',
+    );
+    expect(res.length).toEqual(8);
     assertQueryResult(
       h,
       `
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      [
-            "aaa",
-            "aab",
-            "aba",
-            "abb",
-            "baa",
-            "bab",
-            "bba",
-            "bbb",
-          ]
+      ["aaa", "aab", "aba", "abb", "baa", "bab", "bba", "bbb"],
     );
   });
 
   it("test_edgeql_insert_for_10", () => {
-    let res = queryRows(h, "\n            FOR a in {\"a\", \"b\"} UNION (\n                FOR b in {\"a\", \"b\"} UNION (\n                    FOR c in {\"a\", \"b\"} UNION (\n                        INSERT Note {name := a++b})));\n        ");
-    expect((res).length).toEqual(8);
+    let res = queryRows(
+      h,
+      '\n            FOR a in {"a", "b"} UNION (\n                FOR b in {"a", "b"} UNION (\n                    FOR c in {"a", "b"} UNION (\n                        INSERT Note {name := a++b})));\n        ',
+    );
+    expect(res.length).toEqual(8);
     assertQueryResult(
       h,
       `
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      [
-            "aa",
-            "aa",
-            "ab",
-            "ab",
-            "ba",
-            "ba",
-            "bb",
-            "bb",
-          ]
+      ["aa", "aa", "ab", "ab", "ba", "ba", "bb", "bb"],
     );
   });
 
   it("test_edgeql_insert_for_11", () => {
-    let res = queryRows(h, "\n            FOR a in {\"a\", \"b\"} UNION (\n                FOR b in {\"a\", \"b\"} UNION (\n                    FOR c in {\"a\", \"b\"} UNION (\n                        INSERT Note {name := a})));\n        ");
-    expect((res).length).toEqual(8);
+    let res = queryRows(
+      h,
+      '\n            FOR a in {"a", "b"} UNION (\n                FOR b in {"a", "b"} UNION (\n                    FOR c in {"a", "b"} UNION (\n                        INSERT Note {name := a})));\n        ',
+    );
+    expect(res.length).toEqual(8);
     assertQueryResult(
       h,
       `
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      [
-            "a",
-            "a",
-            "a",
-            "a",
-            "b",
-            "b",
-            "b",
-            "b",
-          ]
+      ["a", "a", "a", "a", "b", "b", "b", "b"],
     );
   });
 
@@ -1771,15 +1767,9 @@ describe("TestInsert", () => {
                 )
             `,
       unorderedBag([
-            [
-              "bar",
-              {},
-            ],
-            [
-              "foo",
-              {},
-            ],
-          ])
+        ["bar", {}],
+        ["foo", {}],
+      ]),
     );
     assertQueryResult(
       h,
@@ -1787,7 +1777,7 @@ describe("TestInsert", () => {
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      ["bar", "foo"]
+      ["bar", "foo"],
     );
   });
 
@@ -1800,13 +1790,13 @@ describe("TestInsert", () => {
                 )
             `,
       unorderedBag([
-            {
-              "name": "bar",
-            },
-            {
-              "name": "foo",
-            },
-          ])
+        {
+          name: "bar",
+        },
+        {
+          name: "foo",
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1814,7 +1804,7 @@ describe("TestInsert", () => {
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      ["bar", "foo"]
+      ["bar", "foo"],
     );
   });
 
@@ -1829,11 +1819,11 @@ describe("TestInsert", () => {
                 )
             `,
       unorderedBag([
-            ["a", "c", "ac"],
-            ["a", "d", "ad"],
-            ["b", "c", "bc"],
-            ["b", "d", "bd"],
-          ])
+        ["a", "c", "ac"],
+        ["a", "d", "ad"],
+        ["b", "c", "bc"],
+        ["b", "d", "bd"],
+      ]),
     );
     assertQueryResult(
       h,
@@ -1841,7 +1831,7 @@ describe("TestInsert", () => {
                 SELECT Note.name
                 ORDER BY Note.name;
             `,
-      ["ac", "ad", "bc", "bd"]
+      ["ac", "ad", "bc", "bd"],
     );
   });
 
@@ -1852,30 +1842,26 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person {name := noob ++ "!",
                                notes := (INSERT Note {name := noob})});
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, notes: {name} } ORDER BY .name DESC`,
-      [
-            {
-              "name": "Phil Emarg!",
-              "notes": [
-                {
-                  "name": "Phil Emarg",
-                },
-              ],
-            },
-            {
-              "name": "Madeline Hatch!",
-              "notes": [
-                {
-                  "name": "Madeline Hatch",
-                },
-              ],
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person { name, notes: {name} } ORDER BY .name DESC`, [
+      {
+        name: "Phil Emarg!",
+        notes: [
+          {
+            name: "Phil Emarg",
+          },
+        ],
+      },
+      {
+        name: "Madeline Hatch!",
+        notes: [
+          {
+            name: "Madeline Hatch",
+          },
+        ],
+      },
+    ]);
   });
 
   it("test_edgeql_insert_for_16", () => {
@@ -1887,36 +1873,36 @@ describe("TestInsert", () => {
                                notes := (
                     FOR suffix in {"?", "!"} UNION (
                         INSERT Note {name := noob ++ suffix}))});
-        `
+        `,
     );
     assertQueryResult(
       h,
       `SELECT Person {
                name, notes: {name} ORDER BY .name DESC} ORDER BY .name DESC`,
       [
+        {
+          name: "Phil Emarg",
+          notes: [
             {
-              "name": "Phil Emarg",
-              "notes": [
-                {
-                  "name": "Phil Emarg?",
-                },
-                {
-                  "name": "Phil Emarg!",
-                },
-              ],
+              name: "Phil Emarg?",
             },
             {
-              "name": "Madeline Hatch",
-              "notes": [
-                {
-                  "name": "Madeline Hatch?",
-                },
-                {
-                  "name": "Madeline Hatch!",
-                },
-              ],
+              name: "Phil Emarg!",
             },
-          ]
+          ],
+        },
+        {
+          name: "Madeline Hatch",
+          notes: [
+            {
+              name: "Madeline Hatch?",
+            },
+            {
+              name: "Madeline Hatch!",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -1929,36 +1915,36 @@ describe("TestInsert", () => {
                                notes := (SELECT (
                     FOR suffix in {"?", "!"} UNION (
                         INSERT Note {name := noob ++ suffix})))});
-        `
+        `,
     );
     assertQueryResult(
       h,
       `SELECT Person {
                name, notes: {name} ORDER BY .name DESC} ORDER BY .name DESC`,
       [
+        {
+          name: "Phil Emarg",
+          notes: [
             {
-              "name": "Phil Emarg",
-              "notes": [
-                {
-                  "name": "Phil Emarg?",
-                },
-                {
-                  "name": "Phil Emarg!",
-                },
-              ],
+              name: "Phil Emarg?",
             },
             {
-              "name": "Madeline Hatch",
-              "notes": [
-                {
-                  "name": "Madeline Hatch?",
-                },
-                {
-                  "name": "Madeline Hatch!",
-                },
-              ],
+              name: "Phil Emarg!",
             },
-          ]
+          ],
+        },
+        {
+          name: "Madeline Hatch",
+          notes: [
+            {
+              name: "Madeline Hatch?",
+            },
+            {
+              name: "Madeline Hatch!",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -1969,26 +1955,22 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person {name := noob ++ "!",
                                note := (INSERT Note {name := noob})});
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, note: {name} } ORDER BY .name DESC`,
-      [
-            {
-              "name": "Phil Emarg!",
-              "note": {
-                "name": "Phil Emarg",
-              },
-            },
-            {
-              "name": "Madeline Hatch!",
-              "note": {
-                "name": "Madeline Hatch",
-              },
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person { name, note: {name} } ORDER BY .name DESC`, [
+      {
+        name: "Phil Emarg!",
+        note: {
+          name: "Phil Emarg",
+        },
+      },
+      {
+        name: "Madeline Hatch!",
+        note: {
+          name: "Madeline Hatch",
+        },
+      },
+    ]);
   });
 
   it("test_edgeql_insert_for_19", () => {
@@ -2000,20 +1982,16 @@ describe("TestInsert", () => {
                     name := t.name, l2 := t.l2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT InsertTest`,
-      []
-    );
+    assertQueryResult(h, `SELECT InsertTest`, []);
   });
 
   it("test_edgeql_insert_for_20", () => {
     h.script(
       `
             INSERT InsertTest { name := "a", l2 := 1 };
-        `
+        `,
     );
     h.script(
       `
@@ -2023,22 +2001,18 @@ describe("TestInsert", () => {
                     name := t.name ++ "!", l2 := t.l2 + 1,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT InsertTest { name, l2 } ORDER BY .l2`,
-      [
-            {
-              "name": "a",
-              "l2": 1,
-            },
-            {
-              "name": "a!",
-              "l2": 2,
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT InsertTest { name, l2 } ORDER BY .l2`, [
+      {
+        name: "a",
+        l2: 1,
+      },
+      {
+        name: "a!",
+        l2: 2,
+      },
+    ]);
   });
 
   it("test_edgeql_insert_for_21", () => {
@@ -2050,20 +2024,16 @@ describe("TestInsert", () => {
                     name := t.0.name, l2 := t.0.l2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT InsertTest`,
-      []
-    );
+    assertQueryResult(h, `SELECT InsertTest`, []);
   });
 
   it("test_edgeql_insert_for_22", () => {
     h.script(
       `
             INSERT InsertTest { name := "a", l2 := 1 };
-        `
+        `,
     );
     h.script(
       `
@@ -2073,29 +2043,25 @@ describe("TestInsert", () => {
                     name := t.0.name ++ "!", l2 := t.0.l2 + 1,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT InsertTest { name, l2 } ORDER BY .l2`,
-      [
-            {
-              "name": "a",
-              "l2": 1,
-            },
-            {
-              "name": "a!",
-              "l2": 2,
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT InsertTest { name, l2 } ORDER BY .l2`, [
+      {
+        name: "a",
+        l2: 1,
+      },
+      {
+        name: "a!",
+        l2: 2,
+      },
+    ]);
   });
 
   it("test_edgeql_insert_for_23", () => {
     h.script(
       `
             INSERT Subordinate { name := "a" }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2105,19 +2071,19 @@ describe("TestInsert", () => {
             );
             `,
       [
-            [
-              {
-                "name": "a",
-              },
-              {},
-            ],
-            [
-              {
-                "name": "a",
-              },
-              {},
-            ],
-          ]
+        [
+          {
+            name: "a",
+          },
+          {},
+        ],
+        [
+          {
+            name: "a",
+          },
+          {},
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -2127,19 +2093,19 @@ describe("TestInsert", () => {
             );
             `,
       [
-            [
-              {
-                "name": "a",
-              },
-              {},
-            ],
-            [
-              {
-                "name": "a",
-              },
-              {},
-            ],
-          ]
+        [
+          {
+            name: "a",
+          },
+          {},
+        ],
+        [
+          {
+            name: "a",
+          },
+          {},
+        ],
+      ],
     );
   });
 
@@ -2150,7 +2116,7 @@ describe("TestInsert", () => {
                 SELECT (Person,
                         (FOR x in Person UNION (
                              INSERT Note {name := x.name})));
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot reference correlated set"));
   });
@@ -2162,7 +2128,7 @@ describe("TestInsert", () => {
                 SELECT (Person,
                         (FOR x in Person UNION (
                              SELECT (INSERT Note {name := x.name}))));
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot reference correlated set"));
   });
@@ -2174,7 +2140,7 @@ describe("TestInsert", () => {
                 SELECT ((FOR x in Person UNION (
                              INSERT Note {name := x.name})),
                         Person);
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot reference correlated set"));
   });
@@ -2189,7 +2155,7 @@ describe("TestInsert", () => {
                                  20,
                                  (FOR y in {"hello", "world"} UNION (
                                   INSERT Note {name := y ++ x.name}))))));
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot reference correlated set"));
   });
@@ -2203,9 +2169,7 @@ describe("TestInsert", () => {
                 },
                 for n in noobs select assert_exists((select n filter true));
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -2216,10 +2180,7 @@ describe("TestInsert", () => {
                 },
                 for n in noobs select n.0;
             `,
-      [
-            {},
-            {},
-          ]
+      [{}, {}],
     );
   });
 
@@ -2239,7 +2200,7 @@ describe("TestInsert", () => {
             INSERT DefaultTest3;
             INSERT DefaultTest3;
             INSERT DefaultTest3;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2251,7 +2212,7 @@ describe("TestInsert", () => {
                 SELECT count(
                     DefaultTest3 FILTER DefaultTest3.foo != DT3.foo) > 0;
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
@@ -2265,7 +2226,7 @@ describe("TestInsert", () => {
             INSERT DefaultTest4;
             INSERT DefaultTest4;
             INSERT DefaultTest4;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2274,22 +2235,22 @@ describe("TestInsert", () => {
                 ORDER BY DefaultTest4.bar;
             `,
       [
-            {
-              "bar": 0,
-            },
-            {
-              "bar": 1,
-            },
-            {
-              "bar": 2,
-            },
-            {
-              "bar": 3,
-            },
-            {
-              "bar": 4,
-            },
-          ]
+        {
+          bar: 0,
+        },
+        {
+          bar: 1,
+        },
+        {
+          bar: 2,
+        },
+        {
+          bar: 3,
+        },
+        {
+          bar: 4,
+        },
+      ],
     );
   });
 
@@ -2301,7 +2262,7 @@ describe("TestInsert", () => {
             INSERT DefaultTest4 { bar:= 10 };
             INSERT DefaultTest4;
             INSERT DefaultTest4;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2310,16 +2271,16 @@ describe("TestInsert", () => {
                 ORDER BY DefaultTest4.bar;
             `,
       [
-            {
-              "bar": 1,
-            },
-            {
-              "bar": 2,
-            },
-            {
-              "bar": 10,
-            },
-          ]
+        {
+          bar: 1,
+        },
+        {
+          bar: 2,
+        },
+        {
+          bar: 10,
+        },
+      ],
     );
   });
 
@@ -2333,7 +2294,7 @@ describe("TestInsert", () => {
             INSERT DefaultTest4 { bar:= 0 };
             INSERT DefaultTest4;
             INSERT DefaultTest4;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2342,22 +2303,22 @@ describe("TestInsert", () => {
                 ORDER BY DefaultTest4.bar;
             `,
       [
-            {
-              "bar": 0,
-            },
-            {
-              "bar": 0,
-            },
-            {
-              "bar": 1,
-            },
-            {
-              "bar": 3,
-            },
-            {
-              "bar": 4,
-            },
-          ]
+        {
+          bar: 0,
+        },
+        {
+          bar: 0,
+        },
+        {
+          bar: 1,
+        },
+        {
+          bar: 3,
+        },
+        {
+          bar: 4,
+        },
+      ],
     );
   });
 
@@ -2369,7 +2330,7 @@ describe("TestInsert", () => {
             INSERT DefaultTest8;
             INSERT DefaultTest8;
             INSERT DefaultTest8;
-        `
+        `,
     );
     try {
       assertQueryResult(
@@ -2377,7 +2338,7 @@ describe("TestInsert", () => {
         `
                     SELECT DefaultTest8.number;
                 `,
-        unorderedSet([1, 2, 3])
+        unorderedSet([1, 2, 3]),
       );
     } catch (_err) {
       throw _err;
@@ -2386,7 +2347,7 @@ describe("TestInsert", () => {
 
   it("test_edgeql_insert_default_06", () => {
     let res = queryRows<Record<string, unknown>>(h, "\n            INSERT DefaultTest1;\n        ");
-    expect(((res).length === 1)).toBeTruthy();
+    expect(res.length === 1).toBeTruthy();
     let obj = res[0];
     expect(!Object.prototype.hasOwnProperty.call(obj, "num")).toBeTruthy();
   });
@@ -2406,38 +2367,28 @@ describe("TestInsert", () => {
                 alter property b { set default := 'b=' ++ .c };
                 alter property c { set default := 'c=' ++ .a };
             };
-        `
+        `,
     );
-    h.query(
-      `insert Foo { n := 0, a := 'given' };`
-    );
-    h.query(
-      `insert Foo { n := 1, b := 'given' };`
-    );
-    h.query(
-      `insert Foo { n := 2, c := 'given' };`
-    );
-    assertQueryResult(
-      h,
-      `select Foo { a, b, c } order by .n`,
-      [
-            {
-              "a": "given",
-              "b": "b=c=given",
-              "c": "c=given",
-            },
-            {
-              "a": "a=given",
-              "b": "given",
-              "c": "c=a=given",
-            },
-            {
-              "a": "a=b=given",
-              "b": "b=given",
-              "c": "given",
-            },
-          ]
-    );
+    h.query(`insert Foo { n := 0, a := 'given' };`);
+    h.query(`insert Foo { n := 1, b := 'given' };`);
+    h.query(`insert Foo { n := 2, c := 'given' };`);
+    assertQueryResult(h, `select Foo { a, b, c } order by .n`, [
+      {
+        a: "given",
+        b: "b=c=given",
+        c: "c=given",
+      },
+      {
+        a: "a=given",
+        b: "given",
+        c: "c=a=given",
+      },
+      {
+        a: "a=b=given",
+        b: "b=given",
+        c: "given",
+      },
+    ]);
   });
 
   it("test_edgeql_insert_default_08", () => {
@@ -2449,13 +2400,11 @@ describe("TestInsert", () => {
                     set default := .f
                 };
             };
-            `
+            `,
     );
-    h.query(
-      `insert Bar { f := random() };`
-    );
+    h.query(`insert Bar { f := random() };`);
     let res = queryRows<{ f: unknown; g: unknown }>(h, "select Bar { f, g }");
-    expect((res[0].f === res[0].g)).toBeTruthy();
+    expect(res[0].f === res[0].g).toBeTruthy();
   });
 
   it("test_edgeql_insert_default_09", () => {
@@ -2468,7 +2417,7 @@ describe("TestInsert", () => {
                         default := count(.b);
                     };
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("default expression cannot refer to multi properties"));
     expect(() => {
@@ -2485,7 +2434,7 @@ describe("TestInsert", () => {
                         default := .world.w;
                     };
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("default expression cannot refer to links"));
     expect(() => {
@@ -2502,7 +2451,7 @@ describe("TestInsert", () => {
                         default := count(.world);
                     };
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("default expression cannot refer to links"));
   });
@@ -2516,7 +2465,7 @@ describe("TestInsert", () => {
                 a := 1,
                 c := __default__ + __default__,
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2524,35 +2473,35 @@ describe("TestInsert", () => {
                 SELECT DunderDefaultTest01 { a, b, c };
             `,
       [
-            {
-              "a": 1,
-              "b": 2,
-              "c": 1,
-            },
-            {
-              "a": 1,
-              "b": 2,
-              "c": 4,
-            },
-            {
-              "a": 1,
-              "b": 2,
-              "c": 2,
-            },
-          ]
+        {
+          a: 1,
+          b: 2,
+          c: 1,
+        },
+        {
+          a: 1,
+          b: 2,
+          c: 4,
+        },
+        {
+          a: 1,
+          b: 2,
+          c: 2,
+        },
+      ],
     );
     expect(() => {
       h.script(
         `
                 INSERT DunderDefaultTest01 { a := __default__ };
-            `
+            `,
       );
     }).toThrow(new RegExp("__default__ cannot be used in this expression"));
     expect(() => {
       h.script(
         `
                 INSERT DunderDefaultTest01 { a := 1, b := __default__ };
-            `
+            `,
       );
     }).toThrow(new RegExp("__default__ cannot be used in this expression"));
   });
@@ -2564,7 +2513,7 @@ describe("TestInsert", () => {
                 INSERT DunderDefaultTest02_B {
                     default_with_insert := __default__
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("__default__ cannot be used in this expression"));
     expect(() => {
@@ -2573,7 +2522,7 @@ describe("TestInsert", () => {
                 INSERT DunderDefaultTest02_B {
                     default_with_update := __default__
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("__default__ cannot be used in this expression"));
     expect(() => {
@@ -2582,7 +2531,7 @@ describe("TestInsert", () => {
                 INSERT DunderDefaultTest02_B {
                     default_with_delete := __default__
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("__default__ cannot be used in this expression"));
     h.script(
@@ -2606,7 +2555,7 @@ describe("TestInsert", () => {
                 ),
                 default_with_select := __default__
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2616,10 +2565,10 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "a": [4],
-            },
-          ]
+        {
+          a: [4],
+        },
+      ],
     );
   });
 
@@ -2631,7 +2580,7 @@ describe("TestInsert", () => {
                     INSERT DunderDefaultTest03_C { x := __default__ }
                 ).x
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2639,10 +2588,10 @@ describe("TestInsert", () => {
                 SELECT DunderDefaultTest03_A { x };
             `,
       [
-            {
-              "x": 2,
-            },
-          ]
+        {
+          x: 2,
+        },
+      ],
     );
     h.script(
       `
@@ -2651,7 +2600,7 @@ describe("TestInsert", () => {
                     INSERT DunderDefaultTest03_C { x := __default__ }
                 ).x
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2659,10 +2608,10 @@ describe("TestInsert", () => {
                 SELECT DunderDefaultTest03_B { x };
             `,
       [
-            {
-              "x": 2,
-            },
-          ]
+        {
+          x: 2,
+        },
+      ],
     );
     expect(() => {
       h.script(
@@ -2672,7 +2621,7 @@ describe("TestInsert", () => {
                         INSERT DunderDefaultTest03_A { x := __default__ }
                     ).x
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("__default__ cannot be used in this expression"));
   });
@@ -2681,7 +2630,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DunderDefaultTest04_A { x := 1 };
-        `
+        `,
     );
     h.script(
       `
@@ -2689,7 +2638,7 @@ describe("TestInsert", () => {
                 x := 2,
                 l := __default__,
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2697,13 +2646,13 @@ describe("TestInsert", () => {
                 SELECT DunderDefaultTest04_B { x, l: { x } };
             `,
       [
-            {
-              "x": 2,
-              "l": {
-                "x": 1,
-              },
-            },
-          ]
+        {
+          x: 2,
+          l: {
+            x: 1,
+          },
+        },
+      ],
     );
   });
 
@@ -2725,7 +2674,7 @@ describe("TestInsert", () => {
                 note := 'largest ' ++ <str>x.l2,
                 subject := x
             });
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2744,36 +2693,36 @@ describe("TestInsert", () => {
                 ORDER BY .l2;
             `,
       [
+        {
+          name: "insert expr 1",
+          l2: 2,
+          l3: "test",
+          subject: [],
+        },
+        {
+          name: "insert expr 1",
+          l2: 3,
+          l3: "test",
+          subject: [],
+        },
+        {
+          name: "insert expr 1",
+          l2: 5,
+          l3: "test",
+          subject: [],
+        },
+        {
+          name: "insert expr 1",
+          l2: 7,
+          l3: "test",
+          subject: [
             {
-              "name": "insert expr 1",
-              "l2": 2,
-              "l3": "test",
-              "subject": [],
+              name: "insert expr 1",
+              note: "largest 7",
             },
-            {
-              "name": "insert expr 1",
-              "l2": 3,
-              "l3": "test",
-              "subject": [],
-            },
-            {
-              "name": "insert expr 1",
-              "l2": 5,
-              "l3": "test",
-              "subject": [],
-            },
-            {
-              "name": "insert expr 1",
-              "l2": 7,
-              "l3": "test",
-              "subject": [
-                {
-                  "name": "insert expr 1",
-                  "note": "largest 7",
-                },
-              ],
-            },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -2785,7 +2734,7 @@ describe("TestInsert", () => {
                     val := "something"
                 }),
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2797,14 +2746,14 @@ describe("TestInsert", () => {
                 };
             `,
       [
+        {
+          args: [
             {
-              "args": [
-                {
-                  "val": "something",
-                },
-              ],
+              val: "something",
             },
-          ]
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2815,7 +2764,7 @@ describe("TestInsert", () => {
                     }
                 };
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -2827,14 +2776,14 @@ describe("TestInsert", () => {
                 };
             `,
       [
+        {
+          args: [
             {
-              "args": [
-                {
-                  "val": "something",
-                },
-              ],
+              val: "something",
             },
-          ]
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2844,10 +2793,10 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "val": "something",
-            },
-          ]
+        {
+          val: "something",
+        },
+      ],
     );
   });
 
@@ -2869,7 +2818,7 @@ describe("TestInsert", () => {
                     )
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2883,24 +2832,24 @@ describe("TestInsert", () => {
                 } FILTER .l2 = 99;
             `,
       [
+        {
+          l2: 99,
+          subordinates: [
             {
-              "l2": 99,
-              "subordinates": [
-                {
-                  "name": "linkproptest 1",
-                  "@comment": "a",
-                },
-                {
-                  "name": "linkproptest 2",
-                  "@comment": "b",
-                },
-                {
-                  "name": "linkproptest 3",
-                  "@comment": "c",
-                },
-              ],
+              name: "linkproptest 1",
+              "@comment": "a",
             },
-          ]
+            {
+              name: "linkproptest 2",
+              "@comment": "b",
+            },
+            {
+              name: "linkproptest 3",
+              "@comment": "c",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -2913,7 +2862,7 @@ describe("TestInsert", () => {
                 # l3 has a default value
                 l3 := {},
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2925,12 +2874,12 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "l1": null,
-              "l2": 99,
-              "l3": null,
-            },
-          ]
+        {
+          l1: null,
+          l2: 99,
+          l3: null,
+        },
+      ],
     );
   });
 
@@ -2942,7 +2891,7 @@ describe("TestInsert", () => {
                     l1 := <datetime>{},
                     l2 := 99,
                 };
-                `
+                `,
       );
     }).toThrow(new RegExp("invalid target.*std::datetime.*expecting 'std::int64'"));
   });
@@ -2954,7 +2903,7 @@ describe("TestInsert", () => {
                     INSERT InsertTest {
                         l2 := {},
                     };
-                `
+                `,
       );
     }).toThrow(new RegExp("missing value for required property"));
   });
@@ -2966,7 +2915,7 @@ describe("TestInsert", () => {
                 l2 := 99,
                 subordinates := {}
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2977,11 +2926,11 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "l2": 99,
-              "subordinates": [],
-            },
-          ]
+        {
+          l2: 99,
+          subordinates: [],
+        },
+      ],
     );
   });
 
@@ -2993,16 +2942,18 @@ describe("TestInsert", () => {
                     l2 := 99,
                     subordinates := <Object>{}
                 };
-                `
+                `,
       );
-    }).toThrow(new RegExp("invalid target for link.*std::Object.*expecting 'default::Subordinate'"));
+    }).toThrow(
+      new RegExp("invalid target for link.*std::Object.*expecting 'default::Subordinate'"),
+    );
   });
 
   it("test_edgeql_insert_abstract", () => {
     expect(() => {
       h.script(
         `                INSERT Object;
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot insert into abstract object type 'std::Object'"));
   });
@@ -3011,12 +2962,12 @@ describe("TestInsert", () => {
     h.script(
       `
             CREATE ALIAS Foo := (SELECT InsertTest);
-        `
+        `,
     );
     expect(() => {
       h.script(
         `                INSERT Foo;
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot insert into expression alias 'default::Foo'"));
   });
@@ -3025,7 +2976,7 @@ describe("TestInsert", () => {
     expect(() => {
       h.script(
         `                INSERT std::FreeObject;
-            `
+            `,
       );
     }).toThrow(new RegExp("free objects cannot be inserted"));
   });
@@ -3038,7 +2989,7 @@ describe("TestInsert", () => {
                     name := 'myself',
                     ref := SelfRef
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("self-referencing INSERTs are not allowed"));
   });
@@ -3058,7 +3009,7 @@ describe("TestInsert", () => {
                         FILTER .name = 'other'
                     )
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("self-referencing INSERTs are not allowed"));
   });
@@ -3079,7 +3030,7 @@ describe("TestInsert", () => {
                         FILTER .name = 'other'
                     )
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("self-referencing INSERTs are not allowed"));
   });
@@ -3098,7 +3049,7 @@ describe("TestInsert", () => {
                     FILTER .name = 'ok other'
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3111,19 +3062,19 @@ describe("TestInsert", () => {
                 } ORDER BY .name;
             `,
       [
+        {
+          name: "ok myself",
+          ref: [
             {
-              "name": "ok myself",
-              "ref": [
-                {
-                  "name": "ok other",
-                },
-              ],
+              name: "ok other",
             },
-            {
-              "name": "ok other",
-              "ref": [],
-            },
-          ]
+          ],
+        },
+        {
+          name: "ok other",
+          ref: [],
+        },
+      ],
     );
   });
 
@@ -3141,7 +3092,7 @@ describe("TestInsert", () => {
                         FILTER .name LIKE '%cardinality_01'
                     )
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("single"));
   });
@@ -3171,7 +3122,7 @@ describe("TestInsert", () => {
                 l3 := '\\"Test\\'3\\'\\"',
                 l2 := 3
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3186,23 +3137,23 @@ describe("TestInsert", () => {
                     DerivedTest.l2;
             `,
       [
-            {
-              "l2": 0,
-              "l3": "test",
-            },
-            {
-              "l2": 1,
-              "l3": "Test\"1\"",
-            },
-            {
-              "l2": 2,
-              "l3": "Test'2'",
-            },
-            {
-              "l2": 3,
-              "l3": "\"Test'3'\"",
-            },
-          ]
+        {
+          l2: 0,
+          l3: "test",
+        },
+        {
+          l2: 1,
+          l3: 'Test"1"',
+        },
+        {
+          l2: 2,
+          l3: "Test'2'",
+        },
+        {
+          l2: 3,
+          l3: "\"Test'3'\"",
+        },
+      ],
     );
   });
 
@@ -3218,7 +3169,7 @@ describe("TestInsert", () => {
                     }
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3237,14 +3188,14 @@ describe("TestInsert", () => {
                     .l2;
             `,
       [
-            {
-              "name": "insert derived 02",
-              "sub": {
-                "name": "nested derived sub 02",
-                "@note": null,
-              },
-            },
-          ]
+        {
+          name: "insert derived 02",
+          sub: {
+            name: "nested derived sub 02",
+            "@note": null,
+          },
+        },
+      ],
     );
   });
 
@@ -3259,15 +3210,9 @@ describe("TestInsert", () => {
                 select noobs;
             `,
       [
-            [
-              {},
-              "bar",
-            ],
-            [
-              {},
-              "eggs",
-            ],
-          ]
+        [{}, "bar"],
+        [{}, "eggs"],
+      ],
     );
     assertQueryResult(
       h,
@@ -3278,15 +3223,9 @@ describe("TestInsert", () => {
                 }
             `,
       [
-            [
-              {},
-              "bar",
-            ],
-            [
-              {},
-              "eggs",
-            ],
-          ]
+        [{}, "bar"],
+        [{}, "eggs"],
+      ],
     );
   });
 
@@ -3301,15 +3240,9 @@ describe("TestInsert", () => {
                 select noobs;
             `,
       [
-            [
-              {},
-              "bar",
-            ],
-            [
-              {},
-              "eggs",
-            ],
-          ]
+        [{}, "bar"],
+        [{}, "eggs"],
+      ],
     );
     assertQueryResult(
       h,
@@ -3320,15 +3253,9 @@ describe("TestInsert", () => {
                 }
             `,
       [
-            [
-              {},
-              "bar",
-            ],
-            [
-              {},
-              "eggs",
-            ],
-          ]
+        [{}, "bar"],
+        [{}, "eggs"],
+      ],
     );
   });
 
@@ -3343,15 +3270,9 @@ describe("TestInsert", () => {
                 select noobs;
             `,
       [
-            [
-              {},
-              "bar",
-            ],
-            [
-              {},
-              "eggs",
-            ],
-          ]
+        [{}, "bar"],
+        [{}, "eggs"],
+      ],
     );
     assertQueryResult(
       h,
@@ -3362,15 +3283,9 @@ describe("TestInsert", () => {
                 }
             `,
       [
-            [
-              {},
-              "bar",
-            ],
-            [
-              {},
-              "eggs",
-            ],
-          ]
+        [{}, "bar"],
+        [{}, "eggs"],
+      ],
     );
   });
 
@@ -3389,19 +3304,19 @@ describe("TestInsert", () => {
             }) { subordinates: {name, @comment} order by .name };
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "foo",
-                  "@comment": "bar",
-                },
-                {
-                  "name": "spam",
-                  "@comment": "eggs",
-                },
-              ],
+              name: "foo",
+              "@comment": "bar",
             },
-          ]
+            {
+              name: "spam",
+              "@comment": "eggs",
+            },
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3409,19 +3324,19 @@ describe("TestInsert", () => {
             select InsertTest { subordinates: {name, @comment} };
             `,
       [
+        {
+          subordinates: [
             {
-              "subordinates": [
-                {
-                  "name": "foo",
-                  "@comment": "bar",
-                },
-                {
-                  "name": "spam",
-                  "@comment": "eggs",
-                },
-              ],
+              name: "foo",
+              "@comment": "bar",
             },
-          ]
+            {
+              name: "spam",
+              "@comment": "eggs",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -3431,7 +3346,7 @@ describe("TestInsert", () => {
             INSERT CollectionTest {
                 some_tuple := ('collection_01', 99),
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3444,10 +3359,10 @@ describe("TestInsert", () => {
                     .some_tuple.0 = 'collection_01';
             `,
       [
-            {
-              "some_tuple": ["collection_01", 99],
-            },
-          ]
+        {
+          some_tuple: ["collection_01", 99],
+        },
+      ],
     );
   });
 
@@ -3457,7 +3372,7 @@ describe("TestInsert", () => {
             INSERT CollectionTest {
                 str_array := ['collection_02', '99'],
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3470,10 +3385,10 @@ describe("TestInsert", () => {
                     .str_array[0] = 'collection_02';
             `,
       [
-            {
-              "str_array": ["collection_02", "99"],
-            },
-          ]
+        {
+          str_array: ["collection_02", "99"],
+        },
+      ],
     );
   });
 
@@ -3483,7 +3398,7 @@ describe("TestInsert", () => {
             INSERT CollectionTest {
                 float_array := [3, 1234.5],
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3496,10 +3411,10 @@ describe("TestInsert", () => {
                     .float_array[0] = 3;
             `,
       [
-            {
-              "float_array": [3, 1234.5],
-            },
-          ]
+        {
+          float_array: [3, 1234.5],
+        },
+      ],
     );
   });
 
@@ -3515,7 +3430,7 @@ describe("TestInsert", () => {
                 some_tuple := ('foo', 0),
                 some_multi_tuple := {('foo', 0), ('bar', 1)},
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3524,7 +3439,7 @@ describe("TestInsert", () => {
                     CollectionTest FILTER ('bar', 1) IN .some_multi_tuple
                 );
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -3533,7 +3448,7 @@ describe("TestInsert", () => {
                     CollectionTest FILTER .some_tuple IN .some_multi_tuple
                 );
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -3543,7 +3458,7 @@ describe("TestInsert", () => {
                     <tuple<str, str>>.some_multi_tuple
                 );
             `,
-      [2]
+      [2],
     );
   });
 
@@ -3554,7 +3469,7 @@ describe("TestInsert", () => {
                 str_array := [],
                 float_array := [],
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3568,11 +3483,11 @@ describe("TestInsert", () => {
                     len(.float_array) = 0;
             `,
       [
-            {
-              "str_array": [],
-              "float_array": [],
-            },
-          ]
+        {
+          str_array: [],
+          float_array: [],
+        },
+      ],
     );
   });
 
@@ -3588,7 +3503,7 @@ describe("TestInsert", () => {
                         subordinates := Subordinate
                     })
                 );
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot reference correlated set 'Subordinate' here"));
   });
@@ -3605,7 +3520,7 @@ describe("TestInsert", () => {
                     }),
                     Subordinate,
                 );
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot reference correlated set 'Subordinate' here"));
   });
@@ -3618,7 +3533,7 @@ describe("TestInsert", () => {
                     Person,
                     (INSERT Person {name := 'insert bad'}),
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot reference correlated set 'Person' here"));
   });
@@ -3632,10 +3547,10 @@ describe("TestInsert", () => {
               ?? (SELECT Person FILTER .name = "test")) {name};
         `,
       [
-            {
-              "name": "test",
-            },
-          ]
+        {
+          name: "test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3645,15 +3560,21 @@ describe("TestInsert", () => {
               ?? (SELECT Person FILTER .name = "test")) {name};
         `,
       [
-            {
-              "name": "test",
-            },
-          ]
+        {
+          name: "test",
+        },
+      ],
     );
-    let res = h.query("\n            SELECT\n             ((INSERT Person {name := <str>$0} UNLESS CONFLICT ON .name)\n              ?? (SELECT Person FILTER .name = <str>$0));\n        ");
-    let res2 = h.query("\n            SELECT\n             ((INSERT Person {name := <str>$0} UNLESS CONFLICT ON .name)\n              ?? (SELECT Person FILTER .name = <str>$0));\n        ");
+    let res = h.query(
+      "\n            SELECT\n             ((INSERT Person {name := <str>$0} UNLESS CONFLICT ON .name)\n              ?? (SELECT Person FILTER .name = <str>$0));\n        ",
+    );
+    let res2 = h.query(
+      "\n            SELECT\n             ((INSERT Person {name := <str>$0} UNLESS CONFLICT ON .name)\n              ?? (SELECT Person FILTER .name = <str>$0));\n        ",
+    );
     expect(undefined).toEqual(undefined);
-    let res3 = h.query("\n            SELECT\n             ((INSERT Person {name := <str>$0} UNLESS CONFLICT ON .name)\n              ?? (SELECT Person FILTER .name = <str>$0));\n        ");
+    let res3 = h.query(
+      "\n            SELECT\n             ((INSERT Person {name := <str>$0} UNLESS CONFLICT ON .name)\n              ?? (SELECT Person FILTER .name = <str>$0));\n        ",
+    );
     expect(undefined).not.toEqual(undefined);
   });
 
@@ -3663,7 +3584,7 @@ describe("TestInsert", () => {
         `
                 INSERT Person {name := "hello"}
                 UNLESS CONFLICT ON 20;
-            `
+            `,
       );
     }).toThrow(new RegExp("UNLESS CONFLICT argument must be a property"));
     expect(() => {
@@ -3671,15 +3592,17 @@ describe("TestInsert", () => {
         `
                 INSERT Person {name := "hello"}
                 UNLESS CONFLICT ON Note.name;
-            `
+            `,
       );
-    }).toThrow(new RegExp("UNLESS CONFLICT argument must be a property of the type being inserted"));
+    }).toThrow(
+      new RegExp("UNLESS CONFLICT argument must be a property of the type being inserted"),
+    );
     expect(() => {
       h.query(
         `
                 INSERT Note {name := "hello"}
                 UNLESS CONFLICT ON .name;
-            `
+            `,
       );
     }).toThrow(new RegExp("UNLESS CONFLICT property must have a single exclusive constraint"));
     expect(() => {
@@ -3690,7 +3613,7 @@ describe("TestInsert", () => {
                     UNLESS CONFLICT ON .name
                     ELSE DefaultTest1
                 ) {name};
-            `
+            `,
       );
     }).toThrow(new RegExp("object type 'std::Object' has no link or property 'name'"));
     expect(() => {
@@ -3704,9 +3627,13 @@ describe("TestInsert", () => {
                 SELECT {
                     single foo := X
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression for a computed link 'foo' declared as 'single'"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression for a computed link 'foo' declared as 'single'",
+      ),
+    );
     expect(() => {
       h.query(
         `
@@ -3718,9 +3645,13 @@ describe("TestInsert", () => {
                 SELECT {
                     single foo := X
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression for a computed link 'foo' declared as 'single'"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression for a computed link 'foo' declared as 'single'",
+      ),
+    );
     expect(() => {
       h.query(
         `
@@ -3731,9 +3662,13 @@ describe("TestInsert", () => {
                 SELECT {
                     required foo := X
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed link 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed link 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_insert_unless_conflict_03", () => {
@@ -3744,10 +3679,10 @@ describe("TestInsert", () => {
                 INSERT Person {name := "test"} UNLESS CONFLICT) {name};
         `,
       [
-            {
-              "name": "test",
-            },
-          ]
+        {
+          name: "test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3755,7 +3690,7 @@ describe("TestInsert", () => {
             SELECT (
                 INSERT Person {name := "test"} UNLESS CONFLICT) {name};
         `,
-      []
+      [],
     );
   });
 
@@ -3769,10 +3704,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "test",
-            },
-          ]
+        {
+          name: "test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3783,24 +3718,26 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "test",
-            },
-          ]
+        {
+          name: "test",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Person {name}`,
-      [
-            {
-              "name": "test",
-            },
-          ]
+    assertQueryResult(h, `SELECT Person {name}`, [
+      {
+        name: "test",
+      },
+    ]);
+    let res = h.query(
+      "\n            INSERT Person {name := <str>$0} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ",
     );
-    let res = h.query("\n            INSERT Person {name := <str>$0} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ");
-    let res2 = h.query("\n            INSERT Person {name := <str>$0} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ");
+    let res2 = h.query(
+      "\n            INSERT Person {name := <str>$0} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ",
+    );
     expect(undefined).toEqual(undefined);
-    let res3 = h.query("\n            INSERT Person {name := <str>$0} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ");
+    let res3 = h.query(
+      "\n            INSERT Person {name := <str>$0} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ",
+    );
     expect(undefined).not.toEqual(undefined);
   });
 
@@ -3808,7 +3745,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Person { name := "Phil Emarg" }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3819,26 +3756,22 @@ describe("TestInsert", () => {
             ) {name, tag};
         `,
       [
-            {
-              "name": "Emmanuel Villip",
-              "tag": null,
-            },
-          ]
+        {
+          name: "Emmanuel Villip",
+          tag: null,
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Person {name, tag} ORDER BY .name`,
-      [
-            {
-              "name": "Emmanuel Villip",
-              "tag": null,
-            },
-            {
-              "name": "Phil Emarg",
-              "tag": null,
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person {name, tag} ORDER BY .name`, [
+      {
+        name: "Emmanuel Villip",
+        tag: null,
+      },
+      {
+        name: "Phil Emarg",
+        tag: null,
+      },
+    ]);
     assertQueryResult(
       h,
       `
@@ -3848,25 +3781,25 @@ describe("TestInsert", () => {
             ) {name, tag};
         `,
       [
-            {
-              "name": "Emmanuel Villip",
-              "tag": "redo",
-            },
-          ]
+        {
+          name: "Emmanuel Villip",
+          tag: "redo",
+        },
+      ],
     );
     assertQueryResult(
       h,
       `SELECT Person {name, tag} ORDER BY .name`,
       unorderedBag([
-            {
-              "name": "Emmanuel Villip",
-              "tag": "redo",
-            },
-            {
-              "name": "Phil Emarg",
-              "tag": null,
-            },
-          ])
+        {
+          name: "Emmanuel Villip",
+          tag: "redo",
+        },
+        {
+          name: "Phil Emarg",
+          tag: null,
+        },
+      ]),
     );
   });
 
@@ -3875,7 +3808,7 @@ describe("TestInsert", () => {
       `
             INSERT Person { name := "Phil Emarg" };
             INSERT Person { name := "Madeline Hatch" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3888,34 +3821,30 @@ describe("TestInsert", () => {
             ) {name, tag} ORDER BY .name;
         `,
       [
-            {
-              "name": "Emmanuel Villip",
-              "tag": null,
-            },
-            {
-              "name": "Madeline Hatch",
-              "tag": "redo",
-            },
-          ]
+        {
+          name: "Emmanuel Villip",
+          tag: null,
+        },
+        {
+          name: "Madeline Hatch",
+          tag: "redo",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Person {name, tag} ORDER BY .name`,
-      [
-            {
-              "name": "Emmanuel Villip",
-              "tag": null,
-            },
-            {
-              "name": "Madeline Hatch",
-              "tag": "redo",
-            },
-            {
-              "name": "Phil Emarg",
-              "tag": null,
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person {name, tag} ORDER BY .name`, [
+      {
+        name: "Emmanuel Villip",
+        tag: null,
+      },
+      {
+        name: "Madeline Hatch",
+        tag: "redo",
+      },
+      {
+        name: "Phil Emarg",
+        tag: null,
+      },
+    ]);
     assertQueryResult(
       h,
       `
@@ -3927,34 +3856,30 @@ describe("TestInsert", () => {
             ) {name, tag} ORDER BY .name;
         `,
       [
-            {
-              "name": "Emmanuel Villip",
-              "tag": "redo",
-            },
-            {
-              "name": "Madeline Hatch",
-              "tag": "redo",
-            },
-          ]
+        {
+          name: "Emmanuel Villip",
+          tag: "redo",
+        },
+        {
+          name: "Madeline Hatch",
+          tag: "redo",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Person {name, tag} ORDER BY .name`,
-      [
-            {
-              "name": "Emmanuel Villip",
-              "tag": "redo",
-            },
-            {
-              "name": "Madeline Hatch",
-              "tag": "redo",
-            },
-            {
-              "name": "Phil Emarg",
-              "tag": null,
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person {name, tag} ORDER BY .name`, [
+      {
+        name: "Emmanuel Villip",
+        tag: "redo",
+      },
+      {
+        name: "Madeline Hatch",
+        tag: "redo",
+      },
+      {
+        name: "Phil Emarg",
+        tag: null,
+      },
+    ]);
   });
 
   it("test_edgeql_insert_unless_conflict_07", () => {
@@ -3967,21 +3892,17 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Nemo",
-            },
-          ]
+        {
+          name: "Nemo",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Person {name, tag}`,
-      [
-            {
-              "name": "Nemo",
-              "tag": null,
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person {name, tag}`, [
+      {
+        name: "Nemo",
+        tag: null,
+      },
+    ]);
     assertQueryResult(
       h,
       `
@@ -3991,35 +3912,37 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Nemo",
-            },
-          ]
+        {
+          name: "Nemo",
+        },
+      ],
     );
     h.script(
       `
             INSERT Person { name := "Phil Emarg" }
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person {name, tag} ORDER BY .name`,
-      [
-            {
-              "name": "Nemo",
-              "tag": "redo",
-            },
-            {
-              "name": "Phil Emarg",
-              "tag": null,
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person {name, tag} ORDER BY .name`, [
+      {
+        name: "Nemo",
+        tag: "redo",
+      },
+      {
+        name: "Phil Emarg",
+        tag: null,
+      },
+    ]);
   });
 
   it("test_edgeql_insert_unless_conflict_08", () => {
-    let res1 = querySingle<{ id: unknown; person: { id: unknown } }>(h, "\n            SELECT (\n                INSERT PersonWrapper {\n                    person := (\n                        INSERT Person { name := \"foo\" }\n                        UNLESS CONFLICT ON .name ELSE (SELECT Person)\n                    )\n                }\n            ) {id, person};\n        ");
-    let res2 = querySingle<{ id: unknown; person: { id: unknown } }>(h, "\n            SELECT (\n                INSERT PersonWrapper {\n                    person := (\n                        INSERT Person { name := \"foo\" }\n                        UNLESS CONFLICT ON .name ELSE (SELECT Person)\n                    )\n                }\n            ) {id, person};\n        ");
+    let res1 = querySingle<{ id: unknown; person: { id: unknown } }>(
+      h,
+      '\n            SELECT (\n                INSERT PersonWrapper {\n                    person := (\n                        INSERT Person { name := "foo" }\n                        UNLESS CONFLICT ON .name ELSE (SELECT Person)\n                    )\n                }\n            ) {id, person};\n        ',
+    );
+    let res2 = querySingle<{ id: unknown; person: { id: unknown } }>(
+      h,
+      '\n            SELECT (\n                INSERT PersonWrapper {\n                    person := (\n                        INSERT Person { name := "foo" }\n                        UNLESS CONFLICT ON .name ELSE (SELECT Person)\n                    )\n                }\n            ) {id, person};\n        ',
+    );
     expect(res1.id).not.toEqual(res2.id);
     expect(res1.person.id).toEqual(res2.person.id);
   });
@@ -4035,17 +3958,13 @@ describe("TestInsert", () => {
                     tag := 'super ' ++ .tag
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { tag } FILTER .name = 'Cap'`,
-      [
-            {
-              "tag": "hero",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person { tag } FILTER .name = 'Cap'`, [
+      {
+        tag: "hero",
+      },
+    ]);
     h.script(
       `
             INSERT Person {
@@ -4056,17 +3975,13 @@ describe("TestInsert", () => {
                     tag := 'super ' ++ .tag
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { tag } FILTER .name = 'Cap'`,
-      [
-            {
-              "tag": "super hero",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person { tag } FILTER .name = 'Cap'`, [
+      {
+        tag: "super hero",
+      },
+    ]);
     h.script(
       `
             INSERT Person {
@@ -4077,17 +3992,13 @@ describe("TestInsert", () => {
                     tag := 'super ' ++ .tag
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { tag } FILTER .name = 'Cap'`,
-      [
-            {
-              "tag": "super super hero",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person { tag } FILTER .name = 'Cap'`, [
+      {
+        tag: "super super hero",
+      },
+    ]);
   });
 
   it("test_edgeql_insert_unless_conflict_10", () => {
@@ -4097,7 +4008,7 @@ describe("TestInsert", () => {
                 name := "Foo",
                 case_name := "Foo",
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4112,11 +4023,11 @@ describe("TestInsert", () => {
             ) {name, case_name};
             `,
       [
-            {
-              "name": "Foo",
-              "case_name": "Foo",
-            },
-          ]
+        {
+          name: "Foo",
+          case_name: "Foo",
+        },
+      ],
     );
   });
 
@@ -4129,7 +4040,7 @@ describe("TestInsert", () => {
                     UNLESS CONFLICT ON (.name)
                     ELSE (INSERT Person {name := "Maddy"})
                 ) {name};
-            `
+            `,
       );
     }).toThrow(new RegExp("self-referencing INSERTs are not allowed"));
     assertQueryResult(
@@ -4142,10 +4053,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Madz",
-            },
-          ]
+        {
+          name: "Madz",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4157,22 +4068,34 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Maddy",
-            },
-          ]
+        {
+          name: "Maddy",
+        },
+      ],
     );
   });
 
   it("test_edgeql_insert_unless_conflict_12", () => {
-    let res1 = queryRows<{ id: unknown }>(h, "\n            INSERT Person {name := \"Emmanuel Villip\"} UNLESS CONFLICT\n            ON .name ELSE (UPDATE Person SET { tag := \"redo\" })\n        ");
-    let res2 = queryRows<{ id: unknown }>(h, "\n            INSERT Person {name := \"Emmanuel Villip\"} UNLESS CONFLICT\n            ON .name ELSE (UPDATE Person SET { tag := \"redo\" })\n        ");
+    let res1 = queryRows<{ id: unknown }>(
+      h,
+      '\n            INSERT Person {name := "Emmanuel Villip"} UNLESS CONFLICT\n            ON .name ELSE (UPDATE Person SET { tag := "redo" })\n        ',
+    );
+    let res2 = queryRows<{ id: unknown }>(
+      h,
+      '\n            INSERT Person {name := "Emmanuel Villip"} UNLESS CONFLICT\n            ON .name ELSE (UPDATE Person SET { tag := "redo" })\n        ',
+    );
     expect(res1[0].id).toEqual(res2[0].id);
   });
 
   it("test_edgeql_insert_unless_conflict_13", () => {
-    let res1 = queryRows<{ id: unknown }>(h, "\n            INSERT Person {name := \"Emmanuel Villip\"} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ");
-    let res2 = queryRows<{ id: unknown }>(h, "\n            INSERT Person {name := \"Emmanuel Villip\"} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ");
+    let res1 = queryRows<{ id: unknown }>(
+      h,
+      '\n            INSERT Person {name := "Emmanuel Villip"} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ',
+    );
+    let res2 = queryRows<{ id: unknown }>(
+      h,
+      '\n            INSERT Person {name := "Emmanuel Villip"} UNLESS CONFLICT\n            ON .name ELSE (SELECT Person)\n        ',
+    );
     expect(res1[0].id).toEqual(res2[0].id);
   });
 
@@ -4186,11 +4109,11 @@ describe("TestInsert", () => {
             ) {first, last};
         `,
       [
-            {
-              "first": "Phil",
-              "last": "Emarg",
-            },
-          ]
+        {
+          first: "Phil",
+          last: "Emarg",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4201,22 +4124,18 @@ describe("TestInsert", () => {
             ) {first, last};
         `,
       [
-            {
-              "first": "Phil",
-              "last": "Emarg",
-            },
-          ]
+        {
+          first: "Phil",
+          last: "Emarg",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Person2a {first, last}`,
-      [
-            {
-              "first": "Phil",
-              "last": "Emarg",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person2a {first, last}`, [
+      {
+        first: "Phil",
+        last: "Emarg",
+      },
+    ]);
   });
 
   it("test_edgeql_insert_unless_conflict_15", () => {
@@ -4229,7 +4148,7 @@ describe("TestInsert", () => {
             INSERT Person {
                 name := "Madeline Hatch",
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4244,11 +4163,11 @@ describe("TestInsert", () => {
             ) {first, last};
         `,
       [
-            {
-              "first": "Emmanuel",
-              "last": "Villip",
-            },
-          ]
+        {
+          first: "Emmanuel",
+          last: "Villip",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4263,11 +4182,11 @@ describe("TestInsert", () => {
             ) {first, last};
         `,
       [
-            {
-              "first": "Emmanuel",
-              "last": "Villip",
-            },
-          ]
+        {
+          first: "Emmanuel",
+          last: "Villip",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4282,23 +4201,19 @@ describe("TestInsert", () => {
             ) {first, last};
         `,
       [
-            {
-              "first": "Emmanuel",
-              "last": "Villip",
-            },
-          ]
+        {
+          first: "Emmanuel",
+          last: "Villip",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Person2a {first, last, friend := .bff.name}`,
-      [
-            {
-              "first": "Emmanuel",
-              "last": "Villip",
-              "friend": "Phil Emarg",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Person2a {first, last, friend := .bff.name}`, [
+      {
+        first: "Emmanuel",
+        last: "Villip",
+        friend: "Phil Emarg",
+      },
+    ]);
     assertQueryResult(
       h,
       `
@@ -4312,11 +4227,11 @@ describe("TestInsert", () => {
             ) {first, last};
         `,
       [
-            {
-              "first": "Emmanuel",
-              "last": "Vi11ip",
-            },
-          ]
+        {
+          first: "Emmanuel",
+          last: "Vi11ip",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4325,17 +4240,17 @@ describe("TestInsert", () => {
                 ORDER BY .last
             `,
       [
-            {
-              "first": "Emmanuel",
-              "last": "Vi11ip",
-              "friend": "Madeline Hatch",
-            },
-            {
-              "first": "Emmanuel",
-              "last": "Villip",
-              "friend": "Phil Emarg",
-            },
-          ]
+        {
+          first: "Emmanuel",
+          last: "Vi11ip",
+          friend: "Madeline Hatch",
+        },
+        {
+          first: "Emmanuel",
+          last: "Villip",
+          friend: "Phil Emarg",
+        },
+      ],
     );
   });
 
@@ -4343,112 +4258,172 @@ describe("TestInsert", () => {
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    let res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    let res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
     h.script(
       `
                 DELETE Person;
-            `
+            `,
     );
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
-    res = h.query("\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ");
+    res = h.query(
+      "\n                    INSERT Person { name := <str>math::floor(random() * 2) }\n                    UNLESS CONFLICT ON (.name) ELSE (Person)\n                ",
+    );
     expect((res as any).length).toEqual(1);
   });
 
@@ -4458,7 +4433,7 @@ describe("TestInsert", () => {
         `
                 INSERT Person { name := <str>math::floor(random() * 2) }
                 UNLESS CONFLICT ON (.name) ELSE (Person)
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT UNLESS CONFLICT ON does not support volatile properties"));
   });
@@ -4469,7 +4444,7 @@ describe("TestInsert", () => {
             FOR x IN {"1", "2", "3", "4"} UNION (
                 INSERT Person { name := x }
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4480,17 +4455,14 @@ describe("TestInsert", () => {
                 ELSE (UPDATE Person SET { tag := "!" })
             );
             `,
-      [
-            {},
-            {},
-          ]
+      [{}, {}],
     );
     assertQueryResult(
       h,
       `
             SELECT Person.tag
             `,
-      ["!", "!", "!", "!"]
+      ["!", "!", "!", "!"],
     );
   });
 
@@ -4498,14 +4470,14 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Person { name := "Phil Emarg" };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
             INSERT DerivedPerson { name := "Phil Emarg" } UNLESS CONFLICT;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -4513,7 +4485,7 @@ describe("TestInsert", () => {
             INSERT DerivedPerson { name := "Phil Emarg" }
             UNLESS CONFLICT ON (.name);
             `,
-      []
+      [],
     );
   });
 
@@ -4521,14 +4493,14 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := "Phil Emarg" };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
             INSERT Person { name := "Phil Emarg" } UNLESS CONFLICT;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -4536,7 +4508,7 @@ describe("TestInsert", () => {
             INSERT Person { name := "Phil Emarg" }
             UNLESS CONFLICT ON (.name);
             `,
-      []
+      [],
     );
   });
 
@@ -4544,7 +4516,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := "Phil Emarg", sub_key := "1" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4552,7 +4524,7 @@ describe("TestInsert", () => {
             INSERT DerivedPerson { name := "Madeline Hatch", sub_key := "1" }
             UNLESS CONFLICT;
             `,
-      []
+      [],
     );
   });
 
@@ -4562,16 +4534,18 @@ describe("TestInsert", () => {
         `
                 INSERT DerivedPerson { name := "Madeline Hatch" }
                 UNLESS CONFLICT ON (.name) ELSE (SELECT DerivedPerson)
-            `
+            `,
       );
-    }).toThrow(new RegExp("UNLESS CONFLICT can not use ELSE when constraint is from a parent type"));
+    }).toThrow(
+      new RegExp("UNLESS CONFLICT can not use ELSE when constraint is from a parent type"),
+    );
   });
 
   it("test_edgeql_insert_unless_conflict_20b", () => {
     h.script(
       `
             INSERT Person { name := "1" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4582,9 +4556,7 @@ describe("TestInsert", () => {
                 ELSE (UPDATE Person SET { tag := "!" })
             );
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -4593,17 +4565,17 @@ describe("TestInsert", () => {
             ORDER BY .name
             `,
       [
-            {
-              "name": "1",
-              "tag": "!",
-              "sub": false,
-            },
-            {
-              "name": "2",
-              "tag": null,
-              "sub": true,
-            },
-          ]
+        {
+          name: "1",
+          tag: "!",
+          sub: false,
+        },
+        {
+          name: "2",
+          tag: null,
+          sub: true,
+        },
+      ],
     );
   });
 
@@ -4621,7 +4593,7 @@ describe("TestInsert", () => {
                 };
             };
             CREATE TYPE Baz extending Foo, Bar;
-        `
+        `,
     );
     h.script(
       `
@@ -4629,7 +4601,7 @@ describe("TestInsert", () => {
             INSERT Foo { name := "both" };
             INSERT Bar { name := "bar" };
             INSERT Bar { name := "both" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4639,9 +4611,7 @@ describe("TestInsert", () => {
                 UNLESS CONFLICT ON (.name)
             );
             `,
-      [
-            {},
-          ]
+      [{}],
     );
   });
 
@@ -4659,13 +4629,13 @@ describe("TestInsert", () => {
                 };
             };
             CREATE TYPE Baz extending Foo, Bar;
-        `
+        `,
     );
     h.script(
       `
             INSERT Foo { foo := "foo" };
             INSERT Bar { bar := "bar" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4673,14 +4643,14 @@ describe("TestInsert", () => {
             INSERT Baz { foo := "!", bar := "bar" }
             UNLESS CONFLICT ON (.bar)
             `,
-      []
+      [],
     );
     expect(() => {
       h.script(
         `
                 INSERT Baz { foo := "!", bar := "bar" }
                 UNLESS CONFLICT ON (.foo)
-                `
+                `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     assertQueryResult(
@@ -4689,7 +4659,7 @@ describe("TestInsert", () => {
             INSERT Baz { foo := "foo", bar := "!" }
             UNLESS CONFLICT
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -4697,7 +4667,7 @@ describe("TestInsert", () => {
             INSERT Baz { foo := "!", bar := "bar" }
             UNLESS CONFLICT
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -4705,16 +4675,25 @@ describe("TestInsert", () => {
             INSERT Baz { foo := "foo", bar := "bar" }
             UNLESS CONFLICT
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_insert_unless_conflict_23", () => {
-    let obj1 = querySingle<{ id: unknown }>(h, "\n            insert DerivedPerson { sub_key := \"foo\" };\n        ");
-    let obj2 = querySingle<{ id: unknown }>(h, "\n            insert DerivedPerson {\n                name := \"new\",\n                sub_key := <str>json_get(\n                    to_json('{ \"sub_key\": \"foo\"}'), 'sub_key')\n            }\n            unless conflict on .sub_key else (select DerivedPerson);\n        ");
+    let obj1 = querySingle<{ id: unknown }>(
+      h,
+      '\n            insert DerivedPerson { sub_key := "foo" };\n        ',
+    );
+    let obj2 = querySingle<{ id: unknown }>(
+      h,
+      '\n            insert DerivedPerson {\n                name := "new",\n                sub_key := <str>json_get(\n                    to_json(\'{ "sub_key": "foo"}\'), \'sub_key\')\n            }\n            unless conflict on .sub_key else (select DerivedPerson);\n        ',
+    );
     expect(obj1.id).toEqual(obj2.id);
-    let obj3 = queryRows<{ id: unknown }>(h, "\n            with\n              raw_data := to_json('[{\"sub_key\": \"foo\"}]')\n            for item in json_array_unpack(raw_data) union (\n                insert DerivedPerson {\n                    name := \"new\",\n                    sub_key := <str>json_get(item, 'sub_key')\n                }\n                unless conflict on .sub_key else (select DerivedPerson)\n            );\n        ");
-    expect((obj3).length).toEqual(1);
+    let obj3 = queryRows<{ id: unknown }>(
+      h,
+      '\n            with\n              raw_data := to_json(\'[{"sub_key": "foo"}]\')\n            for item in json_array_unpack(raw_data) union (\n                insert DerivedPerson {\n                    name := "new",\n                    sub_key := <str>json_get(item, \'sub_key\')\n                }\n                unless conflict on .sub_key else (select DerivedPerson)\n            );\n        ',
+    );
+    expect(obj3.length).toEqual(1);
     expect(obj1.id).toEqual(obj3[0].id);
   });
 
@@ -4730,7 +4709,7 @@ describe("TestInsert", () => {
                 }
                 UNLESS conflict on .name
             );
-        `
+        `,
     );
   });
 
@@ -4747,7 +4726,7 @@ describe("TestInsert", () => {
                     create constraint exclusive;
                 }
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4757,9 +4736,7 @@ describe("TestInsert", () => {
             }
             UNLESS CONFLICT ON (.l);
         `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -4769,12 +4746,12 @@ describe("TestInsert", () => {
             }
             UNLESS CONFLICT ON (.l);
         `,
-      []
+      [],
     );
     h.script(
       `
             insert X { n := "2" }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4784,9 +4761,7 @@ describe("TestInsert", () => {
             }
             UNLESS CONFLICT ON (.l);
         `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -4796,7 +4771,7 @@ describe("TestInsert", () => {
             }
             UNLESS CONFLICT ON (.l);
         `,
-      []
+      [],
     );
   });
 
@@ -4808,7 +4783,7 @@ describe("TestInsert", () => {
             }
             UNLESS CONFLICT ON .case_name
             ELSE (Person)
-        `
+        `,
     );
   });
 
@@ -4826,9 +4801,7 @@ describe("TestInsert", () => {
                 update Person2a set { bff := P }
             )
         `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -4836,12 +4809,12 @@ describe("TestInsert", () => {
             select Person2a { bff: {name} } filter .first = <str>$0
         `,
       [
-            {
-              "bff": {
-                "name": "a",
-              },
-            },
-          ]
+        {
+          bff: {
+            name: "a",
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4856,9 +4829,7 @@ describe("TestInsert", () => {
                 update Person2a set { bff := P }
             )
         `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -4866,12 +4837,12 @@ describe("TestInsert", () => {
             select Person2a { bff: {name} } filter .first = <str>$0
         `,
       [
-            {
-              "bff": {
-                "name": "b",
-              },
-            },
-          ]
+        {
+          bff: {
+            name: "b",
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4886,9 +4857,7 @@ describe("TestInsert", () => {
                 update Person2a set { bff := P }
             )
         `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -4896,12 +4865,12 @@ describe("TestInsert", () => {
             select Person2a { bff: {name} } filter .first = <str>$0
         `,
       [
-            {
-              "bff": {
-                "name": "b",
-              },
-            },
-          ]
+        {
+          bff: {
+            name: "b",
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4916,9 +4885,7 @@ describe("TestInsert", () => {
                 update Person2a set { bff := P }
             )
         `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -4926,12 +4893,12 @@ describe("TestInsert", () => {
             select Person2a { bff: {name} } filter .first = <str>$0
         `,
       [
-            {
-              "bff": {
-                "name": "c",
-              },
-            },
-          ]
+        {
+          bff: {
+            name: "c",
+          },
+        },
+      ],
     );
   });
 
@@ -4942,14 +4909,14 @@ describe("TestInsert", () => {
                 create multi property name -> str {
                     create constraint exclusive; } };
             insert T { name := {'foo', 'bar'} };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
             insert T { name := {'baz', 'bar'} } unless conflict
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -4960,10 +4927,10 @@ describe("TestInsert", () => {
             ) { name }
             `,
       [
-            {
-              "name": unorderedSet(["bar", "foo"]),
-            },
-          ]
+        {
+          name: unorderedSet(["bar", "foo"]),
+        },
+      ],
     );
   });
 
@@ -4982,7 +4949,7 @@ describe("TestInsert", () => {
             insert Note {
                 name := '', subject := upsert,
             };
-        `
+        `,
     );
   });
 
@@ -4998,10 +4965,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5013,13 +4980,9 @@ describe("TestInsert", () => {
                 } UNLESS CONFLICT
             ) {name};
         `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_02", () => {
@@ -5029,35 +4992,27 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person {name := noob,
                                notes := (INSERT Note {name := "tag" })});
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, notes: {name} } ORDER BY .name`,
-      [
-            {
-              "name": "Madeline Hatch",
-              "notes": [
-                {
-                  "name": "tag",
-                },
-              ],
-            },
-            {
-              "name": "Phil Emarg",
-              "notes": [
-                {
-                  "name": "tag",
-                },
-              ],
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT Person.notes)`,
-      [2]
-    );
+    assertQueryResult(h, `SELECT Person { name, notes: {name} } ORDER BY .name`, [
+      {
+        name: "Madeline Hatch",
+        notes: [
+          {
+            name: "tag",
+          },
+        ],
+      },
+      {
+        name: "Phil Emarg",
+        notes: [
+          {
+            name: "tag",
+          },
+        ],
+      },
+    ]);
+    assertQueryResult(h, `SELECT count(DISTINCT Person.notes)`, [2]);
   });
 
   // SKIP: order-dependent flake. The nested FOR…INSERT builds the `notes`
@@ -5073,41 +5028,33 @@ describe("TestInsert", () => {
                     name := noob,
                     notes := (FOR note in {"hello", "world"}
                               UNION (INSERT Note { name := note }))});
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, notes: {name} } ORDER BY .name`,
-      [
-            {
-              "name": "Madeline Hatch",
-              "notes": [
-                {
-                  "name": "hello",
-                },
-                {
-                  "name": "world",
-                },
-              ],
-            },
-            {
-              "name": "Phil Emarg",
-              "notes": [
-                {
-                  "name": "hello",
-                },
-                {
-                  "name": "world",
-                },
-              ],
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT Person.notes)`,
-      [4]
-    );
+    assertQueryResult(h, `SELECT Person { name, notes: {name} } ORDER BY .name`, [
+      {
+        name: "Madeline Hatch",
+        notes: [
+          {
+            name: "hello",
+          },
+          {
+            name: "world",
+          },
+        ],
+      },
+      {
+        name: "Phil Emarg",
+        notes: [
+          {
+            name: "hello",
+          },
+          {
+            name: "world",
+          },
+        ],
+      },
+    ]);
+    assertQueryResult(h, `SELECT count(DISTINCT Person.notes)`, [4]);
   });
 
   it("test_edgeql_insert_dependent_04", () => {
@@ -5123,18 +5070,18 @@ describe("TestInsert", () => {
             ) { name, notes: {name} ORDER BY .name};
         `,
       [
+        {
+          name: "Zendaya",
+          notes: [
             {
-              "name": "Zendaya",
-              "notes": [
-                {
-                  "name": "hello",
-                },
-                {
-                  "name": "world",
-                },
-              ],
+              name: "hello",
             },
-          ]
+            {
+              name: "world",
+            },
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5147,13 +5094,9 @@ describe("TestInsert", () => {
                 } UNLESS CONFLICT
             ) { name, notes: {name} ORDER BY .name};
         `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT DISTINCT count(Person.notes)`,
-      [2]
-    );
+    assertQueryResult(h, `SELECT DISTINCT count(Person.notes)`, [2]);
   });
 
   it("test_edgeql_insert_dependent_05", () => {
@@ -5163,7 +5106,7 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person {name := noob}
             );
-        `
+        `,
     );
     h.script(
       `
@@ -5172,35 +5115,27 @@ describe("TestInsert", () => {
                 UPDATE Person FILTER .name = noob
                 SET {notes := (INSERT Note { name := "tag" }) }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, notes: {name} } ORDER BY .name DESC`,
-      [
-            {
-              "name": "Phil Emarg",
-              "notes": [
-                {
-                  "name": "tag",
-                },
-              ],
-            },
-            {
-              "name": "Madeline Hatch",
-              "notes": [
-                {
-                  "name": "tag",
-                },
-              ],
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT Person.notes)`,
-      [2]
-    );
+    assertQueryResult(h, `SELECT Person { name, notes: {name} } ORDER BY .name DESC`, [
+      {
+        name: "Phil Emarg",
+        notes: [
+          {
+            name: "tag",
+          },
+        ],
+      },
+      {
+        name: "Madeline Hatch",
+        notes: [
+          {
+            name: "tag",
+          },
+        ],
+      },
+    ]);
+    assertQueryResult(h, `SELECT count(DISTINCT Person.notes)`, [2]);
   });
 
   it("test_edgeql_insert_dependent_06", () => {
@@ -5210,7 +5145,7 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person {name := noob}
             );
-        `
+        `,
     );
     h.script(
       `
@@ -5222,41 +5157,33 @@ describe("TestInsert", () => {
                               UNION (INSERT Note { name := note }))
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, notes: {name} } ORDER BY .name DESC`,
-      [
-            {
-              "name": "Phil Emarg",
-              "notes": [
-                {
-                  "name": "hello",
-                },
-                {
-                  "name": "world",
-                },
-              ],
-            },
-            {
-              "name": "Madeline Hatch",
-              "notes": [
-                {
-                  "name": "hello",
-                },
-                {
-                  "name": "world",
-                },
-              ],
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT Person.notes)`,
-      [4]
-    );
+    assertQueryResult(h, `SELECT Person { name, notes: {name} } ORDER BY .name DESC`, [
+      {
+        name: "Phil Emarg",
+        notes: [
+          {
+            name: "hello",
+          },
+          {
+            name: "world",
+          },
+        ],
+      },
+      {
+        name: "Madeline Hatch",
+        notes: [
+          {
+            name: "hello",
+          },
+          {
+            name: "world",
+          },
+        ],
+      },
+    ]);
+    assertQueryResult(h, `SELECT count(DISTINCT Person.notes)`, [4]);
   });
 
   it("test_edgeql_insert_dependent_07", () => {
@@ -5271,7 +5198,7 @@ describe("TestInsert", () => {
                             name,
                         }
                     };
-                `
+                `,
       );
     }).toThrow(new RegExp("mutations are invalid in a shape's computed expression"));
   });
@@ -5282,7 +5209,7 @@ describe("TestInsert", () => {
             INSERT Person {
                 name := 'PersonDep08'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5299,13 +5226,13 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "PersonDep08",
-              "foo": {
-                "name": "NoteDep08",
-              },
-            },
-          ]
+        {
+          name: "PersonDep08",
+          foo: {
+            name: "NoteDep08",
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5318,11 +5245,11 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "PersonDep08",
-              "notes": [],
-            },
-          ]
+        {
+          name: "PersonDep08",
+          notes: [],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5332,10 +5259,10 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "NoteDep08",
-            },
-          ]
+        {
+          name: "NoteDep08",
+        },
+      ],
     );
   });
 
@@ -5345,7 +5272,7 @@ describe("TestInsert", () => {
             INSERT Person {
                 name := 'PersonDep09'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5363,15 +5290,15 @@ describe("TestInsert", () => {
                 };
             `,
       [
+        {
+          name: "PersonDep09",
+          notes: [
             {
-              "name": "PersonDep09",
-              "notes": [
-                {
-                  "name": "NoteDep09",
-                },
-              ],
+              name: "NoteDep09",
             },
-          ]
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5384,11 +5311,11 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "PersonDep09",
-              "notes": [],
-            },
-          ]
+        {
+          name: "PersonDep09",
+          notes: [],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5398,17 +5325,15 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "name": "NoteDep09",
-            },
-          ]
+        {
+          name: "NoteDep09",
+        },
+      ],
     );
   });
 
   it("test_edgeql_insert_dependent_10", () => {
-    h.script(
-      `INSERT Note { name := "foo" };`
-    );
+    h.script(`INSERT Note { name := "foo" };`);
     h.script(
       `
             FOR noob in {"foo", "bar"} UNION (
@@ -5418,29 +5343,23 @@ describe("TestInsert", () => {
                 }
                 UNLESS CONFLICT
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, notes: {name} } ORDER BY .name DESC`,
-      [
-            {
-              "name": "foo",
-              "notes": [
-                {
-                  "name": "foo!",
-                },
-              ],
-            },
-            {
-              "name": "bar",
-              "notes": [],
-            },
-          ]
-    );
-    h.script(
-      `INSERT Note { name := "bar" };`
-    );
+    assertQueryResult(h, `SELECT Person { name, notes: {name} } ORDER BY .name DESC`, [
+      {
+        name: "foo",
+        notes: [
+          {
+            name: "foo!",
+          },
+        ],
+      },
+      {
+        name: "bar",
+        notes: [],
+      },
+    ]);
+    h.script(`INSERT Note { name := "bar" };`);
     h.script(
       `
             FOR noob in {"foo", "bar"} UNION (
@@ -5450,31 +5369,23 @@ describe("TestInsert", () => {
                 }
                 UNLESS CONFLICT
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person { name, notes: {name} } ORDER BY .name`,
-      [
-            {
-              "name": "bar",
-              "notes": [],
-            },
-            {
-              "name": "foo",
-              "notes": [
-                {
-                  "name": "foo!",
-                },
-              ],
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Note.name`,
-      unorderedSet(["bar", "foo!"])
-    );
+    assertQueryResult(h, `SELECT Person { name, notes: {name} } ORDER BY .name`, [
+      {
+        name: "bar",
+        notes: [],
+      },
+      {
+        name: "foo",
+        notes: [
+          {
+            name: "foo!",
+          },
+        ],
+      },
+    ]);
+    assertQueryResult(h, `SELECT Note.name`, unorderedSet(["bar", "foo!"]));
   });
 
   it("test_edgeql_insert_dependent_11", () => {
@@ -5487,17 +5398,13 @@ describe("TestInsert", () => {
                         notes := N,
                     }
                 );
-            `
+            `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Note { name }`,
-      [
-            {
-              "name": "tag!",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Note { name }`, [
+      {
+        name: "tag!",
+      },
+    ]);
   });
 
   it("test_edgeql_insert_dependent_12", () => {
@@ -5510,17 +5417,13 @@ describe("TestInsert", () => {
                         note := N,
                     }
                 );
-            `
+            `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Note { name }`,
-      [
-            {
-              "name": "tag!",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Note { name }`, [
+      {
+        name: "tag!",
+      },
+    ]);
   });
 
   it("test_edgeql_insert_dependent_13", () => {
@@ -5536,10 +5439,10 @@ describe("TestInsert", () => {
         ) {name};
         `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5552,13 +5455,9 @@ describe("TestInsert", () => {
             } UNLESS CONFLICT
         ) {name};
         `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [2]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [2]);
   });
 
   it("test_edgeql_insert_dependent_14", () => {
@@ -5578,26 +5477,22 @@ describe("TestInsert", () => {
                 };
             `,
       [
+        {
+          n: {
+            name: "tag!",
+          },
+          x: [
             {
-              "n": {
-                "name": "tag!",
-              },
-              "x": [
-                {
-                  "name": "Madz",
-                },
-                {
-                  "name": "Phil",
-                },
-              ],
+              name: "Madz",
             },
-          ]
+            {
+              name: "Phil",
+            },
+          ],
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_15", () => {
@@ -5612,10 +5507,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5627,13 +5522,9 @@ describe("TestInsert", () => {
                 } UNLESS CONFLICT
             ) {name};
         `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_16", () => {
@@ -5648,10 +5539,10 @@ describe("TestInsert", () => {
                 ) {name};
             `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5665,17 +5556,13 @@ describe("TestInsert", () => {
                     } UNLESS CONFLICT
                 ) {name};
             `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT Note { name }`,
-      [
-            {
-              "name": "tag!",
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Note { name }`, [
+      {
+        name: "tag!",
+      },
+    ]);
   });
 
   it("test_edgeql_insert_dependent_17", () => {
@@ -5690,10 +5577,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5706,23 +5593,19 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_18", () => {
     h.script(
       `
             INSERT Person { name := "foo" }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5738,26 +5621,22 @@ describe("TestInsert", () => {
             )) ORDER BY .name;
         `,
       [
-            {
-              "name": "bar",
-            },
-            {
-              "name": "foo",
-            },
-          ]
+        {
+          name: "bar",
+        },
+        {
+          name: "foo",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_19", () => {
     h.script(
       `
             INSERT Person { name := "foo" }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5773,23 +5652,19 @@ describe("TestInsert", () => {
             )) ORDER BY .name;
         `,
       [
-            {
-              "name": "bar",
-            },
-          ]
+        {
+          name: "bar",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_20", () => {
     h.script(
       `
             INSERT Person { name := "foo" }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5805,17 +5680,13 @@ describe("TestInsert", () => {
             )) ORDER BY .name;
         `,
       [
-            {
-              "name": "bar",
-              "tag2": "tag!",
-            },
-          ]
+        {
+          name: "bar",
+          tag2: "tag!",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_21", () => {
@@ -5831,10 +5702,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5847,13 +5718,9 @@ describe("TestInsert", () => {
                 } UNLESS CONFLICT
             ) {name};
         `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_22", () => {
@@ -5869,10 +5736,10 @@ describe("TestInsert", () => {
             ) {name};
             `,
       [
-            {
-              "name": "Test",
-            },
-          ]
+        {
+          name: "Test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5885,13 +5752,9 @@ describe("TestInsert", () => {
                 } UNLESS CONFLICT
             ) {name};
             `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_23", () => {
@@ -5901,7 +5764,7 @@ describe("TestInsert", () => {
                 first := "Madeline",
                 last := "Hatch1",
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5915,11 +5778,11 @@ describe("TestInsert", () => {
             ) {first, last};
         `,
       [
-            {
-              "first": "Phil",
-              "last": "Emarg",
-            },
-          ]
+        {
+          first: "Phil",
+          last: "Emarg",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5932,13 +5795,9 @@ describe("TestInsert", () => {
                 } UNLESS CONFLICT
             ) {first, last};
         `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_24", () => {
@@ -5948,7 +5807,7 @@ describe("TestInsert", () => {
                 first := "Madeline",
                 last := "Hatch2",
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5962,10 +5821,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Phil Emarg",
-            },
-          ]
+        {
+          name: "Phil Emarg",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5978,13 +5837,9 @@ describe("TestInsert", () => {
                 } UNLESS CONFLICT
             ) {name};
         `,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_25", () => {
@@ -5994,7 +5849,7 @@ describe("TestInsert", () => {
                 first := "Madeline",
                 last := "Hatch3",
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -6010,10 +5865,10 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Phil Emarg",
-            },
-          ]
+        {
+          name: "Phil Emarg",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6029,16 +5884,12 @@ describe("TestInsert", () => {
             ) {name};
         `,
       [
-            {
-              "name": "Phil Emarg",
-            },
-          ]
+        {
+          name: "Phil Emarg",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_dependent_26", () => {
@@ -6048,7 +5899,7 @@ describe("TestInsert", () => {
                 first := "Madeline",
                 last := "Hatch4",
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -6061,11 +5912,11 @@ describe("TestInsert", () => {
             ) {first, name};
         `,
       [
-            {
-              "first": "Phil",
-              "name": null,
-            },
-          ]
+        {
+          first: "Phil",
+          name: null,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6078,17 +5929,13 @@ describe("TestInsert", () => {
             ) {first, name};
         `,
       [
-            {
-              "first": "Phil",
-              "name": null,
-            },
-          ]
+        {
+          first: "Phil",
+          name: null,
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [2]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [2]);
   });
 
   it("test_edgeql_insert_dependent_27", () => {
@@ -6107,7 +5954,7 @@ describe("TestInsert", () => {
                 CREATE LINK foo -> Foo;
                 CREATE LINK bar -> Bar;
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -6126,26 +5973,22 @@ describe("TestInsert", () => {
                 UNLESS CONFLICT ON .name ELSE (SELECT Obj);
             `,
       [
-            {
-              "id": "str",
-            },
-          ]
+        {
+          id: "str",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT Obj {name, foo: {name}, bar: {name}}`,
-      [
-            {
-              "name": "obj",
-              "foo": {
-                "name": "foo",
-              },
-              "bar": {
-                "name": "bar",
-              },
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT Obj {name, foo: {name}, bar: {name}}`, [
+      {
+        name: "obj",
+        foo: {
+          name: "foo",
+        },
+        bar: {
+          name: "bar",
+        },
+      },
+    ]);
   });
 
   it("test_edgeql_insert_dependent_28", () => {
@@ -6157,27 +6000,23 @@ describe("TestInsert", () => {
                 };
                 create multi link notes -> Note;
             };
-        `
+        `,
     );
     h.query(
       `
             INSERT X {name := "Madeline Hatch",
                       notes := (INSERT Note {name := "tag" })}
             UNLESS CONFLICT;
-        `
+        `,
     );
     h.query(
       `
             INSERT X {name := "Madeline Hatch",
                       notes := (INSERT Note {name := "tag" })}
             UNLESS CONFLICT;
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT count(Note)`, [1]);
   });
 
   it("test_edgeql_insert_unless_conflict_self_01", () => {
@@ -6192,7 +6031,7 @@ describe("TestInsert", () => {
               )
             ) { name }
             ORDER BY .name;
-        `
+        `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -6205,7 +6044,7 @@ describe("TestInsert", () => {
               (INSERT Person {name := "Emmanuel Villip"} UNLESS CONFLICT),
               (INSERT Person {name := "Emmanuel Villip"} UNLESS CONFLICT),
             )
-        `
+        `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -6227,7 +6066,7 @@ describe("TestInsert", () => {
                 )
             }
             UNLESS CONFLICT;
-        `
+        `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -6252,14 +6091,14 @@ describe("TestInsert", () => {
                     }
                 )
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT count(DISTINCT InsertTest.subordinates@comment);
             `,
-      [2]
+      [2],
     );
   });
 
@@ -6271,7 +6110,7 @@ describe("TestInsert", () => {
                  B := (INSERT Person {name := name}),
                  F := (INSERT DerivedPerson {name := name}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6285,7 +6124,7 @@ describe("TestInsert", () => {
                  F := (INSERT DerivedPerson {name := name}),
                  Z := (B, F),
             SELECT Z;
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6298,7 +6137,7 @@ describe("TestInsert", () => {
                  B := (INSERT Person {name := name}),
                  F := (INSERT DerivedPerson {name := name}),
             SELECT (SELECT (B, F));
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6311,7 +6150,7 @@ describe("TestInsert", () => {
                  B := (INSERT Person {name := name}),
                  F := (INSERT DerivedPerson {name := name}),
             SELECT (B, F) FILTER false;
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6324,7 +6163,7 @@ describe("TestInsert", () => {
                  B := (INSERT Person {name := name}),
                  F := (INSERT DerivedPerson {name := name}),
             SELECT (B, F, <str>{});
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6337,7 +6176,7 @@ describe("TestInsert", () => {
                  F := (INSERT DerivedPerson {name := name}),
                  B := (INSERT Person {name := name}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6346,7 +6185,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6355,7 +6194,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Person FILTER .name = 'Bar' SET {name := name}),
                  F := (INSERT Person {name := name})
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6368,7 +6207,7 @@ describe("TestInsert", () => {
              B := (INSERT Person {name := "Foo", case_name := "asdf"}),
              F := (INSERT DerivedPerson {name := "Bar", case_name := "ASDF"}),
         SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("case_name violates exclusivity constraint"));
   });
@@ -6382,7 +6221,7 @@ describe("TestInsert", () => {
              F := (INSERT DerivedPerson {
                       name := "Foo", multi_prop := {"2","3"}}),
         SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("multi_prop violates exclusivity constraint"));
   });
@@ -6391,7 +6230,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6401,7 +6240,7 @@ describe("TestInsert", () => {
                        SET {multi_prop += "a"}),
                  F := (INSERT Person {name := name, multi_prop := {"a", "b"}})
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("multi_prop violates exclusivity constraint"));
   });
@@ -6410,7 +6249,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Person { name := 'Foo' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6420,7 +6259,7 @@ describe("TestInsert", () => {
                        SET {name := "Bar"}),
                  F := (INSERT Person {name := "Foo"})
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6429,7 +6268,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := 'Bar', multi_prop := "a" };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6439,7 +6278,7 @@ describe("TestInsert", () => {
                        SET {multi_prop -= "a"}),
                  F := (INSERT Person {name := name, multi_prop := {"a", "b"}})
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("multi_prop violates exclusivity constraint"));
   });
@@ -6452,7 +6291,7 @@ describe("TestInsert", () => {
                  B := (INSERT Person {name := name}),
                  F := (INSERT DerivedPerson {name := name} UNLESS CONFLICT),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6465,7 +6304,7 @@ describe("TestInsert", () => {
                  F := (INSERT DerivedPerson {name := name} UNLESS CONFLICT),
                  B := (INSERT Person {name := name}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6485,7 +6324,7 @@ describe("TestInsert", () => {
             };
             CREATE TYPE Foo EXTENDING Named, Titled;
             CREATE TYPE Bar EXTENDING Named, Titled;
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6494,7 +6333,7 @@ describe("TestInsert", () => {
                      B := (INSERT Bar {name := name}),
                      F := (INSERT Foo {name := name}),
                 SELECT (B, F);
-            `
+            `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
     expect(() => {
@@ -6504,7 +6343,7 @@ describe("TestInsert", () => {
                      B := (INSERT Bar {title := name}),
                      F := (INSERT Foo {title := name}),
                 SELECT (B, F);
-            `
+            `,
       );
     }).toThrow(new RegExp("title violates exclusivity constraint"));
   });
@@ -6519,7 +6358,7 @@ describe("TestInsert", () => {
             };
             CREATE TYPE Foo EXTENDING Named;
             CREATE TYPE Bar EXTENDING Named;
-        `
+        `,
     );
     h.script(
       `
@@ -6527,7 +6366,7 @@ describe("TestInsert", () => {
                  B := (INSERT Bar {name := name}),
                  F := (INSERT Foo {name := name}),
             SELECT (B, F);
-        `
+        `,
     );
   });
 
@@ -6542,7 +6381,7 @@ describe("TestInsert", () => {
                        INSERT DerivedPerson {name := a ++ b}
                   ))),
         SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6558,7 +6397,7 @@ describe("TestInsert", () => {
                   ))),
              B := (INSERT Person {name := "foo"}),
         SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6570,7 +6409,7 @@ describe("TestInsert", () => {
                  B := (INSERT Person {name := name}),
                  F := (INSERT DerivedPerson {name := <str>random()}),
             SELECT (B, F);
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6579,7 +6418,7 @@ describe("TestInsert", () => {
                  B := (INSERT Person {name := name}),
                  F := (INSERT DerivedPerson {name := <str>(0*random())}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6594,7 +6433,7 @@ describe("TestInsert", () => {
                 };
             };
             CREATE TYPE Bar EXTENDING Foo;
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6608,7 +6447,7 @@ describe("TestInsert", () => {
                     }
                 )
             };
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6623,7 +6462,7 @@ describe("TestInsert", () => {
                 };
             };
             CREATE TYPE Bar EXTENDING Foo;
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6637,7 +6476,7 @@ describe("TestInsert", () => {
                     }
                 )
             };
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6651,7 +6490,7 @@ describe("TestInsert", () => {
                  F := (INSERT DerivedPerson {name := name}),
                  L := (FOR x IN {F} UNION (INSERT Note {name := "bs"})),
             SELECT (B, L);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6667,13 +6506,13 @@ describe("TestInsert", () => {
                 create constraint exclusive on (.bar ?? '');
             };
             create type Bar extending Foo;
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             SELECT ((insert Foo), (insert Bar));
-        `
+        `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -6690,12 +6529,12 @@ describe("TestInsert", () => {
                 create access policy no deny select using (global break);
             };
             create type Y extending X;
-        `
+        `,
     );
     h.script(
       `
             set global break := true
-        `
+        `,
     );
     expect(() => {
       h.query(
@@ -6704,7 +6543,7 @@ describe("TestInsert", () => {
                     (insert X { foo := "!" }),
                     (insert Y { foo := "!" }),
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -6713,7 +6552,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6722,7 +6561,7 @@ describe("TestInsert", () => {
                  F := (INSERT Person {name := name}),
                  B := (UPDATE Person FILTER .name = 'Bar' SET {name := name}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6731,7 +6570,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6740,7 +6579,7 @@ describe("TestInsert", () => {
                  F := (INSERT Person {name := name}),
                  B := (UPDATE Person FILTER .name = 'Bar' SET {name := name}),
             SELECT (SELECT (B, F));
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6750,7 +6589,7 @@ describe("TestInsert", () => {
       `
             INSERT Person { name := 'Foo' };
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6759,7 +6598,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Person FILTER .name = 'Bar' SET {name := name}),
                  F := (UPDATE Person FILTER .name = 'Foo' SET {name := name}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6768,7 +6607,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6778,7 +6617,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Person FILTER .name = 'Bar'
                        SET {name := .name ++ "!"}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6787,7 +6626,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     h.script(
       `
@@ -6796,7 +6635,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Person FILTER .name = 'Bar'
                        SET {name := .name ++ "!"}),
             SELECT (B, F);
-        `
+        `,
     );
   });
 
@@ -6805,13 +6644,13 @@ describe("TestInsert", () => {
       `
             INSERT Person { name := 'Foo' };
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             UPDATE Person FILTER true SET { name := "!" };
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6821,14 +6660,14 @@ describe("TestInsert", () => {
       `
             INSERT Person { name := 'Foo' };
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             WITH P := Person
             UPDATE P FILTER true SET { name := "!" };
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6838,13 +6677,13 @@ describe("TestInsert", () => {
       `
             INSERT Person { name := 'Foo' };
             INSERT DerivedPerson { name := 'Bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             UPDATE Person FILTER true SET { multi_prop := "!" };
-        `
+        `,
       );
     }).toThrow(new RegExp("multi_prop violates exclusivity constraint"));
   });
@@ -6853,7 +6692,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Person2a { first := 'foo', last := 'bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6863,7 +6702,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Person2a FILTER .first = 'foo' and .last = 'bar'
                        SET {last := 'baz'}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("Person2a violates exclusivity constraint"));
   });
@@ -6873,12 +6712,12 @@ describe("TestInsert", () => {
       `
             INSERT Person2a { first := 'foo', last := 'bar' };
             INSERT DerivedPerson2a { first := 'spam', last := 'eggs' };
-        `
+        `,
     );
     h.script(
       `
             UPDATE Person2a SET { first := "!" };
-        `
+        `,
     );
   });
 
@@ -6886,7 +6725,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Person2b { first := 'foo', last := 'bar' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6896,7 +6735,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Person2b FILTER .first = 'foo' and .last = 'bar'
                        SET {last := 'baz'}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6906,12 +6745,12 @@ describe("TestInsert", () => {
       `
             INSERT Person2b { first := 'foo', last := 'bar' };
             INSERT DerivedPerson2b { first := 'spam', last := 'eggs' };
-        `
+        `,
     );
     h.script(
       `
             UPDATE Person2b SET { first := "!" };
-        `
+        `,
     );
   });
 
@@ -6930,13 +6769,13 @@ describe("TestInsert", () => {
 
             INSERT Bar { name := "bar" };
             INSERT Baz { name := "baz" };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             UPDATE Foo FILTER true SET { name := "!" };
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6956,7 +6795,7 @@ describe("TestInsert", () => {
 
             INSERT Bar { name := "bar" };
             # INSERT Baz { name := "baz" };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6965,7 +6804,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Foo FILTER .name = 'bar' SET {name := name}),
                  F := (INSERT Bar {name := name}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -6985,7 +6824,7 @@ describe("TestInsert", () => {
 
             INSERT Bar { name := "bar" };
             INSERT Baz { name := "baz" };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -6994,7 +6833,7 @@ describe("TestInsert", () => {
                  B := (UPDATE Foo FILTER .name = 'bar' SET {name := name}),
                  Z := (UPDATE Foo FILTER .name = 'baz' SET {name := name}),
             SELECT (B, Z);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -7015,13 +6854,13 @@ describe("TestInsert", () => {
 
             INSERT Bar { name := "bar" };
             INSERT Baz { name := "baz" };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             UPDATE Foo FILTER true SET { tags := "!" };
-        `
+        `,
       );
     }).toThrow(new RegExp("tags violates exclusivity constraint"));
   });
@@ -7040,7 +6879,7 @@ describe("TestInsert", () => {
             CREATE TYPE Baz EXTENDING Foo, Bar;
 
             INSERT Baz { name := "baz" };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -7049,7 +6888,7 @@ describe("TestInsert", () => {
                  F := (INSERT Bar {name := name}),
                  B := (UPDATE Foo FILTER .name = 'baz' SET {name := name}),
             SELECT (B, F);
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -7070,24 +6909,24 @@ describe("TestInsert", () => {
 
             INSERT Bar { name := "bar", x := 1, y := 1 };
             INSERT Baz { name := "baz", x := 2, y := 2 };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             UPDATE Foo FILTER true SET { x := - .x };
-        `
+        `,
       );
     }).toThrow(new RegExp("Bar violates exclusivity constraint"));
     h.script(
       `
             UPDATE Foo FILTER .name = 'baz' SET { x := 3 };
-        `
+        `,
     );
     h.script(
       `
             UPDATE Foo FILTER true SET { x := - .x };
-        `
+        `,
     );
   });
 
@@ -7101,32 +6940,32 @@ describe("TestInsert", () => {
             };
             INSERT Foo { name := "bar", x := 1 };
             INSERT Foo { name := "baz", x := 2 };
-        `
+        `,
     );
     h.script(
       `
             UPDATE Foo FILTER true SET { name := .name };
-        `
+        `,
     );
     h.script(
       `
             UPDATE Foo FILTER true SET { x := .x + 1 };
-        `
+        `,
     );
     h.script(
       `
             CREATE TYPE Bar EXTENDING Foo;
-        `
+        `,
     );
     h.script(
       `
             UPDATE Foo FILTER true SET { name := .name };
-        `
+        `,
     );
     h.script(
       `
             UPDATE Foo FILTER true SET { x := .x + 1 };
-        `
+        `,
     );
   });
 
@@ -7141,7 +6980,7 @@ describe("TestInsert", () => {
             create type B extending A;
             create type X extending B;
             create type Y extending B;
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -7149,7 +6988,7 @@ describe("TestInsert", () => {
                 with x := (insert X { foo := 0 }),
                      y := (insert Y { foo := 0 }),
                 select {x, y};
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -7167,28 +7006,28 @@ describe("TestInsert", () => {
                     global break and exists .foo);
             };
             create type Y extending X;
-        `
+        `,
     );
     h.query(
       `
             insert X;
-        `
+        `,
     );
     h.query(
       `
             insert Y;
-        `
+        `,
     );
     h.script(
       `
             set global break := true
-        `
+        `,
     );
     expect(() => {
       h.query(
         `
                 update X set { foo := "!" };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -7206,13 +7045,13 @@ describe("TestInsert", () => {
 
             INSERT Bar { name := "bar" };
             INSERT Baz { name := "baz" };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
             UPDATE {Bar, Baz} FILTER true SET { name := "!" };
-        `
+        `,
       );
     }).toThrow(new RegExp("name violates exclusivity constraint"));
   });
@@ -7229,13 +7068,13 @@ describe("TestInsert", () => {
             create type Y extending X;
             insert X;
             insert Y;
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
                 update X set { l := (insert T { @x := 'x' }) };
-            `
+            `,
       );
     }).toThrow(new RegExp("do not support exclusive constraints on link properties"));
   });
@@ -7244,7 +7083,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Person { name := 'foo' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -7254,7 +7093,7 @@ describe("TestInsert", () => {
                         SET { name := 'foo' }),
                     (INSERT Person { name := 'foo' })
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -7263,7 +7102,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Person { name := 'foo' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -7272,7 +7111,7 @@ describe("TestInsert", () => {
                     (DELETE Person FILTER .name = 'foo'),
                     (INSERT Person { name := 'foo' })
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -7281,7 +7120,7 @@ describe("TestInsert", () => {
     h.script(
       `
             INSERT Note { name := 'delete me' };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -7292,7 +7131,7 @@ describe("TestInsert", () => {
                         DELETE Note FILTER .name = 'delete me' LIMIT 1
                     )
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("deletion of default::Note.+ is prohibited by link target policy"));
   });
@@ -7305,9 +7144,13 @@ describe("TestInsert", () => {
                     l2 := 10,
                     sub := Subordinate,
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression for a link 'sub' declared as 'single'"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression for a link 'sub' declared as 'single'",
+      ),
+    );
   });
 
   it("test_edgeql_insert_volatile_01", () => {
@@ -7315,18 +7158,10 @@ describe("TestInsert", () => {
       `
             WITH name := <str>random(),
             INSERT Person { name := name, tag := name };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_02", () => {
@@ -7336,18 +7171,10 @@ describe("TestInsert", () => {
                 x := <str>random(),
                 name := x ++ "!",
             INSERT Person { name := name, tag := name };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_03", () => {
@@ -7357,18 +7184,10 @@ describe("TestInsert", () => {
                 x := "!",
                 name := x ++ <str>random(),
             INSERT Person { name := name, tag := name };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_04", () => {
@@ -7378,18 +7197,10 @@ describe("TestInsert", () => {
                 x := <str>random(),
                 name := x ++ <str>random(),
             INSERT Person { name := name, tag := name };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_05", () => {
@@ -7397,18 +7208,10 @@ describe("TestInsert", () => {
       `
             WITH name := <str>random(),
             SELECT (INSERT Person { name := name, tag := name });
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_06", () => {
@@ -7418,18 +7221,10 @@ describe("TestInsert", () => {
                 x := <str>random(),
                 name := x ++ "!",
             SELECT (INSERT Person { name := name, tag := name });
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_07", () => {
@@ -7439,18 +7234,10 @@ describe("TestInsert", () => {
                 x := "!",
                 name := x ++ <str>random(),
             SELECT (INSERT Person { name := name, tag := name });
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_08", () => {
@@ -7460,18 +7247,10 @@ describe("TestInsert", () => {
                 x := <str>random(),
                 name := x ++ <str>random(),
             SELECT (INSERT Person { name := name, tag := name });
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_09", () => {
@@ -7482,18 +7261,10 @@ describe("TestInsert", () => {
                 WITH name := x ++ "!"
                 INSERT Person { name := name, tag := name }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_10", () => {
@@ -7504,18 +7275,10 @@ describe("TestInsert", () => {
                 WITH name := x ++ <str>random()
                 INSERT Person { name := name, tag := name }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_11", () => {
@@ -7526,18 +7289,10 @@ describe("TestInsert", () => {
                 WITH name := x ++ <str>random()
                 INSERT Person { name := name, tag := name }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_12", () => {
@@ -7550,18 +7305,10 @@ describe("TestInsert", () => {
                 WITH name := y ++ <str>random()
                 INSERT Person { name := name, tag := name }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_13", () => {
@@ -7579,23 +7326,11 @@ describe("TestInsert", () => {
                     tag2 := x.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_14", () => {
@@ -7614,23 +7349,11 @@ describe("TestInsert", () => {
                     tag2 := y.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_15", () => {
@@ -7649,23 +7372,11 @@ describe("TestInsert", () => {
                     tag2 := y.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_16", () => {
@@ -7684,23 +7395,11 @@ describe("TestInsert", () => {
                     tag2 := y.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_17", () => {
@@ -7719,23 +7418,11 @@ describe("TestInsert", () => {
                     tag2 := y.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_18", () => {
@@ -7754,23 +7441,11 @@ describe("TestInsert", () => {
                     tag2 := y.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_19", () => {
@@ -7789,23 +7464,11 @@ describe("TestInsert", () => {
                     tag2 := y.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_20", () => {
@@ -7824,23 +7487,11 @@ describe("TestInsert", () => {
                     tag2 := x.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_21", () => {
@@ -7859,23 +7510,11 @@ describe("TestInsert", () => {
                     tag2 := x.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_22", () => {
@@ -7894,23 +7533,11 @@ describe("TestInsert", () => {
                     tag2 := x.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_23", () => {
@@ -7929,23 +7556,11 @@ describe("TestInsert", () => {
                     tag2 := x.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_24", () => {
@@ -7964,23 +7579,11 @@ describe("TestInsert", () => {
                     tag2 := x.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_25", () => {
@@ -7999,23 +7602,11 @@ describe("TestInsert", () => {
                     tag2 := x.tag2,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_26", () => {
@@ -8046,23 +7637,11 @@ describe("TestInsert", () => {
                     tag2 := y.tag ++ r,
                 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [2]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [3]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [2]);
   });
 
   it("test_edgeql_insert_volatile_27", () => {
@@ -8077,18 +7656,10 @@ describe("TestInsert", () => {
                     insert Note { name := y, note := y }
                 )
             };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`,
-      [true]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`, [true]);
   });
 
   it("test_edgeql_insert_volatile_28", () => {
@@ -8103,18 +7674,10 @@ describe("TestInsert", () => {
                     insert Note { name := y, note := y }
                 )
             };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`,
-      [true]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`, [true]);
   });
 
   it("test_edgeql_insert_volatile_29", () => {
@@ -8129,18 +7692,10 @@ describe("TestInsert", () => {
                     insert Note { name := y, note := y }
                 )
             };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`,
-      [true]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`, [true]);
   });
 
   it("test_edgeql_insert_volatile_30", () => {
@@ -8155,18 +7710,10 @@ describe("TestInsert", () => {
                     insert Note { name := y, note := y }
                 )
             };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`,
-      [true]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`, [true]);
   });
 
   it("test_edgeql_insert_volatile_31", () => {
@@ -8181,18 +7728,10 @@ describe("TestInsert", () => {
                     insert Note { name := y, note := y }
                 )
             };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`,
-      [true]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `WITH N := (Note {ok := .name = .note}) SELECT all(N.ok)`, [true]);
   });
 
   it("test_edgeql_insert_volatile_32", () => {
@@ -8200,18 +7739,10 @@ describe("TestInsert", () => {
       `
             FOR name in {<str>random(), <str>random()}
             UNION (INSERT Person { name := name, tag := name });
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
   });
 
   it("test_edgeql_insert_volatile_33", () => {
@@ -8223,23 +7754,11 @@ describe("TestInsert", () => {
                 WITH name := x ++ y
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_34", () => {
@@ -8251,23 +7770,11 @@ describe("TestInsert", () => {
                 WITH name := x ++ y
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_35", () => {
@@ -8279,23 +7786,11 @@ describe("TestInsert", () => {
                 WITH name := x ++ y
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_36", () => {
@@ -8306,23 +7801,11 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_37", () => {
@@ -8333,23 +7816,11 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_38", () => {
@@ -8360,23 +7831,11 @@ describe("TestInsert", () => {
             UNION (
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_volatile_39", () => {
@@ -8387,23 +7846,11 @@ describe("TestInsert", () => {
                 WITH name := x ++ <str>random()
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [2]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [2]);
   });
 
   it("test_edgeql_insert_volatile_40", () => {
@@ -8414,23 +7861,11 @@ describe("TestInsert", () => {
                 WITH name := x ++ "!"
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [2]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [2]);
   });
 
   it("test_edgeql_insert_volatile_41", () => {
@@ -8441,23 +7876,11 @@ describe("TestInsert", () => {
                 WITH name := x ++ <str>random()
                 INSERT Person { name := name, tag := name, tag2 := x }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [2]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [2]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [2]);
   });
 
   it("test_edgeql_insert_volatile_42", () => {
@@ -8477,23 +7900,11 @@ describe("TestInsert", () => {
                 WITH name := x.name ++ y
                 INSERT Person { name := name, tag := name, tag2 := x.tag2 }
             );
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.tag2))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [3]);
+    assertQueryResult(h, `SELECT count(distinct(Person.tag2))`, [1]);
   });
 
   it("test_edgeql_insert_with_freeobject_01", () => {
@@ -8501,13 +7912,9 @@ describe("TestInsert", () => {
       `
             WITH free := { name := "asdf" },
             SELECT (INSERT Person { name := free.name });
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT Person.name = "asdf"`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT Person.name = "asdf"`, [true]);
   });
 
   it("test_edgeql_insert_with_freeobject_02", () => {
@@ -8515,35 +7922,27 @@ describe("TestInsert", () => {
       `
             WITH free := { name := <str>random() },
             SELECT (INSERT Person { name := free.name, tag := free.name });
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(distinct(Person.name))`,
-      [1]
-    );
+    assertQueryResult(h, `WITH P := (Person {ok := .name = .tag}) SELECT all(P.ok)`, [true]);
+    assertQueryResult(h, `SELECT count(distinct(Person.name))`, [1]);
   });
 
   it("test_edgeql_insert_multi_exclusive_01", () => {
     h.script(
       `
             INSERT Person { name := "asdf", multi_prop := "a" };
-        `
+        `,
     );
     h.script(
       `
             DELETE Person;
-        `
+        `,
     );
     h.script(
       `
             INSERT Person { name := "asdf", multi_prop := "a" };
-        `
+        `,
     );
   });
 
@@ -8557,13 +7956,7 @@ describe("TestInsert", () => {
                      Z := enumerate((F, B)),
                 SELECT (Z.0, Z.1.0, Z.1.1);
             `,
-      [
-            [
-              0,
-              {},
-              {},
-            ],
-          ]
+      [[0, {}, {}]],
     );
   });
 
@@ -8591,18 +7984,18 @@ describe("TestInsert", () => {
                 };
             `,
       [
-            {
-              "first": "test",
-              "bff": {
-                "name": "test",
-                "notes": [
-                  {
-                    "name": "test",
-                  },
-                ],
+        {
+          first: "test",
+          bff: {
+            name: "test",
+            notes: [
+              {
+                name: "test",
               },
-            },
-          ]
+            ],
+          },
+        },
+      ],
     );
   });
 
@@ -8614,7 +8007,7 @@ describe("TestInsert", () => {
                     __type__ := (introspect Object),
                     name := "test",
                  }
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot assign to link '__type__'"));
   });
@@ -8627,7 +8020,7 @@ describe("TestInsert", () => {
                     id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff',
                     name := "test",
                  }
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot assign to property 'id'"));
   });
@@ -8636,7 +8029,7 @@ describe("TestInsert", () => {
     h.script(
       `
             configure session set allow_user_specified_id := true
-        `
+        `,
     );
     h.script(
       `
@@ -8644,7 +8037,7 @@ describe("TestInsert", () => {
                 id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff',
                 name := "test",
              }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -8652,10 +8045,10 @@ describe("TestInsert", () => {
                 SELECT Person
             `,
       [
-            {
-              "id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
-            },
-          ]
+        {
+          id: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        },
+      ],
     );
   });
 
@@ -8663,7 +8056,7 @@ describe("TestInsert", () => {
     h.script(
       `
             configure session set allow_user_specified_id := true
-        `
+        `,
     );
     h.script(
       `
@@ -8671,7 +8064,7 @@ describe("TestInsert", () => {
                 id := <uuid>to_json('"ffffffff-ffff-ffff-ffff-ffffffffffff"'),
                 name := "test",
              }
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -8680,7 +8073,7 @@ describe("TestInsert", () => {
                     id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff',
                     name := "test2",
                  }
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -8689,7 +8082,7 @@ describe("TestInsert", () => {
     h.script(
       `
             configure session set allow_user_specified_id := true
-        `
+        `,
     );
     h.script(
       `
@@ -8697,7 +8090,7 @@ describe("TestInsert", () => {
                 id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff',
                 name := "test",
              }
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -8706,7 +8099,7 @@ describe("TestInsert", () => {
                     id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff',
                     name := "test2",
                  }
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -8715,7 +8108,7 @@ describe("TestInsert", () => {
     h.script(
       `
             configure session set allow_user_specified_id := true
-        `
+        `,
     );
     h.script(
       `
@@ -8725,19 +8118,19 @@ describe("TestInsert", () => {
                 create access policy no deny select using (global break);
             };
             create type Y;
-        `
+        `,
     );
     h.query(
       `
             insert X {
                 id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff'
             };
-        `
+        `,
     );
     h.script(
       `
             set global break := true
-        `
+        `,
     );
     expect(() => {
       h.query(
@@ -8745,7 +8138,7 @@ describe("TestInsert", () => {
                 insert Y {
                     id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff'
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -8754,7 +8147,7 @@ describe("TestInsert", () => {
     h.script(
       `
             configure session set allow_user_specified_id := true
-        `
+        `,
     );
     h.script(
       `
@@ -8762,7 +8155,7 @@ describe("TestInsert", () => {
                 id := <uuid>'ffffffff-ffff-ffff-ffff-ffffffffffff',
                 name := "test",
              }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -8772,7 +8165,7 @@ describe("TestInsert", () => {
                     name := "test",
                  } UNLESS CONFLICT
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -8782,7 +8175,7 @@ describe("TestInsert", () => {
                     name := "test",
                  } UNLESS CONFLICT ON (.id)
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -8792,7 +8185,7 @@ describe("TestInsert", () => {
                     name := "test",
                  } UNLESS CONFLICT
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -8802,7 +8195,7 @@ describe("TestInsert", () => {
                     name := "test",
                  } UNLESS CONFLICT ON (.id)
             `,
-      []
+      [],
     );
   });
 
@@ -8810,7 +8203,7 @@ describe("TestInsert", () => {
     h.script(
       `
             configure session set allow_user_specified_id := true
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -8819,7 +8212,7 @@ describe("TestInsert", () => {
                     id := <optional uuid>{},
                     name := "test",
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("missing value for required property"));
   });
@@ -8832,9 +8225,7 @@ describe("TestInsert", () => {
                     str_array := <array<str>>to_json('null')
                 };
             `,
-      [
-            {},
-          ]
+      [{}],
     );
   });
 
@@ -8842,84 +8233,84 @@ describe("TestInsert", () => {
     h.script(
       `
             insert ExceptTest { name := "foo" };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
                 insert ExceptTest { name := "foo" };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     expect(() => {
       h.script(
         `
                 insert ExceptTest { name := "foo", deleted := false };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     h.script(
       `
             insert ExceptTest { name := "foo", deleted := true };
-        `
+        `,
     );
     h.script(
       `
             insert ExceptTest { name := "bar", deleted := true };
-        `
+        `,
     );
     h.script(
       `
             insert ExceptTest { name := "bar", deleted := true };
-        `
+        `,
     );
     h.script(
       `
             insert ExceptTest { name := "bar" };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
                 insert ExceptTest { name := "bar" };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     h.script(
       `
             insert ExceptTest { name := "baz" };
-        `
+        `,
     );
     h.script(
       `
             insert ExceptTestSub { name := "bar", deleted := true };
-        `
+        `,
     );
     h.script(
       `
             alter type ExceptTest {
                 drop constraint exclusive on (.name) except (.deleted);
             };
-        `
+        `,
     );
     h.script(
       `
             alter type ExceptTest {
                 create constraint exclusive on (.name) except (.deleted);
             };
-        `
+        `,
     );
     h.script(
       `
             alter type ExceptTest {
                 drop constraint exclusive on (.name) except (.deleted);
             };
-        `
+        `,
     );
     h.script(
       `
             insert ExceptTestSub { name := "baz" };
-        `
+        `,
     );
     expect(() => {
       h.script(
@@ -8927,7 +8318,7 @@ describe("TestInsert", () => {
                 alter type ExceptTest {
                     create constraint exclusive on (.name) except (.deleted);
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -8940,7 +8331,7 @@ describe("TestInsert", () => {
                     (insert ExceptTest { name := "foo" }),
                     (insert ExceptTestSub { name := "foo" }),
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     expect(() => {
@@ -8950,7 +8341,7 @@ describe("TestInsert", () => {
                     (insert ExceptTest { name := "foo" }),
                     (insert ExceptTestSub { name := "foo", deleted := false }),
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     h.script(
@@ -8959,7 +8350,7 @@ describe("TestInsert", () => {
                 (insert ExceptTest { name := "foo" }),
                 (insert ExceptTestSub { name := "foo", deleted := true }),
             };
-        `
+        `,
     );
   });
 
@@ -8968,32 +8359,32 @@ describe("TestInsert", () => {
       `
             insert ExceptTest { name := "a" };
             insert ExceptTestSub { name := "b" };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
                 update ExceptTest set { name := "foo" };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     h.script(
       `
             update ExceptTest set { name := "foo", deleted := true };
-        `
+        `,
     );
     expect(() => {
       h.script(
         `
                 update ExceptTest set { deleted := false };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
     expect(() => {
       h.script(
         `
                 update ExceptTest set { deleted := {} };
-            `
+            `,
       );
     }).toThrow(new RegExp("violates exclusivity constraint"));
   });
@@ -9003,7 +8394,7 @@ describe("TestInsert", () => {
       h.query(
         `
                 select { single x := (select ExceptTest filter .name = 'foo') }
-            `
+            `,
       );
     }).toThrow(new RegExp("possibly more than one element returned"));
   });
@@ -9022,12 +8413,12 @@ describe("TestInsert", () => {
                 }
             `,
       [
-            {
-              "obj": {
-                "id": "str",
-              },
-            },
-          ]
+        {
+          obj: {
+            id: "str",
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9042,13 +8433,13 @@ describe("TestInsert", () => {
                 }
             `,
       [
-            {
-              "obj": {
-                "name": "insert simple 02",
-                "l2": 0,
-              },
-            },
-          ]
+        {
+          obj: {
+            name: "insert simple 02",
+            l2: 0,
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9064,17 +8455,17 @@ describe("TestInsert", () => {
                 }
             `,
       [
+        {
+          objs: [
             {
-              "objs": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
+              id: "str",
             },
-          ]
+            {
+              id: "str",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -9090,7 +8481,7 @@ describe("TestInsert", () => {
                         }
                      ) { name, l2 }
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("mutations are invalid in a shape's computed expression"));
     expect(() => {
@@ -9104,7 +8495,7 @@ describe("TestInsert", () => {
                         }
                      )
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("mutations are invalid in a shape's computed expression"));
     expect(() => {
@@ -9118,7 +8509,7 @@ describe("TestInsert", () => {
                         }
                      )
                 }, select X;
-            `
+            `,
       );
     }).toThrow(new RegExp("mutations are invalid in a shape's computed expression"));
   });
@@ -9132,10 +8523,10 @@ describe("TestInsert", () => {
             select (select update1);
             `,
       [
-            {
-              "id": "str",
-            },
-          ]
+        {
+          id: "str",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9145,10 +8536,10 @@ describe("TestInsert", () => {
             select {update1};
             `,
       [
-            {
-              "id": "str",
-            },
-          ]
+        {
+          id: "str",
+        },
+      ],
     );
   });
 
@@ -9159,7 +8550,7 @@ describe("TestInsert", () => {
                 name := "test",
                 notes := (select Note { foo := 0 })
             };
-        `
+        `,
     );
   });
 
@@ -9174,7 +8565,7 @@ describe("TestInsert", () => {
                   l2 := l2,
                 }
             );
-        `
+        `,
     );
   });
 
@@ -9183,7 +8574,7 @@ describe("TestInsert", () => {
       `
             insert Subordinate { name := "1" };
             insert Subordinate { name := "2" };
-        `
+        `,
     );
     h.script(
       `
@@ -9192,7 +8583,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9201,7 +8592,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9210,7 +8601,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9219,7 +8610,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9228,7 +8619,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9237,7 +8628,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9246,7 +8637,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9255,7 +8646,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9264,7 +8655,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     h.script(
       `
@@ -9273,7 +8664,7 @@ describe("TestInsert", () => {
                     sub := (select Subordinate { @note := "!" }
                              order by random() limit 1)
                 };
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -9281,67 +8672,67 @@ describe("TestInsert", () => {
             select InsertTest { sub: {name, @note} };
             `,
       [
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-          ]
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+      ],
     );
     h.script(
       `
@@ -9349,7 +8740,7 @@ describe("TestInsert", () => {
                 sub := (select Subordinate { @note := "!" }
                          order by random() limit 1)
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -9357,67 +8748,67 @@ describe("TestInsert", () => {
             select InsertTest { sub: {name, @note} };
             `,
       [
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-            {
-              "sub": {
-                "name": "str",
-                "@note": "!",
-              },
-            },
-          ]
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+        {
+          sub: {
+            name: "str",
+            "@note": "!",
+          },
+        },
+      ],
     );
   });
 
@@ -9431,10 +8822,8 @@ describe("TestInsert", () => {
                 insert DerivedTest { l2 := 200 }
             )
             `,
-      [
-            {},
-          ],
-      { variables: [true] }
+      [{}],
+      { variables: [true] },
     );
     assertQueryResult(
       h,
@@ -9442,11 +8831,11 @@ describe("TestInsert", () => {
             select InsertTest { l2, tname := .__type__.name }
             `,
       [
-            {
-              "l2": 2,
-              "tname": "default::InsertTest",
-            },
-          ]
+        {
+          l2: 2,
+          tname: "default::InsertTest",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9457,10 +8846,8 @@ describe("TestInsert", () => {
                 insert DerivedTest { l2 := 200 }
             )
             `,
-      [
-            {},
-          ],
-      { variables: [false] }
+      [{}],
+      { variables: [false] },
     );
     assertQueryResult(
       h,
@@ -9468,15 +8855,15 @@ describe("TestInsert", () => {
             select InsertTest { l2, tname := .__type__.name } order by  .l2
             `,
       [
-            {
-              "l2": 2,
-              "tname": "default::InsertTest",
-            },
-            {
-              "l2": 200,
-              "tname": "default::DerivedTest",
-            },
-          ]
+        {
+          l2: 2,
+          tname: "default::InsertTest",
+        },
+        {
+          l2: 200,
+          tname: "default::DerivedTest",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9487,11 +8874,8 @@ describe("TestInsert", () => {
                 insert DerivedTest { l2 := 200 }
             )
             `,
-      [
-            {},
-            {},
-          ],
-      { variables: [[true, false]] }
+      [{}, {}],
+      { variables: [[true, false]] },
     );
     assertQueryResult(
       h,
@@ -9501,10 +8885,8 @@ describe("TestInsert", () => {
                 insert InsertTest { l2 := 100 }
             ) else {}
             `,
-      [
-            {},
-          ],
-      { variables: [true] }
+      [{}],
+      { variables: [true] },
     );
     assertQueryResult(
       h,
@@ -9512,27 +8894,27 @@ describe("TestInsert", () => {
             select InsertTest { l2, tname := .__type__.name } order by  .l2
             `,
       [
-            {
-              "l2": 2,
-              "tname": "default::InsertTest",
-            },
-            {
-              "l2": 2,
-              "tname": "default::InsertTest",
-            },
-            {
-              "l2": 100,
-              "tname": "default::InsertTest",
-            },
-            {
-              "l2": 200,
-              "tname": "default::DerivedTest",
-            },
-            {
-              "l2": 200,
-              "tname": "default::DerivedTest",
-            },
-          ]
+        {
+          l2: 2,
+          tname: "default::InsertTest",
+        },
+        {
+          l2: 2,
+          tname: "default::InsertTest",
+        },
+        {
+          l2: 100,
+          tname: "default::InsertTest",
+        },
+        {
+          l2: 200,
+          tname: "default::DerivedTest",
+        },
+        {
+          l2: 200,
+          tname: "default::DerivedTest",
+        },
+      ],
     );
   });
 
@@ -9544,7 +8926,7 @@ describe("TestInsert", () => {
             ) else (
                 insert DerivedTest { l2 := 200 }
             )), (select ExceptTest.deleted limit 1));
-        `
+        `,
     );
   });
 
@@ -9558,14 +8940,14 @@ describe("TestInsert", () => {
             )) { l2 } order by .l2;
             `,
       [
-            {
-              "l2": 2,
-            },
-            {
-              "l2": 4,
-            },
-          ],
-      { variables: [[1, 2, 3, 4, 5]] }
+        {
+          l2: 2,
+        },
+        {
+          l2: 4,
+        },
+      ],
+      { variables: [[1, 2, 3, 4, 5]] },
     );
     assertQueryResult(
       h,
@@ -9573,13 +8955,13 @@ describe("TestInsert", () => {
             select InsertTest { l2 } order by .l2;
             `,
       [
-            {
-              "l2": 2,
-            },
-            {
-              "l2": 4,
-            },
-          ]
+        {
+          l2: 2,
+        },
+        {
+          l2: 4,
+        },
+      ],
     );
   });
 
@@ -9590,9 +8972,7 @@ describe("TestInsert", () => {
             select (select InsertTest filter .l2 = 2) ??
               (insert InsertTest { l2 := 2 });
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -9600,16 +8980,14 @@ describe("TestInsert", () => {
             select (select InsertTest filter .l2 = 2) ??
               (insert InsertTest { l2 := 2 });
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
       `
             select count((delete InsertTest))
             `,
-      [1]
+      [1],
     );
   });
 
@@ -9620,12 +8998,7 @@ describe("TestInsert", () => {
             select ((select InsertTest filter .l2 = 2), true) ??
               ((insert InsertTest { l2 := 2 }), false);
             `,
-      [
-            [
-              {},
-              false,
-            ],
-          ]
+      [[{}, false]],
     );
     assertQueryResult(
       h,
@@ -9633,12 +9006,7 @@ describe("TestInsert", () => {
             select ((select InsertTest filter .l2 = 2), true) ??
               ((insert InsertTest { l2 := 2 }), false);
             `,
-      [
-            [
-              {},
-              true,
-            ],
-          ]
+      [[{}, true]],
     );
   });
 
@@ -9652,11 +9020,11 @@ describe("TestInsert", () => {
             ) { l2, name }
             `,
       [
-            {
-              "l2": 2,
-              "name": "?",
-            },
-          ]
+        {
+          l2: 2,
+          name: "?",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9667,11 +9035,11 @@ describe("TestInsert", () => {
             ) { l2, name }
             `,
       [
-            {
-              "l2": 2,
-              "name": "!",
-            },
-          ]
+        {
+          l2: 2,
+          name: "!",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9679,18 +9047,18 @@ describe("TestInsert", () => {
             select InsertTest { l2, name }
             `,
       [
-            {
-              "l2": 2,
-              "name": "!",
-            },
-          ]
+        {
+          l2: 2,
+          name: "!",
+        },
+      ],
     );
     assertQueryResult(
       h,
       `
             select count((delete InsertTest))
             `,
-      [1]
+      [1],
     );
   });
 
@@ -9704,18 +9072,18 @@ describe("TestInsert", () => {
         )) { l2, name, new := .id not in InsertTest.id } order by .l2
         `,
       [
-            {
-              "l2": 1,
-              "name": "?",
-              "new": true,
-            },
-            {
-              "l2": 2,
-              "name": "?",
-              "new": true,
-            },
-          ],
-      { variables: [[1, 2]] }
+        {
+          l2: 1,
+          name: "?",
+          new: true,
+        },
+        {
+          l2: 2,
+          name: "?",
+          new: true,
+        },
+      ],
+      { variables: [[1, 2]] },
     );
     assertQueryResult(
       h,
@@ -9726,28 +9094,28 @@ describe("TestInsert", () => {
         )) { l2, name, new := .id not in InsertTest.id } order by .l2
         `,
       [
-            {
-              "l2": 0,
-              "name": "?",
-              "new": true,
-            },
-            {
-              "l2": 1,
-              "name": "!",
-              "new": false,
-            },
-            {
-              "l2": 2,
-              "name": "!",
-              "new": false,
-            },
-            {
-              "l2": 3,
-              "name": "?",
-              "new": true,
-            },
-          ],
-      { variables: [[0, 1, 2, 3]] }
+        {
+          l2: 0,
+          name: "?",
+          new: true,
+        },
+        {
+          l2: 1,
+          name: "!",
+          new: false,
+        },
+        {
+          l2: 2,
+          name: "!",
+          new: false,
+        },
+        {
+          l2: 3,
+          name: "?",
+          new: true,
+        },
+      ],
+      { variables: [[0, 1, 2, 3]] },
     );
   });
 
@@ -9755,7 +9123,7 @@ describe("TestInsert", () => {
     h.script(
       `
             insert Subordinate { name := "foo" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -9765,9 +9133,7 @@ describe("TestInsert", () => {
           (insert Note { name := "", subject := sub })
         );
         `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -9777,20 +9143,14 @@ describe("TestInsert", () => {
           (insert Note { name := "", subject := sub })
         );
         `,
-      [
-            {},
-          ]
+      [{}],
     );
-    assertQueryResult(
-      h,
-      `select count(Note)`,
-      [1]
-    );
+    assertQueryResult(h, `select count(Note)`, [1]);
     h.script(
       `
             insert Subordinate { name := "bar" };
             insert Subordinate { name := "baz" };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -9800,11 +9160,7 @@ describe("TestInsert", () => {
           (insert Note { name := "", subject := sub })
         );
         `,
-      [
-            {},
-            {},
-            {},
-          ]
+      [{}, {}, {}],
     );
     assertQueryResult(
       h,
@@ -9814,17 +9170,9 @@ describe("TestInsert", () => {
           (insert Note { name := "", subject := sub })
         );
         `,
-      [
-            {},
-            {},
-            {},
-          ]
+      [{}, {}, {}],
     );
-    assertQueryResult(
-      h,
-      `select count(Note)`,
-      [3]
-    );
+    assertQueryResult(h, `select count(Note)`, [3]);
   });
 
   it("test_edgeql_insert_coalesce_nulls_01", () => {
@@ -9839,10 +9187,10 @@ describe("TestInsert", () => {
         select { new := new }
         `,
       [
-            {
-              "new": {},
-            },
-          ]
+        {
+          new: {},
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9855,10 +9203,10 @@ describe("TestInsert", () => {
         select { new := new }
         `,
       [
-            {
-              "new": {},
-            },
-          ]
+        {
+          new: {},
+        },
+      ],
     );
   });
 
@@ -9876,10 +9224,10 @@ describe("TestInsert", () => {
         ) { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9894,10 +9242,10 @@ describe("TestInsert", () => {
         ) { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
   });
 
@@ -9905,7 +9253,7 @@ describe("TestInsert", () => {
     h.script(
       `
             insert Note { name := 'x' }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -9919,10 +9267,10 @@ describe("TestInsert", () => {
                { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9936,10 +9284,10 @@ describe("TestInsert", () => {
                { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
   });
 
@@ -9955,10 +9303,10 @@ describe("TestInsert", () => {
         select { new := assert_single(new) }
         `,
       [
-            {
-              "new": {},
-            },
-          ]
+        {
+          new: {},
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -9971,10 +9319,10 @@ describe("TestInsert", () => {
         select { new := assert_single(new) }
         `,
       [
-            {
-              "new": {},
-            },
-          ]
+        {
+          new: {},
+        },
+      ],
     );
   });
 
@@ -9992,10 +9340,10 @@ describe("TestInsert", () => {
         ) { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -10010,10 +9358,10 @@ describe("TestInsert", () => {
         ) { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
   });
 
@@ -10021,7 +9369,7 @@ describe("TestInsert", () => {
     h.script(
       `
             insert Note { name := 'x' }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -10036,10 +9384,10 @@ describe("TestInsert", () => {
                { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -10054,10 +9402,10 @@ describe("TestInsert", () => {
                { subject }
         `,
       [
-            {
-              "subject": {},
-            },
-          ]
+        {
+          subject: {},
+        },
+      ],
     );
   });
 
@@ -10078,10 +9426,8 @@ describe("TestInsert", () => {
           )
         );
         `,
-      [
-            {},
-          ],
-      { variables: [true] }
+      [{}],
+      { variables: [true] },
     );
     assertQueryResult(
       h,
@@ -10099,15 +9445,28 @@ describe("TestInsert", () => {
           )
         );
         `,
-      [
-            {},
-          ],
-      { variables: [true] }
+      [{}],
+      { variables: [true] },
     );
+    assertQueryResult(h, `select DerivedTest`, []);
     assertQueryResult(
       h,
-      `select DerivedTest`,
-      []
+      `
+        with l2 := 420,
+        select (
+          if <bool>$0 then (
+            (delete DerivedTest filter .l2 = l2)
+            ??
+            (insert DerivedTest {l2 := l2})
+          ) else (
+            (update Note filter .name = <str>l2 set { note := "note" })
+            ??
+            (insert Note {name := <str>l2})
+          )
+        );
+        `,
+      [{}],
+      { variables: [false] },
     );
     assertQueryResult(
       h,
@@ -10125,41 +9484,14 @@ describe("TestInsert", () => {
           )
         );
         `,
-      [
-            {},
-          ],
-      { variables: [false] }
+      [{}],
+      { variables: [false] },
     );
-    assertQueryResult(
-      h,
-      `
-        with l2 := 420,
-        select (
-          if <bool>$0 then (
-            (delete DerivedTest filter .l2 = l2)
-            ??
-            (insert DerivedTest {l2 := l2})
-          ) else (
-            (update Note filter .name = <str>l2 set { note := "note" })
-            ??
-            (insert Note {name := <str>l2})
-          )
-        );
-        `,
-      [
-            {},
-          ],
-      { variables: [false] }
-    );
-    assertQueryResult(
-      h,
-      `select Note { note }`,
-      [
-            {
-              "note": "note",
-            },
-          ]
-    );
+    assertQueryResult(h, `select Note { note }`, [
+      {
+        note: "note",
+      },
+    ]);
   });
 
   it("test_edgeql_insert_empty_array_01", () => {
@@ -10170,7 +9502,7 @@ describe("TestInsert", () => {
                     name := [],
                     l2 := 0,
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("expression returns value of indeterminate type"));
   });
@@ -10183,9 +9515,13 @@ describe("TestInsert", () => {
                     name := ['a'] ++ [],
                     l2 := 0,
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("invalid target for property 'name' of object type 'default::InsertTest': 'array<std::str>' \\(expecting 'std::str'\\)"));
+    }).toThrow(
+      new RegExp(
+        "invalid target for property 'name' of object type 'default::InsertTest': 'array<std::str>' \\(expecting 'std::str'\\)",
+      ),
+    );
   });
 
   it("test_edgeql_insert_empty_array_03", () => {
@@ -10196,9 +9532,13 @@ describe("TestInsert", () => {
                     name := array_unpack([1] ++ []),
                     l2 := 0,
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("invalid target for property 'name' of object type 'default::InsertTest': 'std::int64' \\(expecting 'std::str'\\)"));
+    }).toThrow(
+      new RegExp(
+        "invalid target for property 'name' of object type 'default::InsertTest': 'std::int64' \\(expecting 'std::str'\\)",
+      ),
+    );
   });
 
   it("test_edgeql_insert_empty_array_04", () => {
@@ -10213,7 +9553,7 @@ describe("TestInsert", () => {
                         }
                     )
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("expression returns value of indeterminate type"));
   });
@@ -10233,16 +9573,16 @@ describe("TestInsert", () => {
             }) { l2, subordinates: { name, @comment } };
             `,
       [
+        {
+          l2: 0,
+          subordinates: [
             {
-              "l2": 0,
-              "subordinates": [
-                {
-                  "name": "hi",
-                  "@comment": "a",
-                },
-              ],
+              name: "hi",
+              "@comment": "a",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -10252,9 +9592,7 @@ describe("TestInsert", () => {
   });
 
   it("test_edgeql_insert_read_only_tx_02", () => {
-    h.script(
-      `insert Subordinate { name := 'hi' }`
-    );
+    h.script(`insert Subordinate { name := 'hi' }`);
   });
 });
 
@@ -10266,7 +9604,7 @@ describe("TestRepeatableReadInsert", () => {
     // class: cross-table exclusive constraints are rejected under this level.
     h = await QueryHarness.create({
       schema: "insert",
-      isolation: "repeatable_read"
+      isolation: "repeatable_read",
     });
   });
 
@@ -10276,7 +9614,7 @@ describe("TestRepeatableReadInsert", () => {
             insert ConflictA {
                 name := "test"
             };
-        `
+        `,
     );
   });
 
@@ -10287,9 +9625,13 @@ describe("TestRepeatableReadInsert", () => {
                 insert ConflictB {
                     name := "test"
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("INSERT to object type 'default::ConflictB' affects an exclusive constraint on property 'name' of object type 'default::ConflictB' that is shared with descendant types: 'default::ConflictAB'"));
+    }).toThrow(
+      new RegExp(
+        "INSERT to object type 'default::ConflictB' affects an exclusive constraint on property 'name' of object type 'default::ConflictB' that is shared with descendant types: 'default::ConflictAB'",
+      ),
+    );
   });
 
   it("test_edgeql_rr_insert_03", () => {
@@ -10299,9 +9641,13 @@ describe("TestRepeatableReadInsert", () => {
                 insert ConflictAB {
                     name := "test"
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("INSERT to object type 'default::ConflictAB' affects an exclusive constraint on property 'name' of object type 'default::ConflictAB' that is defined in ancestor object type 'default::ConflictB'"));
+    }).toThrow(
+      new RegExp(
+        "INSERT to object type 'default::ConflictAB' affects an exclusive constraint on property 'name' of object type 'default::ConflictAB' that is defined in ancestor object type 'default::ConflictB'",
+      ),
+    );
   });
 
   it("test_edgeql_rr_insert_04", () => {
@@ -10312,9 +9658,13 @@ describe("TestRepeatableReadInsert", () => {
                     first := "Emmanuel",
                     last := "Villip",
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("an exclusive constraint on object type 'default::Person2a' with expression '\\(\\.first, \\.bff\\)'"));
+    }).toThrow(
+      new RegExp(
+        "an exclusive constraint on object type 'default::Person2a' with expression '\\(\\.first, \\.bff\\)'",
+      ),
+    );
   });
 
   it("test_edgeql_rr_update_01", () => {
@@ -10324,9 +9674,13 @@ describe("TestRepeatableReadInsert", () => {
                 update ConflictA set {
                     name := "test"
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("UPDATE to object type 'default::ConflictAB' affects an exclusive constraint on property 'name' of object type 'default::ConflictAB' that is defined in ancestor object type 'default::ConflictB'"));
+    }).toThrow(
+      new RegExp(
+        "UPDATE to object type 'default::ConflictAB' affects an exclusive constraint on property 'name' of object type 'default::ConflictAB' that is defined in ancestor object type 'default::ConflictB'",
+      ),
+    );
   });
 
   it("test_edgeql_rr_update_02", () => {
@@ -10336,9 +9690,13 @@ describe("TestRepeatableReadInsert", () => {
                 update ConflictB set {
                     name := "test"
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("UPDATE to object type 'default::ConflictB' affects an exclusive constraint on property 'name' of object type 'default::ConflictB' that is shared with descendant types: 'default::ConflictAB'"));
+    }).toThrow(
+      new RegExp(
+        "UPDATE to object type 'default::ConflictB' affects an exclusive constraint on property 'name' of object type 'default::ConflictB' that is shared with descendant types: 'default::ConflictAB'",
+      ),
+    );
   });
 
   it("test_edgeql_rr_update_03", () => {
@@ -10348,9 +9706,13 @@ describe("TestRepeatableReadInsert", () => {
                 update ConflictAB set {
                     name := "test"
                 };
-            `
+            `,
       );
-    }).toThrow(new RegExp("UPDATE to object type 'default::ConflictAB' affects an exclusive constraint on property 'name' of object type 'default::ConflictAB' that is defined in ancestor object type 'default::ConflictB'"));
+    }).toThrow(
+      new RegExp(
+        "UPDATE to object type 'default::ConflictAB' affects an exclusive constraint on property 'name' of object type 'default::ConflictAB' that is defined in ancestor object type 'default::ConflictB'",
+      ),
+    );
   });
 
   it("test_edgeql_rr_update_04", () => {
@@ -10360,7 +9722,7 @@ describe("TestRepeatableReadInsert", () => {
                     select Person
                     filter .name = 'adsf'
                 ).note set {};
-            `
+            `,
     );
   });
 });

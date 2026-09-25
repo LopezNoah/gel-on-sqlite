@@ -26,10 +26,7 @@ const query = positional[1] ?? "SELECT 1";
 const schemaName = flag("--schema") ?? "issues";
 const schemaFile = `tests/schemas/${schemaName}.esdl`;
 
-const src = fs.readFileSync(
-  new URL(`../${schemaFile}`, import.meta.url),
-  "utf8",
-);
+const src = fs.readFileSync(new URL(`../${schemaFile}`, import.meta.url), "utf8");
 const schema = schemaFromSdl(src);
 
 const result = inspect(schema, query);

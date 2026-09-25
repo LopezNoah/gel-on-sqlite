@@ -42,7 +42,9 @@ export interface RuntimeInstance<TAdapter extends RuntimeDatabaseAdapter = Runti
   close: () => void;
 }
 
-export interface AsyncRuntimeInstance<TAdapter extends AsyncRuntimeDatabaseAdapter = AsyncRuntimeDatabaseAdapter> {
+export interface AsyncRuntimeInstance<
+  TAdapter extends AsyncRuntimeDatabaseAdapter = AsyncRuntimeDatabaseAdapter,
+> {
   db: TAdapter;
   close: () => Promise<void>;
 }
@@ -84,17 +86,14 @@ export const toAsyncAdapter = (adapter: RuntimeDatabaseAdapter): AsyncRuntimeDat
   },
   // A sync adapter has no native batch; emulate it sequentially so callers can
   // rely on `batch` being present here (used in tests and the sequential path).
-  batch: async (statements) =>
-    statements.map((s) => adapter.prepare(s.sql).all(...s.params)),
+  batch: async (statements) => statements.map((s) => adapter.prepare(s.sql).all(...s.params)),
   close: async () => {
     adapter.close();
   },
-  pragma: adapter.pragma
-    ? async (value) => adapter.pragma?.(value)
-    : undefined,
+  pragma: adapter.pragma ? async (value) => adapter.pragma?.(value) : undefined,
   exec: adapter.exec
     ? async (sql) => {
-      adapter.exec?.(sql);
-    }
+        adapter.exec?.(sql);
+      }
     : undefined,
 });

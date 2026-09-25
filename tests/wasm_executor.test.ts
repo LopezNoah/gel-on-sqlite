@@ -35,8 +35,9 @@ describe("WASM (sql.js) — full engine in the browser, reads + writes", () => {
     await client.query("insert default::Person { name := 'Alice', age := 30 };");
     await client.query("insert default::Person { name := 'Bob', age := 25 };");
 
-    const names = (await client.query<{ name: string }>("select default::Person { name } order by .name;"))
-      .map((r) => r.name);
+    const names = (
+      await client.query<{ name: string }>("select default::Person { name } order by .name;")
+    ).map((r) => r.name);
     expect(names).toEqual(["Alice", "Bob"]);
 
     const count = await client.queryRequiredSingle<number>("select count(default::Person);");
@@ -59,7 +60,9 @@ describe("WASM (sql.js) — full engine in the browser, reads + writes", () => {
 
     // Reopen from the exported bytes — the data and schema survive.
     const reopened = new SQL.Database(bytes);
-    const count = await connectWasm(reopened).queryRequiredSingle<number>("select count(default::Person);");
+    const count = await connectWasm(reopened).queryRequiredSingle<number>(
+      "select count(default::Person);",
+    );
     expect(count).toBe(1);
     const carol = await connectWasm(reopened).querySingle<{ name: string }>(
       "select default::Person { name } filter .name = <str>$n;",

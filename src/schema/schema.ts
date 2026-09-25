@@ -50,7 +50,10 @@ export class SchemaSnapshot {
    * test harness, which clones the snapshot for every test.
    */
   contentFingerprint(): string {
-    if (this.cachedFingerprint !== undefined && this.cachedFingerprintVersion === this.mutationVersionCounter) {
+    if (
+      this.cachedFingerprint !== undefined &&
+      this.cachedFingerprintVersion === this.mutationVersionCounter
+    ) {
       return this.cachedFingerprint;
     }
     const fingerprint = computeContentFingerprint(this);
@@ -86,14 +89,34 @@ export class SchemaSnapshot {
     return clone;
   }
 
-  constructor(types: TypeDef[] = [], functions: FunctionDef[] = [], aliases: AliasDef[] = [], scalarTypes: ScalarTypeDeclaration[] = [], globals: GlobalDef[] = []) {
-    this.typesByName = new Map(types.map((t) => [qualifiedTypeName(t), deepFreeze(cloneTypeDef(t))]));
-    this.functionsBySignature = new Map(functions.map((fn) => [functionSignature(fn), deepFreeze(cloneFunctionDef(fn))]));
-    this.aliasesByName = new Map(aliases.map((alias) => [qualifiedAliasName(alias), deepFreeze(cloneAliasDef(alias))]));
-    this.scalarTypesByName = new Map(
-      scalarTypes.map((scalarType) => [qualifiedScalarTypeName(scalarType), deepFreeze(cloneScalarTypeDeclaration(scalarType))] as const),
+  constructor(
+    types: TypeDef[] = [],
+    functions: FunctionDef[] = [],
+    aliases: AliasDef[] = [],
+    scalarTypes: ScalarTypeDeclaration[] = [],
+    globals: GlobalDef[] = [],
+  ) {
+    this.typesByName = new Map(
+      types.map((t) => [qualifiedTypeName(t), deepFreeze(cloneTypeDef(t))]),
     );
-    this.globalsByName = new Map(globals.map((g) => [`${g.module}::${g.name}`, deepFreeze({ ...g })]));
+    this.functionsBySignature = new Map(
+      functions.map((fn) => [functionSignature(fn), deepFreeze(cloneFunctionDef(fn))]),
+    );
+    this.aliasesByName = new Map(
+      aliases.map((alias) => [qualifiedAliasName(alias), deepFreeze(cloneAliasDef(alias))]),
+    );
+    this.scalarTypesByName = new Map(
+      scalarTypes.map(
+        (scalarType) =>
+          [
+            qualifiedScalarTypeName(scalarType),
+            deepFreeze(cloneScalarTypeDeclaration(scalarType)),
+          ] as const,
+      ),
+    );
+    this.globalsByName = new Map(
+      globals.map((g) => [`${g.module}::${g.name}`, deepFreeze({ ...g })]),
+    );
   }
 
   // Read accessors return the stored, deeply-frozen definitions directly
@@ -129,8 +152,12 @@ export class SchemaSnapshot {
         continue;
       }
 
-      const requiredCount = fn.params.filter((param) => !param.optional && param.default === undefined && !param.variadic).length;
-      const accepts = arity >= requiredCount && (fn.params.some((param) => param.variadic) || arity <= fn.params.length);
+      const requiredCount = fn.params.filter(
+        (param) => !param.optional && param.default === undefined && !param.variadic,
+      ).length;
+      const accepts =
+        arity >= requiredCount &&
+        (fn.params.some((param) => param.variadic) || arity <= fn.params.length);
       if (accepts) {
         return fn;
       }
@@ -241,7 +268,11 @@ export class SchemaSnapshot {
     return this.isSubtypeOf(childDef, ancestorQualifiedName);
   }
 
-  private isSubtypeOf(typeDef: TypeDef, targetQualifiedName: string, seen = new Set<string>()): boolean {
+  private isSubtypeOf(
+    typeDef: TypeDef,
+    targetQualifiedName: string,
+    seen = new Set<string>(),
+  ): boolean {
     const typeName = qualifiedTypeName(typeDef);
     if (seen.has(typeName)) {
       return false;
@@ -285,7 +316,12 @@ export class SchemaSnapshot {
       typeDef.fields.push({ ...update.field });
     }
 
-    return new SchemaSnapshot([...next.values()], this.listFunctions(), this.listAliases(), this.listScalarTypes());
+    return new SchemaSnapshot(
+      [...next.values()],
+      this.listFunctions(),
+      this.listAliases(),
+      this.listScalarTypes(),
+    );
   }
 }
 
@@ -394,7 +430,14 @@ const computeContentFingerprint = (schema: SchemaSnapshot): string => {
     .map((fn) => ({
       module: fn.module,
       name: fn.name,
-      params: fn.params.map((p) => ({ name: p.name, type: p.type, optional: Boolean(p.optional), variadic: Boolean(p.variadic), setOf: Boolean(p.setOf), default: p.default })),
+      params: fn.params.map((p) => ({
+        name: p.name,
+        type: p.type,
+        optional: Boolean(p.optional),
+        variadic: Boolean(p.variadic),
+        setOf: Boolean(p.setOf),
+        default: p.default,
+      })),
       returnType: fn.returnType,
       returnOptional: Boolean(fn.returnOptional),
       returnSetOf: Boolean(fn.returnSetOf),
@@ -446,7 +489,9 @@ export const fieldSequenceName = (schema: SchemaSnapshot, field: FieldDef): stri
   let topUserScalar: string | undefined;
   while (current && !seen.has(current)) {
     seen.add(current);
-    const baseLeaf = current.includes("::") ? current.slice(current.lastIndexOf("::") + 2) : current;
+    const baseLeaf = current.includes("::")
+      ? current.slice(current.lastIndexOf("::") + 2)
+      : current;
     if (baseLeaf.toLowerCase() === "sequence") {
       return topUserScalar;
     }
@@ -474,13 +519,19 @@ const isUniversalObjectName = (name: string): boolean =>
   name === "default::Object" || name === "std::Object" || name === "Object";
 
 export const functionSignature = (fn: FunctionDef): string => {
-  const params = fn.params.map((param) => `${param.variadic ? "variadic " : ""}${param.namedOnly ? "named only " : ""}${param.optional ? "optional " : ""}${param.setOf ? "set of " : ""}${param.type}`).join(",");
+  const params = fn.params
+    .map(
+      (param) =>
+        `${param.variadic ? "variadic " : ""}${param.namedOnly ? "named only " : ""}${param.optional ? "optional " : ""}${param.setOf ? "set of " : ""}${param.type}`,
+    )
+    .join(",");
   return `${fn.module}::${fn.name}(${params})`;
 };
 
 const qualifiedAliasName = (alias: AliasDef): string => `${alias.module}::${alias.name}`;
 
-const qualifiedScalarTypeName = (scalarType: ScalarTypeDeclaration): string => `${scalarType.module}::${scalarType.name}`;
+const qualifiedScalarTypeName = (scalarType: ScalarTypeDeclaration): string =>
+  `${scalarType.module}::${scalarType.name}`;
 
 const cloneAliasDef = (alias: AliasDef): AliasDef => ({
   ...alias,
@@ -626,13 +677,19 @@ export const cloneTypeDef = (typeDef: TypeDef): TypeDef => ({
     annotations: cloneAnnotations(l.annotations),
   })),
   computeds: typeDef.computeds?.map((computed) => cloneComputedDef(computed)),
-  mutationRewrites: typeDef.mutationRewrites?.map((rewrite) => ({ ...rewrite, onInsert: rewrite.onInsert ? { ...rewrite.onInsert } : undefined, onUpdate: rewrite.onUpdate ? { ...rewrite.onUpdate } : undefined })),
+  mutationRewrites: typeDef.mutationRewrites?.map((rewrite) => ({
+    ...rewrite,
+    onInsert: rewrite.onInsert ? { ...rewrite.onInsert } : undefined,
+    onUpdate: rewrite.onUpdate ? { ...rewrite.onUpdate } : undefined,
+  })),
   triggers: typeDef.triggers?.map((trigger) => ({
     ...trigger,
     when: trigger.when ? { ...trigger.when } : undefined,
     actions: trigger.actions.map((action) => ({
       ...action,
-      values: Object.fromEntries(Object.entries(action.values).map(([key, value]) => [key, { ...value }])),
+      values: Object.fromEntries(
+        Object.entries(action.values).map(([key, value]) => [key, { ...value }]),
+      ),
     })),
   })),
   accessPolicies: typeDef.accessPolicies?.map((policy) => ({
@@ -648,12 +705,17 @@ const cloneFunctionDef = (fn: FunctionDef): FunctionDef => ({
   body:
     fn.body.kind === "expr"
       ? fn.body.expr.kind === "concat"
-        ? { kind: "expr", expr: { kind: "concat", parts: fn.body.expr.parts.map((part) => ({ ...part })) } }
+        ? {
+            kind: "expr",
+            expr: { kind: "concat", parts: fn.body.expr.parts.map((part) => ({ ...part })) },
+          }
         : { kind: "expr", expr: { ...fn.body.expr } }
       : { kind: "query", language: fn.body.language, query: fn.body.query },
 });
 
-const clonePolicyCondition = (condition: NonNullable<TypeDef["accessPolicies"]>[number]["condition"]): NonNullable<TypeDef["accessPolicies"]>[number]["condition"] => {
+const clonePolicyCondition = (
+  condition: NonNullable<TypeDef["accessPolicies"]>[number]["condition"],
+): NonNullable<TypeDef["accessPolicies"]>[number]["condition"] => {
   if (condition.kind !== "and") {
     return { ...condition };
   }

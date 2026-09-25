@@ -17,7 +17,11 @@
 
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { type AsyncQueryContext, executeSelectAsync } from "../runtime/async_query.js";
-import { executeDeleteAsync, executeInsertAsync, executeUpdateAsync } from "../runtime/async_write.js";
+import {
+  executeDeleteAsync,
+  executeInsertAsync,
+  executeUpdateAsync,
+} from "../runtime/async_write.js";
 import { loadSchemaAsync } from "../runtime/async_schema.js";
 import { createD1Adapter, type D1DatabaseLike } from "../runtime/d1_adapter.js";
 import {

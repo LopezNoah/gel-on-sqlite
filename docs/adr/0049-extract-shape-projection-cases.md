@@ -2,7 +2,7 @@
 
 The round-9 review's candidate #2 found `compileShapeProjection`
 (`src/sql/gel_ir_compiler.ts`, ~800 lines) to be a **shallow interface over deep
-logic**: a top-level dispatcher with 12+ *positional* `if`-guards over distinct
+logic**: a top-level dispatcher with 12+ _positional_ `if`-guards over distinct
 EdgeQL shape patterns (synthetic `__type__`, embedded group, link arrays,
 object-set coalesce, shapes-on-paths, foreign-type computeds, leaf-over-call,
 leaf-through-link, projected columns, optional-operator subqueries). Six
@@ -12,7 +12,7 @@ as a golden diff, not a named failure.
 
 Two of those cases are **cleanly separable**: they depend only on the local
 `shapeExpr` (`unwrapSelectExprSet(shape.expr)`) plus the function's parameters,
-*not* on the shared mid-function locals (`elementIsManyViaChain` /
+_not_ on the shared mid-function locals (`elementIsManyViaChain` /
 `elementRootsAtForeignType`) that entangle the later cases.
 
 **Decision (done):** Lift two cases into named module-level helpers, bodies
@@ -22,7 +22,7 @@ byte-identical to the inline blocks:
   shaped rows (`watchers: { name }`), with the single-cardinality unwrap to the
   first element. Always returns a projection.
 - `compileShapeLeafThroughForeignLink` — a scalar leaf read through an
-  intermediate *single* object link **not** joined into the outer row
+  intermediate _single_ object link **not** joined into the outer row
   (`owner_name := .owner.name`), lowered as a correlated `LIMIT 1` subquery over
   the link's target rows. Returns `null` to fall through to the
   projected-column / multi-scalar lowering when the narrow pattern doesn't
@@ -51,7 +51,7 @@ failing test names** before and after — captured by stashing the file back to
 HEAD and diffing (empty diff). `tests/shape_projection.test.ts` (3 tests) pins
 both cases' canonical SQL through the inspect seam (ADR 0002): the multi-link
 `json_group_array`, the single-link `json_extract(…,'$[0]')` unwrap, and the
-leaf-through-foreign-link correlated `LIMIT 1` subquery (asserting it is *not*
+leaf-through-foreign-link correlated `LIMIT 1` subquery (asserting it is _not_
 the wrong bare-column read).
 
 **Consequences.** The link-array and leaf-through-foreign-link cases have named

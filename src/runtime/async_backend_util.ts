@@ -20,10 +20,7 @@ export const normalizeBindParams = (params: ScalarValue[]): ScalarValue[] =>
 // same typed errors as the sync engine, not raw backend exceptions. A missing
 // `_gel_*` function (neither D1 nor DO SQL can host custom functions) is the
 // common case worth a clear hint.
-export const wrapBackendError = (
-  backend: "d1" | "durable-object",
-  err: unknown,
-): AppError => {
+export const wrapBackendError = (backend: "d1" | "durable-object", err: unknown): AppError => {
   if (err instanceof AppError) return err;
   const message = err instanceof Error ? err.message : String(err);
   const missingCustomFn = message.includes("no such function") && message.includes("_gel_");

@@ -55,7 +55,39 @@ export type RewriteKind = "Update" | "Insert";
 export type SchemaCardinality = "One" | "Many" | "Unknown";
 
 // qltypes enum
-export type SchemaObjectClass = "ACCESS_POLICY" | "ALIAS" | "ANNOTATION" | "ARRAY TYPE" | "BRANCH" | "CAST" | "CONSTRAINT" | "DATABASE" | "EXTENSION" | "EXTENSION PACKAGE" | "EXTENSION PACKAGE MIGRATION" | "FUTURE" | "FUNCTION" | "GLOBAL" | "INDEX" | "INDEX MATCH" | "LINK" | "MIGRATION" | "MODULE" | "MULTIRANGE_TYPE" | "OPERATOR" | "PARAMETER" | "PERMISSION" | "PROPERTY" | "PSEUDO TYPE" | "RANGE TYPE" | "REWRITE" | "ROLE" | "SCALAR TYPE" | "TRIGGER" | "TUPLE TYPE" | "TYPE";
+export type SchemaObjectClass =
+  | "ACCESS_POLICY"
+  | "ALIAS"
+  | "ANNOTATION"
+  | "ARRAY TYPE"
+  | "BRANCH"
+  | "CAST"
+  | "CONSTRAINT"
+  | "DATABASE"
+  | "EXTENSION"
+  | "EXTENSION PACKAGE"
+  | "EXTENSION PACKAGE MIGRATION"
+  | "FUTURE"
+  | "FUNCTION"
+  | "GLOBAL"
+  | "INDEX"
+  | "INDEX MATCH"
+  | "LINK"
+  | "MIGRATION"
+  | "MODULE"
+  | "MULTIRANGE_TYPE"
+  | "OPERATOR"
+  | "PARAMETER"
+  | "PERMISSION"
+  | "PROPERTY"
+  | "PSEUDO TYPE"
+  | "RANGE TYPE"
+  | "REWRITE"
+  | "ROLE"
+  | "SCALAR TYPE"
+  | "TRIGGER"
+  | "TUPLE TYPE"
+  | "TYPE";
 
 // ast enum
 export type ShapeOp = "APPEND" | "SUBTRACT" | "ASSIGN" | "MATERIALIZE";
@@ -94,8 +126,7 @@ export interface Base {
   __kind__: string;
 }
 
-export interface GrammarEntryPoint extends Base {
-}
+export interface GrammarEntryPoint extends Base {}
 
 export interface OptionValue extends Base {
   name: string;
@@ -111,8 +142,7 @@ export interface Options extends Base {
   options: Record<string, OptionValue>;
 }
 
-export interface Expr extends GrammarEntryPoint, Base {
-}
+export interface Expr extends GrammarEntryPoint, Base {}
 
 export interface Placeholder extends Expr {
   __kind__: "Placeholder";
@@ -126,8 +156,7 @@ export interface SortExpr extends Base {
   nones_order?: NonesOrder;
 }
 
-export interface Alias extends Base {
-}
+export interface Alias extends Base {}
 
 export interface AliasedExpr extends Alias {
   __kind__: "AliasedExpr";
@@ -141,11 +170,9 @@ export interface ModuleAliasDecl extends Alias {
   alias?: string;
 }
 
-export interface GroupingAtom extends Base {
-}
+export interface GroupingAtom extends Base {}
 
-export interface BaseObjectRef extends Base {
-}
+export interface BaseObjectRef extends Base {}
 
 export interface ObjectRef extends BaseObjectRef, GroupingAtom {
   __kind__: "ObjectRef";
@@ -240,8 +267,7 @@ export interface StrInterp extends Expr {
   interpolations: StrInterpFragment[];
 }
 
-export interface BaseConstant extends Expr {
-}
+export interface BaseConstant extends Expr {}
 
 export interface Constant extends BaseConstant {
   __kind__: "Constant";
@@ -461,8 +487,7 @@ export interface GroupingIdentList extends GroupingAtom, Base {
   elements: GroupingAtom[];
 }
 
-export interface GroupingElement extends Base {
-}
+export interface GroupingElement extends Base {}
 
 export interface GroupingSimple extends GroupingElement {
   __kind__: "GroupingSimple";
@@ -537,8 +562,7 @@ export interface ForQuery extends Query {
   result: Expr;
 }
 
-export interface Transaction extends Base {
-}
+export interface Transaction extends Base {}
 
 export interface StartTransaction extends Transaction {
   __kind__: "StartTransaction";
@@ -570,8 +594,7 @@ export interface ReleaseSavepoint extends Transaction {
   name: string;
 }
 
-export interface DDL extends Base {
-}
+export interface DDL extends Base {}
 
 export interface Position extends DDL {
   __kind__: "Position";
@@ -583,16 +606,14 @@ export interface DDLOperation extends DDL {
   commands: DDLOperation[];
 }
 
-export interface DDLCommand extends DDLOperation, Command {
-}
+export interface DDLCommand extends DDLOperation, Command {}
 
 export interface DDLQuery extends DDLCommand {
   __kind__: "DDLQuery";
   query: Query;
 }
 
-export interface NonTransactionalDDLCommand extends DDLCommand {
-}
+export interface NonTransactionalDDLCommand extends DDLCommand {}
 
 export interface AlterAddInherit extends DDLOperation {
   __kind__: "AlterAddInherit";
@@ -653,11 +674,9 @@ export interface CreateObject extends ObjectDDL {
   create_if_not_exists: boolean;
 }
 
-export interface AlterObject extends ObjectDDL {
-}
+export interface AlterObject extends ObjectDDL {}
 
-export interface DropObject extends ObjectDDL {
-}
+export interface DropObject extends ObjectDDL {}
 
 export interface CreateExtendingObject extends CreateObject {
   final: boolean;
@@ -675,8 +694,7 @@ export interface NestedQLBlock extends DDL {
   text?: string;
 }
 
-export interface MigrationCommand extends DDLCommand {
-}
+export interface MigrationCommand extends DDLCommand {}
 
 export interface CreateMigration extends CreateObject, MigrationCommand, GrammarEntryPoint {
   __kind__: "CreateMigration";
@@ -741,11 +759,9 @@ export interface CommitMigrationRewrite extends MigrationCommand {
   __kind__: "CommitMigrationRewrite";
 }
 
-export interface UnqualifiedObjectCommand extends ObjectDDL {
-}
+export interface UnqualifiedObjectCommand extends ObjectDDL {}
 
-export interface GlobalObjectCommand extends UnqualifiedObjectCommand {
-}
+export interface GlobalObjectCommand extends UnqualifiedObjectCommand {}
 
 export interface DatabaseCommand extends GlobalObjectCommand, NonTransactionalDDLCommand {
   flavor: SchemaObjectClass;
@@ -780,24 +796,24 @@ export interface DropExtensionPackage extends DropObject, ExtensionPackageComman
   __kind__: "DropExtensionPackage";
 }
 
-export interface ExtensionPackageMigrationCommand extends GlobalObjectCommand {
-}
+export interface ExtensionPackageMigrationCommand extends GlobalObjectCommand {}
 
-export interface CreateExtensionPackageMigration extends CreateObject, ExtensionPackageMigrationCommand {
+export interface CreateExtensionPackageMigration
+  extends CreateObject, ExtensionPackageMigrationCommand {
   __kind__: "CreateExtensionPackageMigration";
   from_version: Constant;
   to_version: Constant;
   body: NestedQLBlock;
 }
 
-export interface DropExtensionPackageMigration extends DropObject, ExtensionPackageMigrationCommand {
+export interface DropExtensionPackageMigration
+  extends DropObject, ExtensionPackageMigrationCommand {
   __kind__: "DropExtensionPackageMigration";
   from_version: Constant;
   to_version: Constant;
 }
 
-export interface ExtensionCommand extends UnqualifiedObjectCommand {
-}
+export interface ExtensionCommand extends UnqualifiedObjectCommand {}
 
 export interface CreateExtension extends CreateObject, ExtensionCommand {
   __kind__: "CreateExtension";
@@ -815,8 +831,7 @@ export interface DropExtension extends DropObject, ExtensionCommand {
   version?: Constant;
 }
 
-export interface FutureCommand extends UnqualifiedObjectCommand {
-}
+export interface FutureCommand extends UnqualifiedObjectCommand {}
 
 export interface CreateFuture extends CreateObject, FutureCommand {
   __kind__: "CreateFuture";
@@ -826,8 +841,7 @@ export interface DropFuture extends DropObject, FutureCommand {
   __kind__: "DropFuture";
 }
 
-export interface ModuleCommand extends UnqualifiedObjectCommand {
-}
+export interface ModuleCommand extends UnqualifiedObjectCommand {}
 
 export interface CreateModule extends ModuleCommand, CreateObject {
   __kind__: "CreateModule";
@@ -841,8 +855,7 @@ export interface DropModule extends ModuleCommand, DropObject {
   __kind__: "DropModule";
 }
 
-export interface RoleCommand extends GlobalObjectCommand {
-}
+export interface RoleCommand extends GlobalObjectCommand {}
 
 export interface CreateRole extends CreateObject, RoleCommand {
   __kind__: "CreateRole";
@@ -858,8 +871,7 @@ export interface DropRole extends DropObject, RoleCommand {
   __kind__: "DropRole";
 }
 
-export interface AnnotationCommand extends ObjectDDL {
-}
+export interface AnnotationCommand extends ObjectDDL {}
 
 export interface CreateAnnotation extends CreateExtendingObject, AnnotationCommand {
   __kind__: "CreateAnnotation";
@@ -875,15 +887,13 @@ export interface DropAnnotation extends DropObject, AnnotationCommand {
   __kind__: "DropAnnotation";
 }
 
-export interface PseudoTypeCommand extends ObjectDDL {
-}
+export interface PseudoTypeCommand extends ObjectDDL {}
 
 export interface CreatePseudoType extends CreateObject, PseudoTypeCommand {
   __kind__: "CreatePseudoType";
 }
 
-export interface ScalarTypeCommand extends ObjectDDL {
-}
+export interface ScalarTypeCommand extends ObjectDDL {}
 
 export interface CreateScalarType extends CreateExtendingObject, ScalarTypeCommand {
   __kind__: "CreateScalarType";
@@ -897,8 +907,7 @@ export interface DropScalarType extends DropObject, ScalarTypeCommand {
   __kind__: "DropScalarType";
 }
 
-export interface PropertyCommand extends ObjectDDL {
-}
+export interface PropertyCommand extends ObjectDDL {}
 
 export interface CreateProperty extends CreateExtendingObject, PropertyCommand {
   __kind__: "CreateProperty";
@@ -940,8 +949,7 @@ export interface DropConcreteProperty extends DropObject, PropertyCommand {
   __kind__: "DropConcreteProperty";
 }
 
-export interface ObjectTypeCommand extends ObjectDDL {
-}
+export interface ObjectTypeCommand extends ObjectDDL {}
 
 export interface CreateObjectType extends CreateExtendingObject, ObjectTypeCommand {
   __kind__: "CreateObjectType";
@@ -955,8 +963,7 @@ export interface DropObjectType extends DropObject, ObjectTypeCommand {
   __kind__: "DropObjectType";
 }
 
-export interface AliasCommand extends ObjectDDL {
-}
+export interface AliasCommand extends ObjectDDL {}
 
 export interface CreateAlias extends CreateObject, AliasCommand {
   __kind__: "CreateAlias";
@@ -970,8 +977,7 @@ export interface DropAlias extends DropObject, AliasCommand {
   __kind__: "DropAlias";
 }
 
-export interface GlobalCommand extends ObjectDDL {
-}
+export interface GlobalCommand extends ObjectDDL {}
 
 export interface CreateGlobal extends CreateObject, GlobalCommand {
   __kind__: "CreateGlobal";
@@ -997,8 +1003,7 @@ export interface SetGlobalType extends SetField {
   reset_value: boolean;
 }
 
-export interface PermissionCommand extends ObjectDDL {
-}
+export interface PermissionCommand extends ObjectDDL {}
 
 export interface CreatePermission extends CreateObject, PermissionCommand {
   __kind__: "CreatePermission";
@@ -1012,8 +1017,7 @@ export interface DropPermission extends DropObject, PermissionCommand {
   __kind__: "DropPermission";
 }
 
-export interface LinkCommand extends ObjectDDL {
-}
+export interface LinkCommand extends ObjectDDL {}
 
 export interface CreateLink extends CreateExtendingObject, LinkCommand {
   __kind__: "CreateLink";
@@ -1027,7 +1031,8 @@ export interface DropLink extends DropObject, LinkCommand {
   __kind__: "DropLink";
 }
 
-export interface CreateConcreteLink extends CreateExtendingObject, CreateConcretePointer, LinkCommand {
+export interface CreateConcreteLink
+  extends CreateExtendingObject, CreateConcretePointer, LinkCommand {
   __kind__: "CreateConcreteLink";
 }
 
@@ -1039,8 +1044,7 @@ export interface DropConcreteLink extends DropObject, LinkCommand {
   __kind__: "DropConcreteLink";
 }
 
-export interface ConstraintCommand extends ObjectDDL {
-}
+export interface ConstraintCommand extends ObjectDDL {}
 
 export interface CreateConstraint extends CreateExtendingObject, ConstraintCommand {
   __kind__: "CreateConstraint";
@@ -1083,8 +1087,7 @@ export interface IndexType extends DDL {
   kwargs: Record<string, Expr>;
 }
 
-export interface IndexCommand extends ObjectDDL {
-}
+export interface IndexCommand extends ObjectDDL {}
 
 export interface IndexCode extends DDL {
   __kind__: "IndexCode";
@@ -1153,8 +1156,7 @@ export interface DropAnnotationValue extends AnnotationCommand, DropObject {
   __kind__: "DropAnnotationValue";
 }
 
-export interface AccessPolicyCommand extends ObjectDDL {
-}
+export interface AccessPolicyCommand extends ObjectDDL {}
 
 export interface CreateAccessPolicy extends CreateObject, AccessPolicyCommand {
   __kind__: "CreateAccessPolicy";
@@ -1178,8 +1180,7 @@ export interface DropAccessPolicy extends DropObject, AccessPolicyCommand {
   __kind__: "DropAccessPolicy";
 }
 
-export interface TriggerCommand extends ObjectDDL {
-}
+export interface TriggerCommand extends ObjectDDL {}
 
 export interface CreateTrigger extends CreateObject, TriggerCommand {
   __kind__: "CreateTrigger";
@@ -1347,8 +1348,7 @@ export interface AdministerStmt extends Command {
   expr: FunctionCall;
 }
 
-export interface SDL extends Base {
-}
+export interface SDL extends Base {}
 
 export interface ModuleDeclaration extends SDL {
   __kind__: "ModuleDeclaration";

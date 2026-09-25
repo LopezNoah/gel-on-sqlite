@@ -68,9 +68,15 @@ export const serializeSchemaToInstdata = (db: SQLiteDatabase, snapshot: SchemaSn
     | undefined;
 
   if (existing) {
-    db.prepare(`UPDATE gel_instdata SET data = ? WHERE key = ?`).run(JSON.stringify(serialized), "schema");
+    db.prepare(`UPDATE gel_instdata SET data = ? WHERE key = ?`).run(
+      JSON.stringify(serialized),
+      "schema",
+    );
   } else {
-    db.prepare(`INSERT INTO gel_instdata (key, data) VALUES (?, ?)`).run("schema", JSON.stringify(serialized));
+    db.prepare(`INSERT INTO gel_instdata (key, data) VALUES (?, ?)`).run(
+      "schema",
+      JSON.stringify(serialized),
+    );
   }
 };
 
@@ -191,21 +197,28 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
     idx: number;
   }>;
 
-  const typeAnnotations = db.prepare(`SELECT * FROM gel_annotations`).all().map((row): AnnotationRow => {
-    const subjectId = row.subject_id;
-    const annotationId = row.annotation_id;
-    const value = row.value;
+  const typeAnnotations = db
+    .prepare(`SELECT * FROM gel_annotations`)
+    .all()
+    .map((row): AnnotationRow => {
+      const subjectId = row.subject_id;
+      const annotationId = row.annotation_id;
+      const value = row.value;
 
-    if (typeof subjectId !== "string" || typeof annotationId !== "string" || (typeof value !== "string" && value !== null)) {
-      throw new Error("Invalid annotation row in gel_annotations");
-    }
+      if (
+        typeof subjectId !== "string" ||
+        typeof annotationId !== "string" ||
+        (typeof value !== "string" && value !== null)
+      ) {
+        throw new Error("Invalid annotation row in gel_annotations");
+      }
 
-    return {
-      subject_id: subjectId,
-      annotation_id: annotationId,
-      value,
-    };
-  });
+      return {
+        subject_id: subjectId,
+        annotation_id: annotationId,
+        value,
+      };
+    });
 
   const typeTriggers = db.prepare(`SELECT * FROM gel_type_triggers`).all() as Array<{
     type_id: string;
@@ -306,7 +319,9 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
       if (!ptrRow) continue;
 
       if (ptrRow.kind === "Property") {
-        const meta = ptrRow.metadata ? (JSON.parse(ptrRow.metadata) as PropertyMetadata) : {} as PropertyMetadata;
+        const meta = ptrRow.metadata
+          ? (JSON.parse(ptrRow.metadata) as PropertyMetadata)
+          : ({} as PropertyMetadata);
         if (meta.computed_expr) {
           const parsedExpr = parseComputedPropertyExpr(meta.computed_expr);
           const computedDef: ComputedDef = {
@@ -349,7 +364,9 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
           }
         }
       } else if (ptrRow.kind === "Link") {
-        const meta = ptrRow.metadata ? (JSON.parse(ptrRow.metadata) as LinkMetadata) : {} as LinkMetadata;
+        const meta = ptrRow.metadata
+          ? (JSON.parse(ptrRow.metadata) as LinkMetadata)
+          : ({} as LinkMetadata);
         const childPropIds = linkPropsByLink.get(ptr.pointer_id) ?? [];
         const linkProperties: LinkPropertyDef[] = [];
 
@@ -401,7 +418,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
       if (triggerRow && triggerRow.kind === "Trigger") {
         const triggerMeta = triggerRow.metadata
           ? (JSON.parse(triggerRow.metadata) as TriggerMetadata)
-          : {} as TriggerMetadata;
+          : ({} as TriggerMetadata);
         triggers.push({
           name: triggerRow.name,
           event: (triggerMeta.kinds?.[0]?.toLowerCase() ?? "insert") as TriggerDef["event"],
@@ -416,7 +433,7 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
       if (policyRow && policyRow.kind === "AccessPolicy") {
         const policyMeta = policyRow.metadata
           ? (JSON.parse(policyRow.metadata) as AccessPolicyMetadata)
-          : {} as AccessPolicyMetadata;
+          : ({} as AccessPolicyMetadata);
         accessPolicies.push({
           name: policyRow.name,
           effect: (policyMeta.action?.toLowerCase() ?? "allow") as AccessPolicyDef["effect"],
@@ -454,7 +471,9 @@ export const deserializeSchemaFromGelTables = (db: SQLiteDatabase): SchemaSnapsh
 
   const functions: FunctionDef[] = [];
   for (const fnRow of functionRows) {
-    const meta = fnRow.metadata ? (JSON.parse(fnRow.metadata) as FunctionMetadata) : ({} as FunctionMetadata);
+    const meta = fnRow.metadata
+      ? (JSON.parse(fnRow.metadata) as FunctionMetadata)
+      : ({} as FunctionMetadata);
     const params = dec.functionParams(meta.params);
     const language = (meta.language ?? "edgeql") as "edgeql";
     const body: FunctionBodyDef = meta.body
@@ -523,7 +542,11 @@ const serializeTypeToGelTables = (
 
   for (const [i, baseName] of (typeDef.extends ?? []).entries()) {
     const baseId = idMap.get(baseName) ?? baseName;
-    db.prepare(`INSERT INTO gel_bases (subject_id, object_id, idx) VALUES (?, ?, ?)`).run(typeId, baseId, i);
+    db.prepare(`INSERT INTO gel_bases (subject_id, object_id, idx) VALUES (?, ?, ?)`).run(
+      typeId,
+      baseId,
+      i,
+    );
   }
 
   buildAncestors(db, typeId, typeDef.extends ?? [], idMap, snapshot);
@@ -559,16 +582,23 @@ const serializeTypeToGelTables = (
       JSON.stringify(propMeta),
     );
 
-    db.prepare(`INSERT INTO gel_pointers (source_id, pointer_id) VALUES (?, ?)`).run(typeId, fieldId);
-
-    db.prepare(`INSERT INTO gel_pointer_endpoints (pointer_id, source_id, target_id) VALUES (?, ?, ?)`).run(
-      fieldId,
+    db.prepare(`INSERT INTO gel_pointers (source_id, pointer_id) VALUES (?, ?)`).run(
       typeId,
-      targetTypeId,
+      fieldId,
     );
 
+    db.prepare(
+      `INSERT INTO gel_pointer_endpoints (pointer_id, source_id, target_id) VALUES (?, ?, ?)`,
+    ).run(fieldId, typeId, targetTypeId);
+
     for (const annotation of field.annotations ?? []) {
-      insertAnnotationRecord(db, fieldId, annotation, typeDef.module ?? "default", `${qName}.${field.name}@${annotation.name}`);
+      insertAnnotationRecord(
+        db,
+        fieldId,
+        annotation,
+        typeDef.module ?? "default",
+        `${qName}.${field.name}@${annotation.name}`,
+      );
     }
 
     const rewrite = typeDef.mutationRewrites?.find((r) => r.field === field.name);
@@ -595,7 +625,10 @@ const serializeTypeToGelTables = (
           null,
           JSON.stringify(rewriteMeta),
         );
-        db.prepare(`INSERT INTO gel_pointer_rewrites (pointer_id, rewrite_id) VALUES (?, ?)`).run(fieldId, rewriteId);
+        db.prepare(`INSERT INTO gel_pointer_rewrites (pointer_id, rewrite_id) VALUES (?, ?)`).run(
+          fieldId,
+          rewriteId,
+        );
       }
       if (rewrite.onUpdate) {
         const rewriteId = `rewrite_${fieldId}_update`;
@@ -619,7 +652,10 @@ const serializeTypeToGelTables = (
           null,
           JSON.stringify(rewriteMeta),
         );
-        db.prepare(`INSERT INTO gel_pointer_rewrites (pointer_id, rewrite_id) VALUES (?, ?)`).run(fieldId, rewriteId);
+        db.prepare(`INSERT INTO gel_pointer_rewrites (pointer_id, rewrite_id) VALUES (?, ?)`).run(
+          fieldId,
+          rewriteId,
+        );
       }
     }
   }
@@ -650,16 +686,23 @@ const serializeTypeToGelTables = (
       JSON.stringify(linkMeta),
     );
 
-    db.prepare(`INSERT INTO gel_pointers (source_id, pointer_id) VALUES (?, ?)`).run(typeId, linkId);
-
-    db.prepare(`INSERT INTO gel_pointer_endpoints (pointer_id, source_id, target_id) VALUES (?, ?, ?)`).run(
-      linkId,
+    db.prepare(`INSERT INTO gel_pointers (source_id, pointer_id) VALUES (?, ?)`).run(
       typeId,
-      targetTypeId,
+      linkId,
     );
 
+    db.prepare(
+      `INSERT INTO gel_pointer_endpoints (pointer_id, source_id, target_id) VALUES (?, ?, ?)`,
+    ).run(linkId, typeId, targetTypeId);
+
     for (const annotation of link.annotations ?? []) {
-      insertAnnotationRecord(db, linkId, annotation, typeDef.module ?? "default", `${qName}.${link.name}@${annotation.name}`);
+      insertAnnotationRecord(
+        db,
+        linkId,
+        annotation,
+        typeDef.module ?? "default",
+        `${qName}.${link.name}@${annotation.name}`,
+      );
     }
 
     for (const lp of link.properties ?? []) {
@@ -688,10 +731,19 @@ const serializeTypeToGelTables = (
         JSON.stringify(lpMeta),
       );
 
-      db.prepare(`INSERT INTO gel_link_properties (link_id, property_id) VALUES (?, ?)`).run(linkId, lpId);
+      db.prepare(`INSERT INTO gel_link_properties (link_id, property_id) VALUES (?, ?)`).run(
+        linkId,
+        lpId,
+      );
 
       for (const annotation of lp.annotations ?? []) {
-        insertAnnotationRecord(db, lpId, annotation, typeDef.module ?? "default", `${qName}.${link.name}@${lp.name}@${annotation.name}`);
+        insertAnnotationRecord(
+          db,
+          lpId,
+          annotation,
+          typeDef.module ?? "default",
+          `${qName}.${link.name}@${lp.name}@${annotation.name}`,
+        );
       }
     }
   }
@@ -722,7 +774,10 @@ const serializeTypeToGelTables = (
       JSON.stringify(meta),
     );
 
-    db.prepare(`INSERT INTO gel_pointers (source_id, pointer_id) VALUES (?, ?)`).run(typeId, computedId);
+    db.prepare(`INSERT INTO gel_pointers (source_id, pointer_id) VALUES (?, ?)`).run(
+      typeId,
+      computedId,
+    );
   }
 
   for (const trigger of typeDef.triggers ?? []) {
@@ -730,7 +785,12 @@ const serializeTypeToGelTables = (
     const triggerMeta: TriggerMetadata = {
       subject_id: typeId,
       timing: "After",
-      kinds: [trigger.event.charAt(0).toUpperCase() + trigger.event.slice(1) as "Insert" | "Update" | "Delete"],
+      kinds: [
+        (trigger.event.charAt(0).toUpperCase() + trigger.event.slice(1)) as
+          | "Insert"
+          | "Update"
+          | "Delete",
+      ],
       scope: trigger.scope === "all" ? "Statement" : "Each",
     };
     validateMetadata("Trigger", triggerMeta);
@@ -750,7 +810,10 @@ const serializeTypeToGelTables = (
       JSON.stringify(triggerMeta),
     );
 
-    db.prepare(`INSERT INTO gel_type_triggers (type_id, trigger_id) VALUES (?, ?)`).run(typeId, triggerId);
+    db.prepare(`INSERT INTO gel_type_triggers (type_id, trigger_id) VALUES (?, ?)`).run(
+      typeId,
+      triggerId,
+    );
   }
 
   for (const policy of typeDef.accessPolicies ?? []) {
@@ -791,17 +854,17 @@ const serializeTypeToGelTables = (
       JSON.stringify(policyMeta),
     );
 
-    db.prepare(`INSERT INTO gel_type_policies (type_id, policy_id) VALUES (?, ?)`).run(typeId, policyId);
+    db.prepare(`INSERT INTO gel_type_policies (type_id, policy_id) VALUES (?, ?)`).run(
+      typeId,
+      policyId,
+    );
   }
 
   if (!typeDef.abstract) {
     const table = tableName(typeDef);
-    db.prepare(`INSERT INTO gel_backend (gel_id, sqlite_name, aspect, is_shared) VALUES (?, ?, ?, ?)`).run(
-      typeId,
-      table,
-      "table",
-      0,
-    );
+    db.prepare(
+      `INSERT INTO gel_backend (gel_id, sqlite_name, aspect, is_shared) VALUES (?, ?, ?, ?)`,
+    ).run(typeId, table, "table", 0);
   }
 };
 
@@ -813,7 +876,10 @@ const serializeFunctionToGelTables = (
 ): void => {
   const qName = `${fn.module}::${fn.name}`;
 
-  const paramMetadata = fn.params.length > 0 ? fn.params.map((param) => buildFunctionParamMetadata(param, idMap)) : undefined;
+  const paramMetadata =
+    fn.params.length > 0
+      ? fn.params.map((param) => buildFunctionParamMetadata(param, idMap))
+      : undefined;
   const fnMeta: FunctionMetadata = {
     volatility: fn.volatility,
     body: fn.body.kind === "query" ? fn.body.query : undefined,
@@ -826,18 +892,7 @@ const serializeFunctionToGelTables = (
 
   db.prepare(
     `INSERT INTO gel_schema (id, kind, name, name__internal, module, abstract, builtin, internal, parent_ids, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    fnId,
-    "Function",
-    fn.name,
-    qName,
-    fn.module,
-    0,
-    0,
-    0,
-    null,
-    JSON.stringify(fnMeta),
-  );
+  ).run(fnId, "Function", fn.name, qName, fn.module, 0, 0, 0, null, JSON.stringify(fnMeta));
 };
 
 const buildAncestors = (
@@ -855,11 +910,9 @@ const buildAncestors = (
     const baseType = snapshot.getType(baseName);
     if (!baseType) continue;
 
-    db.prepare(`INSERT OR IGNORE INTO gel_ancestors (subject_id, object_id, idx) VALUES (?, ?, ?)`).run(
-      typeId,
-      baseId,
-      depth,
-    );
+    db.prepare(
+      `INSERT OR IGNORE INTO gel_ancestors (subject_id, object_id, idx) VALUES (?, ?, ?)`,
+    ).run(typeId, baseId, depth);
 
     buildAncestors(db, typeId, baseType.extends ?? [], idMap, snapshot, depth + 1);
   }
@@ -927,7 +980,12 @@ type SerializedTypeDef = {
     targetType: string;
     multi?: boolean;
     required?: boolean;
-    properties?: Array<{ name: string; type: string; required?: boolean; annotations?: AnnotationDef[] }>;
+    properties?: Array<{
+      name: string;
+      type: string;
+      required?: boolean;
+      annotations?: AnnotationDef[];
+    }>;
     annotations?: AnnotationDef[];
   }>;
   computeds: Array<{
@@ -990,11 +1048,12 @@ const serializeTypeDef = (typeDef: TypeDef): SerializedTypeDef => ({
     onInsert: r.onInsert,
     onUpdate: r.onUpdate,
   })),
-  triggers: typeDef.triggers?.map((t) => ({
-    name: t.name,
-    event: t.event,
-    scope: t.scope,
-  })) ?? [],
+  triggers:
+    typeDef.triggers?.map((t) => ({
+      name: t.name,
+      event: t.event,
+      scope: t.scope,
+    })) ?? [],
   accessPolicies:
     typeDef.accessPolicies?.map((p) => ({
       name: p.name,
@@ -1036,7 +1095,7 @@ const deserializeTypeDef = (serialized: SerializedTypeDef): TypeDef => ({
           name: l.name,
           targetType: l.targetType,
           multi: l.multi,
-        properties: l.properties?.map((p) => ({
+          properties: l.properties?.map((p) => ({
             name: p.name,
             type: p.type as LinkPropertyDef["type"],
             required: p.required,
@@ -1098,9 +1157,11 @@ const deserializeFunctionDef = (serialized: SerializedFunctionDef): FunctionDef 
 const serializeComputedExpr = (expr: ComputedDef["expr"]): string => {
   if (expr.kind === "field_ref") return `.${expr.field}`;
   if (expr.kind === "literal") return String(expr.value);
-  if (expr.kind === "set_literal") return `{${expr.values.map(serializeScalarSetValue).join(", ")}}`;
+  if (expr.kind === "set_literal")
+    return `{${expr.values.map(serializeScalarSetValue).join(", ")}}`;
   if (expr.kind === "concat") return expr.parts.map(serializeComputedExprPart).join(" ++ ");
-  if (expr.kind === "function_call") return `${expr.name}(${expr.args.map((a) => JSON.stringify(a)).join(", ")})`;
+  if (expr.kind === "function_call")
+    return `${expr.name}(${expr.args.map((a) => JSON.stringify(a)).join(", ")})`;
   if (expr.kind === "link_aggregate") return `${expr.functionName}(.${expr.link}.${expr.field})`;
   return "";
 };
@@ -1111,12 +1172,15 @@ const serializeScalarSetValue = (value: ScalarValue): string => {
   return String(value);
 };
 
-const serializeComputedExprPart = (part: { kind: string; field?: string; value?: unknown }): string => {
+const serializeComputedExprPart = (part: {
+  kind: string;
+  field?: string;
+  value?: unknown;
+}): string => {
   if (part.kind === "field_ref") return `.${part.field}`;
   if (part.kind === "literal") return String(part.value);
   return "";
 };
-
 
 const serializeRewriteExpr = (expr: NonNullable<MutationRewriteDef["onInsert"]>): string => {
   if (expr.kind === "datetime_of_statement") return "datetime_of_statement()";
@@ -1138,13 +1202,18 @@ const metadataTypeIdForTypeName = (typeName: string, idMap: Map<string, string>)
     return mapped;
   }
 
-  const simpleName = normalized.includes("::") ? normalized.split("::").pop() ?? normalized : normalized;
+  const simpleName = normalized.includes("::")
+    ? (normalized.split("::").pop() ?? normalized)
+    : normalized;
   return scalarTypeId(simpleName);
 };
 
 type FunctionParamMetadata = NonNullable<FunctionMetadata["params"]>[number];
 
-const buildFunctionParamMetadata = (param: FunctionParamDef, idMap: Map<string, string>): FunctionParamMetadata => ({
+const buildFunctionParamMetadata = (
+  param: FunctionParamDef,
+  idMap: Map<string, string>,
+): FunctionParamMetadata => ({
   name: param.name,
   type_id: metadataTypeIdForTypeName(param.type, idMap),
   kind: param.variadic ? "VariadicParam" : param.namedOnly ? "NamedOnlyParam" : "PositionalParam",

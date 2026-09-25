@@ -30,11 +30,12 @@ const typeName = (type: TypeRef): string => type.nameHint || type.id;
  */
 const pointerDebugName = (pointer: PointerRef): string => {
   const sourceName = typeName(pointer.outSource);
-  const module = pointer.isComputed || pointer.isDerived
-    ? DERIVED_MODULE
-    : sourceName.includes("::")
-      ? sourceName.slice(0, sourceName.indexOf("::"))
-      : "default";
+  const module =
+    pointer.isComputed || pointer.isDerived
+      ? DERIVED_MODULE
+      : sourceName.includes("::")
+        ? sourceName.slice(0, sourceName.indexOf("::"))
+        : "default";
   return `${module}::${getSpecializedName(`__::${pointer.shortName}`, sourceName)}`;
 };
 
@@ -50,10 +51,7 @@ const renderStep = (step: PathStep, options: PathIdFormatOptions): string => {
   return `.${step.direction === "inbound" ? "<" : ">"}${lexpr}`;
 };
 
-export const serializePathId = (
-  pathId: PathId,
-  options: PathIdFormatOptions = {},
-): string => {
+export const serializePathId = (pathId: PathId, options: PathIdFormatOptions = {}): string => {
   const steps = pathId.steps;
   if (steps.length === 0) return "";
 

@@ -8,7 +8,11 @@
 // `FunctionDispatchDeps`, so the module imports no engine runtime (no-cycle
 // discipline); shared TYPES come type-only from engine.ts.
 import { AppError } from "../errors.js";
-import { executeStdlibFunction, resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
+import {
+  executeStdlibFunction,
+  resolveStdlibFunction,
+  type RuntimeFunctionArg,
+} from "../stdlib/functions.js";
 import type { FreeObjectExpr, FunctionCallArgExpr } from "../edgeql/ast.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { FunctionDef, FunctionExprDef, ScalarValue } from "../types.js";
@@ -19,7 +23,12 @@ import type { QueryResult, SecurityContext } from "./engine.js";
 // running a UDF's SELECT body (the engine entry point) and counting a runtime
 // set's cardinality (for `std::count`).
 export interface FunctionDispatchDeps {
-  executeQuery(db: SQLiteDatabase, schema: SchemaSnapshot, query: string, context: SecurityContext): QueryResult;
+  executeQuery(
+    db: SQLiteDatabase,
+    schema: SchemaSnapshot,
+    query: string,
+    context: SecurityContext,
+  ): QueryResult;
   countRuntimeSetCardinality(value: unknown): number;
 }
 
@@ -44,14 +53,19 @@ export const inferStaticArgType = (
       // the field's declared type in the schema. Also handle `.field` syntax
       // (current_item) by falling back to the caller-supplied implicit type.
       let inner: FreeObjectExpr = expr.expr;
-      while (inner.kind === "field_access" || inner.kind === "cast"
-        || inner.kind === "select_expr_subquery"
-        || (inner as { kind: string }).kind === "select_expr") {
+      while (
+        inner.kind === "field_access" ||
+        inner.kind === "cast" ||
+        inner.kind === "select_expr_subquery" ||
+        (inner as { kind: string }).kind === "select_expr"
+      ) {
         inner = (inner as unknown as { expr: FreeObjectExpr }).expr;
       }
       let typeName: string | undefined;
       if (inner.kind === "select") {
-        typeName = inner.typeName.includes("::") ? inner.typeName : `${defaultModule}::${inner.typeName}`;
+        typeName = inner.typeName.includes("::")
+          ? inner.typeName
+          : `${defaultModule}::${inner.typeName}`;
       } else if (inner.kind === "current_item" && implicitType) {
         typeName = implicitType.includes("::") ? implicitType : `${defaultModule}::${implicitType}`;
       }
@@ -62,7 +76,9 @@ export const inferStaticArgType = (
       return field?.type;
     }
     if (expr.kind === "select") {
-      const typeName = expr.typeName.includes("::") ? expr.typeName : `${defaultModule}::${expr.typeName}`;
+      const typeName = expr.typeName.includes("::")
+        ? expr.typeName
+        : `${defaultModule}::${expr.typeName}`;
       return typeName;
     }
     return undefined;
@@ -134,9 +150,12 @@ export const resolveUserFunctionOverload = (
   const runtimeTypes = args.map(runtimeArgTypeName);
   for (const fn of schema.listFunctions()) {
     if (fn.module !== moduleName || fn.name !== fnName) continue;
-    const requiredCount = fn.params.filter((p) => !p.optional && p.default === undefined && !p.variadic).length;
-    const accepts = args.length >= requiredCount
-      && (fn.params.some((p) => p.variadic) || args.length <= fn.params.length);
+    const requiredCount = fn.params.filter(
+      (p) => !p.optional && p.default === undefined && !p.variadic,
+    ).length;
+    const accepts =
+      args.length >= requiredCount &&
+      (fn.params.some((p) => p.variadic) || args.length <= fn.params.length);
     if (!accepts) continue;
     let score = 0;
     let viable = true;
@@ -150,9 +169,10 @@ export const resolveUserFunctionOverload = (
       // For type-match scoring use the static type when runtime is empty —
       // both `optional int64` and `optional str` accept empty at runtime, so
       // we'd otherwise tie.
-      const typeForScore = (runtimeType === "empty" || runtimeType === "unknown")
-        ? (staticTypes?.[i] ?? runtimeType)
-        : runtimeType;
+      const typeForScore =
+        runtimeType === "empty" || runtimeType === "unknown"
+          ? (staticTypes?.[i] ?? runtimeType)
+          : runtimeType;
       const paramScore = paramAcceptsArgType(param.type, typeForScore);
       if (paramScore < 0 && typeForScore !== "empty" && typeForScore !== "unknown") {
         viable = false;
@@ -214,7 +234,9 @@ export const executeFunctionCall = (
     // matches the given args, that's a short-circuit, not an error: a call
     // with an empty set for a NON-optional parameter produces an empty
     // result in EdgeQL (the call simply isn't made for that iteration).
-    const anyByName = schema.listFunctions().some((f) => f.module === moduleName && f.name === fnName);
+    const anyByName = schema
+      .listFunctions()
+      .some((f) => f.module === moduleName && f.name === fnName);
     if (anyByName) return null;
     throw new AppError("E_SEMANTIC", `Unknown function '${qualifiedName}'`, 1, 1);
   }
@@ -239,7 +261,7 @@ export const executeFunctionCall = (
         if (value.length === 0) {
           if (!param.optional) {
             throw new AppError(
-                "E_SEMANTIC",
+              "E_SEMANTIC",
               "possibly an empty set passed as non-optional argument into modifying function",
               1,
               1,
@@ -251,7 +273,12 @@ export const executeFunctionCall = (
         if (value.length === 1) {
           continue;
         }
-        throw new AppError("E_SEMANTIC", "possibly more than one element passed into modifying function", 1, 1);
+        throw new AppError(
+          "E_SEMANTIC",
+          "possibly more than one element passed into modifying function",
+          1,
+          1,
+        );
       }
     }
   }
@@ -287,7 +314,10 @@ export const executeFunctionCall = (
   return result.changes ?? 0;
 };
 
-const bindFunctionArgs = (fn: FunctionDef, args: RuntimeFunctionArg[]): Map<string, ScalarValue | ScalarValue[] | null> => {
+const bindFunctionArgs = (
+  fn: FunctionDef,
+  args: RuntimeFunctionArg[],
+): Map<string, ScalarValue | ScalarValue[] | null> => {
   const out = new Map<string, ScalarValue | ScalarValue[] | null>();
   let cursor = 0;
   for (const param of fn.params) {
@@ -298,7 +328,12 @@ const bindFunctionArgs = (fn: FunctionDef, args: RuntimeFunctionArg[]): Map<stri
         cursor += 1;
         if (typeof next === "object" && next !== null && "kind" in next && next.kind === "array") {
           variadicValues.push(...next.values);
-        } else if (typeof next === "object" && next !== null && "kind" in next && next.kind === "set") {
+        } else if (
+          typeof next === "object" &&
+          next !== null &&
+          "kind" in next &&
+          next.kind === "set"
+        ) {
           variadicValues.push(...next.values);
         } else {
           variadicValues.push(next as ScalarValue);
@@ -370,7 +405,10 @@ const evaluateFunctionExpr = (
     return part.value;
   });
 
-  const maxLen = evaluatedParts.reduce<number>((acc, part) => (Array.isArray(part) ? Math.max(acc, part.length) : acc), 1);
+  const maxLen = evaluatedParts.reduce<number>(
+    (acc, part) => (Array.isArray(part) ? Math.max(acc, part.length) : acc),
+    1,
+  );
   if (maxLen <= 1) {
     return evaluatedParts
       .map((part) => (Array.isArray(part) ? part[0] : part))

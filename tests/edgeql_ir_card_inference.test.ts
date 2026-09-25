@@ -11,27 +11,35 @@ import type { Statement } from "../src/edgeql/ast.js";
 type Cardinality = "one" | "many" | "at_most_one" | "at_least_one" | "empty" | "unknown";
 
 const loadSchema = (): SchemaSnapshot => {
-  const source = fs.readFileSync(new URL("./schemas/cards_ir_inference.esdl", import.meta.url), "utf8");
-  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, { legacySyntaxCompat: true });
+  const source = fs.readFileSync(
+    new URL("./schemas/cards_ir_inference.esdl", import.meta.url),
+    "utf8",
+  );
+  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, {
+    legacySyntaxCompat: true,
+  });
   return schemaSnapshotFromDeclarative(decl);
 };
 
 const compileQuery = (schema: SchemaSnapshot, query: string) => {
   const ast = parseEdgeQL(query) as unknown;
   const stmt = (Array.isArray(ast) ? (ast as Statement[])[0] : (ast as Statement)) as Statement;
-  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), { module: (stmt as { withModule?: string }).withModule, schema });
+  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), {
+    module: (stmt as { withModule?: string }).withModule,
+    schema,
+  });
 };
 
-const expectCardinality = (
-  schema: SchemaSnapshot,
-  source: string,
-  expected: Cardinality,
-): void => {
+const expectCardinality = (schema: SchemaSnapshot, source: string, expected: Cardinality): void => {
   const ir = compileQuery(schema, source);
   expect((ir as { cardinality?: Cardinality }).cardinality).toBe(expected);
 };
 
-type ShapeEntry = { name?: string; cardinality?: Cardinality; ptrref?: { outCardinality?: Cardinality } };
+type ShapeEntry = {
+  name?: string;
+  cardinality?: Cardinality;
+  ptrref?: { outCardinality?: Cardinality };
+};
 
 const hasCard = (el: ShapeEntry | undefined): boolean =>
   el !== undefined && (el.cardinality !== undefined || el.ptrref?.outCardinality !== undefined);
@@ -120,7 +128,11 @@ describe("TestEdgeQLCardinalityInference", () => {
   });
 
   it("test_edgeql_ir_card_inference_03", () => {
-    expectCardinality(schema, `SELECT Card FILTER 'foo' = 'foo' AND 'Djinn' = Card.name`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT Card FILTER 'foo' = 'foo' AND 'Djinn' = Card.name`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_04", () => {
@@ -132,13 +144,21 @@ describe("TestEdgeQLCardinalityInference", () => {
   });
 
   it("test_edgeql_ir_card_inference_06", () => {
-    expectCardinality(schema, `WITH C2 := Card
-        SELECT Card FILTER Card = (SELECT C2 FILTER C2.name = 'Djinn')`, "at_most_one");
+    expectCardinality(
+      schema,
+      `WITH C2 := Card
+        SELECT Card FILTER Card = (SELECT C2 FILTER C2.name = 'Djinn')`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_07", () => {
-    expectCardinality(schema, `WITH C2 := DETACHED Card
-        SELECT Card FILTER Card = (SELECT C2 FILTER C2.name = 'Djinn')`, "at_most_one");
+    expectCardinality(
+      schema,
+      `WITH C2 := DETACHED Card
+        SELECT Card FILTER Card = (SELECT C2 FILTER C2.name = 'Djinn')`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_08", () => {
@@ -241,7 +261,11 @@ describe("TestEdgeQLCardinalityInference", () => {
   });
 
   it("test_edgeql_ir_card_inference_23", () => {
-    expectCardinality(schema, `SELECT (SELECT Card LIMIT 1).element ?? (SELECT User LIMIT 1).name`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT (SELECT Card LIMIT 1).element ?? (SELECT User LIMIT 1).name`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_24", () => {
@@ -249,129 +273,223 @@ describe("TestEdgeQLCardinalityInference", () => {
   });
 
   it("test_edgeql_ir_card_inference_25", () => {
-    expectShapeFieldCardinality(schema, `SELECT Named {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Named {
             name
-        }`, "name", "one");
+        }`,
+      "name",
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_26", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             foo := .name
-        }`, "foo", "one");
+        }`,
+      "foo",
+      "one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_27", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             foo := 'prefix_' ++ .name
-        }`, "foo", "one");
+        }`,
+      "foo",
+      "one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_28", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             deck_cost
-        }`, "deck_cost", "one");
+        }`,
+      "deck_cost",
+      "one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_29", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             dc := sum(.deck.cost)
-        }`, "dc", "one");
+        }`,
+      "dc",
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_30", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             deck
-        }`, "deck", "many");
+        }`,
+      "deck",
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_31", () => {
-    expectShapeFieldCardinality(schema, `SELECT Card {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Card {
             owners
-        }`, "owners", "many");
+        }`,
+      "owners",
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_32", () => {
-    expectCardinality(schema, `WITH
+    expectCardinality(
+      schema,
+      `WITH
             A := (SELECT Award LIMIT 1)
         # the "awards" are exclusive
-        SELECT A.<awards[IS User]`, "at_most_one");
+        SELECT A.<awards[IS User]`,
+      "at_most_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_33", () => {
-    expectShapeFieldCardinality(schema, `SELECT Award {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Award {
             # the "awards" are exclusive
             recipient := .<awards[IS User]
-        }`, "recipient", "at_most_one");
+        }`,
+      "recipient",
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_34", () => {
-    expectShapeFieldCardinality(schema, `SELECT Award {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Award {
             rec
-        }`, "rec", "at_most_one");
+        }`,
+      "rec",
+      "at_most_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_35", () => {
-    expectShapeFieldCardinality(schema, `SELECT AwardAlias {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT AwardAlias {
             recipient
-        }`, "recipient", "at_most_one");
+        }`,
+      "recipient",
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_36", () => {
-    expectShapeFieldCardinality(schema, `SELECT Eert {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Eert {
             parent
-        }`, "parent", "at_most_one");
+        }`,
+      "parent",
+      "at_most_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_36b", () => {
-    expectShapeFieldCardinality(schema, `SELECT Eert {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Eert {
             asdf := .<children[is Eert]
-        }`, "asdf", "at_most_one");
+        }`,
+      "asdf",
+      "at_most_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_36c", () => {
-    expectShapeFieldCardinality(schema, `SELECT Eert {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Eert {
             asdf := .<children[is Asdf]
-        }`, "asdf", "many");
+        }`,
+      "asdf",
+      "many",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_36d", () => {
-    expectShapeFieldCardinality(schema, `SELECT Eert {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Eert {
             asdf := .<children[is Object]
-        }`, "asdf", "many");
+        }`,
+      "asdf",
+      "many",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_37", () => {
-    expectShapeFieldCardinality(schema, `SELECT Report {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Report {
             user_name := .user.name
-        }`, "user_name", "one");
+        }`,
+      "user_name",
+      "one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_38", () => {
-    expectShapeFieldCardinality(schema, `SELECT Report {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Report {
             name := .user.name
-        }`, "name", "one");
+        }`,
+      "name",
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_39", () => {
-    expect(() => compileQuery(schema, `SELECT Report {
+    expect(() =>
+      compileQuery(
+        schema,
+        `SELECT Report {
     name := <str>{}
-}`)).toThrow();
+}`,
+      ),
+    ).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_40", () => {
-    expect(() => compileQuery(schema, `SELECT Report {
+    expect(() =>
+      compileQuery(
+        schema,
+        `SELECT Report {
     single foo := User.name
-}`)).toThrow();
+}`,
+      ),
+    ).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_41", () => {
@@ -383,79 +501,134 @@ describe("TestEdgeQLCardinalityInference", () => {
   });
 
   it("test_edgeql_ir_card_inference_43", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             foo := .deck@count
-        }`, "foo", "many");
+        }`,
+      "foo",
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_44", () => {
-    expectShapeFieldCardinality(schema, `SELECT Report {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Report {
             foo := .user@note
-        }`, "foo", "at_most_one");
+        }`,
+      "foo",
+      "at_most_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_45", () => {
-    expectShapeFieldCardinality(schema, `SELECT Report {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Report {
             subtitle := 'aaa'
-        }`, "subtitle", "one");
+        }`,
+      "subtitle",
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_46", () => {
-    expectShapeFieldCardinality(schema, `SELECT Named {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Named {
             as_card := Named[IS Card]
-        }`, "as_card", "at_most_one");
+        }`,
+      "as_card",
+      "at_most_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_47", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             foo := EXISTS(.friends)
-        }`, "foo", "one");
+        }`,
+      "foo",
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_48", () => {
-    expectShapeFieldCardinality(schema, `SELECT Card {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Card {
             o_name := .owners.name,
-        }`, "o_name", "many");
+        }`,
+      "o_name",
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_49", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             name,
             fire_deck := (
                 SELECT User.deck {name, element}
                 FILTER .element = 'Fire'
                 ORDER BY .name
             ).name
-        }`, "fire_deck", "many");
+        }`,
+      "fire_deck",
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_50", () => {
-    expectCardinality(schema, `INSERT User {name := "Timmy"}
-        UNLESS CONFLICT`, "at_most_one");
+    expectCardinality(
+      schema,
+      `INSERT User {name := "Timmy"}
+        UNLESS CONFLICT`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_51", () => {
-    expectCardinality(schema, `INSERT User {name := "Johnny"}
+    expectCardinality(
+      schema,
+      `INSERT User {name := "Johnny"}
         UNLESS CONFLICT ON (.name)
-        ELSE User`, "one");
+        ELSE User`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_52", () => {
-    expectCardinality(schema, `INSERT User {name := "Spike"}
+    expectCardinality(
+      schema,
+      `INSERT User {name := "Spike"}
         UNLESS CONFLICT ON (.name)
-        ELSE Card`, "many");
+        ELSE Card`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_53", () => {
-    expectCardinality(schema, `INSERT User {name := "Madz"}
+    expectCardinality(
+      schema,
+      `INSERT User {name := "Madz"}
         UNLESS CONFLICT ON (.name)
-        ELSE (DETACHED (INSERT User {name := "Madz2"}))`, "one");
+        ELSE (DETACHED (INSERT User {name := "Madz2"}))`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_54", () => {
-    expectCardinality(schema, `SELECT Person FILTER .first = "Phil" AND .last = "Emarg"`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT Person FILTER .first = "Phil" AND .last = "Emarg"`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_55", () => {
@@ -471,21 +644,37 @@ describe("TestEdgeQLCardinalityInference", () => {
   });
 
   it("test_edgeql_ir_card_inference_58", () => {
-    expectCardinality(schema, `SELECT Person FILTER .last = "Hatch" AND .first = "Madeline"`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT Person FILTER .last = "Hatch" AND .first = "Madeline"`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_59", () => {
-    expectCardinality(schema, `SELECT Person FILTER .p = 7 AND .q = 3 AND .first = "???"`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT Person FILTER .p = 7 AND .q = 3 AND .first = "???"`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_60", () => {
-    expectCardinality(schema, `SELECT Person
-        FILTER .p = 12 AND .card = (SELECT Card FILTER .name = 'Imp')`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT Person
+        FILTER .p = 12 AND .card = (SELECT Card FILTER .name = 'Imp')`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_60b", () => {
-    expectCardinality(schema, `SELECT Person
-        FILTER .p = 12 AND .card.name = 'Imp'`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT Person
+        FILTER .p = 12 AND .card.name = 'Imp'`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_61", () => {
@@ -493,23 +682,42 @@ describe("TestEdgeQLCardinalityInference", () => {
   });
 
   it("test_edgeql_ir_card_inference_62", () => {
-    expectCardinality(schema, `SELECT Person FILTER .p = 7 AND .q = 3 AND .last = "Whatever"`, "at_most_one");
+    expectCardinality(
+      schema,
+      `SELECT Person FILTER .p = 7 AND .q = 3 AND .last = "Whatever"`,
+      "at_most_one",
+    );
   });
 
   // Live IR gap: error-detection case the Live IR does not reject (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_63", () => {
-    expect(() => compileQuery(schema, `WITH X := User { busted := (SELECT 1 ORDER BY {1,2}) },
-SELECT X`)).toThrow();
+    expect(() =>
+      compileQuery(
+        schema,
+        `WITH X := User { busted := (SELECT 1 ORDER BY {1,2}) },
+SELECT X`,
+      ),
+    ).toThrow();
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_64", () => {
-    expectShapeFieldCardinality(schema, `SELECT (FOR x IN {1,2} UNION (SELECT User { m := x })) { m }`, "m", "one");
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT (FOR x IN {1,2} UNION (SELECT User { m := x })) { m }`,
+      "m",
+      "one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_65", () => {
-    expectShapeFieldCardinality(schema, `SELECT (SELECT User { multi m := 1 }) { m }`, "m", "at_least_one");
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT (SELECT User { multi m := 1 }) { m }`,
+      "m",
+      "at_least_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_66", () => {
@@ -573,8 +781,12 @@ SELECT X`)).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_80", () => {
-    expectCardinality(schema, `WITH s := {1, 2, 3}
-        SELECT max(s)`, "one");
+    expectCardinality(
+      schema,
+      `WITH s := {1, 2, 3}
+        SELECT max(s)`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_81", () => {
@@ -587,9 +799,14 @@ SELECT X`)).toThrow();
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_83", () => {
-    expectShapeFieldCardinality(schema, `SELECT Card {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT Card {
             element := assert_single(.element ++ "1")
-        }`, "element", "one");
+        }`,
+      "element",
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_84", () => {
@@ -602,7 +819,12 @@ SELECT X`)).toThrow();
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_86", () => {
-    expectShapeFieldCardinality(schema, `SELECT User { required multi m := 1 }`, "m", "at_least_one");
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User { required multi m := 1 }`,
+      "m",
+      "at_least_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_87", () => {
@@ -621,28 +843,47 @@ SELECT X`)).toThrow();
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_90", () => {
-    expectShapeFieldCardinality(schema, `SELECT User { m := assert_distinct(assert_exists(Card)) }`, "m", "at_least_one");
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User { m := assert_distinct(assert_exists(Card)) }`,
+      "m",
+      "at_least_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_91", () => {
-    expectShapeFieldCardinality(schema, `SELECT User {
+    expectShapeFieldCardinality(
+      schema,
+      `SELECT User {
             m := assert_distinct(assert_exists(assert_single(Card)))
-        }`, "m", "one");
+        }`,
+      "m",
+      "one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_92", () => {
-    expectShapeFieldCardinality(schema, `WITH
+    expectShapeFieldCardinality(
+      schema,
+      `WITH
             inserted := (INSERT Award { name := <str>$0 }),
             all := (inserted UNION (SELECT Award)),
         SELECT DISTINCT (all { name })
-        ORDER BY .name ASC`, "name", "one");
+        ORDER BY .name ASC`,
+      "name",
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_93", () => {
-    expectCardinality(schema, `SELECT (User { friends: { required bs := .name } },
-                User.friends.name ?? 'a')`, "many");
+    expectCardinality(
+      schema,
+      `SELECT (User { friends: { required bs := .name } },
+                User.friends.name ?? 'a')`,
+      "many",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
@@ -651,25 +892,37 @@ SELECT X`)).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_95", () => {
-    expectCardinality(schema, `WITH x := User
+    expectCardinality(
+      schema,
+      `WITH x := User
         SELECT (
             WITH y := x
             SELECT (y,).0
-        )`, "many");
+        )`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_96", () => {
-    expectCardinality(schema, `SELECT (
+    expectCardinality(
+      schema,
+      `SELECT (
             (SELECT User),
             (User,).0,
-        )`, "many");
+        )`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_97", () => {
-    expectCardinality(schema, `SELECT (
+    expectCardinality(
+      schema,
+      `SELECT (
             (User,).0,
             (User,).0,
-        )`, "many");
+        )`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_98", () => {
@@ -701,51 +954,79 @@ SELECT X`)).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_105", () => {
-    expectCardinality(schema, `select User
-        filter .avatar.name = 'Dragon'`, "many");
+    expectCardinality(
+      schema,
+      `select User
+        filter .avatar.name = 'Dragon'`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_106", () => {
-    expectCardinality(schema, `select User
-        filter .unique_avatar.name = 'Dragon'`, "at_most_one");
+    expectCardinality(
+      schema,
+      `select User
+        filter .unique_avatar.name = 'Dragon'`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_107", () => {
-    expectCardinality(schema, `WITH
+    expectCardinality(
+      schema,
+      `WITH
           __scope_0_Hero := DETACHED default::User
         UPDATE __scope_0_Hero
         FILTER (__scope_0_Hero.name = "Spider-Man")
         SET {
           name := ("The Amazing " ++ __scope_0_Hero.name)
-        }`, "at_most_one");
+        }`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_108", () => {
-    expectCardinality(schema, `WITH
+    expectCardinality(
+      schema,
+      `WITH
           __scope_0_Hero := DETACHED default::User
         SELECT __scope_0_Hero
-        FILTER (__scope_0_Hero.name = "Spider-Man")`, "at_most_one");
+        FILTER (__scope_0_Hero.name = "Spider-Man")`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_109", () => {
-    expectCardinality(schema, `select User
-        filter (detached (select User limit 1)).name = 'Alice'`, "many");
+    expectCardinality(
+      schema,
+      `select User
+        filter (detached (select User limit 1)).name = 'Alice'`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_110", () => {
-    expectCardinality(schema, `with z := (select User { asdf := .name })
+    expectCardinality(
+      schema,
+      `with z := (select User { asdf := .name })
         select (
             even := z.asdf,
             elements := count(z)
-        )`, "many");
+        )`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_111", () => {
-    expectCardinality(schema, `with z := (select User { asdf := {.name} })
+    expectCardinality(
+      schema,
+      `with z := (select User { asdf := {.name} })
         select (
             even := z.asdf,
             elements := count(z)
-        )`, "many");
+        )`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_112", () => {
@@ -785,13 +1066,21 @@ SELECT X`)).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_121", () => {
-    expectCardinality(schema, `with X := {User, User},
-        select X filter .name = 'Alice'`, "many");
+    expectCardinality(
+      schema,
+      `with X := {User, User},
+        select X filter .name = 'Alice'`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_122", () => {
-    expectCardinality(schema, `with X := {User, User},
-        update X filter .name = 'Alice' set { }`, "many");
+    expectCardinality(
+      schema,
+      `with X := {User, User},
+        update X filter .name = 'Alice' set { }`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_123", () => {
@@ -804,7 +1093,12 @@ SELECT X`)).toThrow();
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_125", () => {
-    expectShapeFieldCardinality(schema, `select Card { required x := .req_awards }`, "x", "at_least_one");
+    expectShapeFieldCardinality(
+      schema,
+      `select Card { required x := .req_awards }`,
+      "x",
+      "at_least_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_126", () => {
@@ -817,7 +1111,12 @@ SELECT X`)).toThrow();
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_128", () => {
-    expectShapeFieldCardinality(schema, `select Card { required x := .req_tags }`, "x", "at_least_one");
+    expectShapeFieldCardinality(
+      schema,
+      `select Card { required x := .req_tags }`,
+      "x",
+      "at_least_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_129", () => {
@@ -861,37 +1160,63 @@ SELECT X`)).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_139", () => {
-    expectCardinality(schema, `if <bool>$0 then
+    expectCardinality(
+      schema,
+      `if <bool>$0 then
             (insert User { name := "test" })
         else
-            (insert User { name := "???" })`, "one");
+            (insert User { name := "???" })`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_140", () => {
-    expectCardinality(schema, `if <bool>$0 then
+    expectCardinality(
+      schema,
+      `if <bool>$0 then
             (insert User { name := "test" })
         else
-            {(insert User { name := "???" }), (insert User { name := "!!!" })}`, "at_least_one");
+            {(insert User { name := "???" }), (insert User { name := "!!!" })}`,
+      "at_least_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_141", () => {
-    expectCardinality(schema, `if <bool>$0 then
+    expectCardinality(
+      schema,
+      `if <bool>$0 then
             (insert User { name := "test" })
         else
-            <User>{}`, "at_most_one");
+            <User>{}`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_142", () => {
-    expectShapeFieldCardinality(schema, `select Named { [is Card].element }`, "element", "at_most_one");
+    expectShapeFieldCardinality(
+      schema,
+      `select Named { [is Card].element }`,
+      "element",
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_143", () => {
-    expectShapeFieldCardinality(schema, `select Named { element := [is Card].element }`, "element", "at_most_one");
+    expectShapeFieldCardinality(
+      schema,
+      `select Named { element := [is Card].element }`,
+      "element",
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_144", () => {
-    expectCardinality(schema, `select (
-          select assert_exists(Named) { [is Card].element } limit 1).element`, "at_most_one");
+    expectCardinality(
+      schema,
+      `select (
+          select assert_exists(Named) { [is Card].element } limit 1).element`,
+      "at_most_one",
+    );
   });
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
@@ -931,7 +1256,12 @@ SELECT X`)).toThrow();
 
   // Live IR gap: shape-element cardinality is a SQL-builder concern (ADR 0016).
   it.skip("test_edgeql_ir_card_inference_152", () => {
-    expectShapeFieldCardinality(schema, `select Tgt { back := .<lnk[is SrcSub1] }`, "back", "at_most_one");
+    expectShapeFieldCardinality(
+      schema,
+      `select Tgt { back := .<lnk[is SrcSub1] }`,
+      "back",
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_153", () => {
@@ -955,67 +1285,114 @@ SELECT X`)).toThrow();
   });
 
   it("test_edgeql_ir_card_inference_158", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprA | TypeExprB]
-        select assert_exists(assert_single(TypeExpr)).val`, "at_most_one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprA | TypeExprB]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_159", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprA | TypeExprC]
-        select assert_exists(assert_single(TypeExpr)).val`, "many");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprA | TypeExprC]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_160", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprA | TypeExprD]
-        select assert_exists(assert_single(TypeExpr)).val`, "many");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprA | TypeExprD]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_161", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprB | TypeExprC]
-        select assert_exists(assert_single(TypeExpr)).val`, "many");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprB | TypeExprC]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_162", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprB | TypeExprD]
-        select assert_exists(assert_single(TypeExpr)).val`, "at_least_one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprB | TypeExprD]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "at_least_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_163", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprC | TypeExprD]
-        select assert_exists(assert_single(TypeExpr)).val`, "many");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprC | TypeExprD]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "many",
+    );
   });
 
   it("test_edgeql_ir_card_inference_164", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprA & TypeExprB]
-        select assert_exists(assert_single(TypeExpr)).val`, "one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprA & TypeExprB]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_165", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprA & TypeExprC]
-        select assert_exists(assert_single(TypeExpr)).val`, "at_most_one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprA & TypeExprC]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "at_most_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_166", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprA & TypeExprD]
-        select assert_exists(assert_single(TypeExpr)).val`, "one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprA & TypeExprD]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_167", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprB & TypeExprC]
-        select assert_exists(assert_single(TypeExpr)).val`, "one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprB & TypeExprC]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_168", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprB & TypeExprD]
-        select assert_exists(assert_single(TypeExpr)).val`, "one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprB & TypeExprD]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_169", () => {
-    expectCardinality(schema, `with TypeExpr := Object[is TypeExprC & TypeExprD]
-        select assert_exists(assert_single(TypeExpr)).val`, "at_least_one");
+    expectCardinality(
+      schema,
+      `with TypeExpr := Object[is TypeExprC & TypeExprD]
+        select assert_exists(assert_single(TypeExpr)).val`,
+      "at_least_one",
+    );
   });
 
   it("test_edgeql_ir_card_inference_170", () => {
     expectShapeFieldCardinality(schema, `select Report { u := .?>user }`, "u", "at_most_one");
   });
-
 });

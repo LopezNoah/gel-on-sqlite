@@ -7,7 +7,7 @@ to answer "is this base a string?" — and a bare string literal carries
 type on their result typeref. So the leaf grew an inline `isStringValuedSet`
 helper that peeled `select_expr` wrappers, consulted `qualifyTypeName`, and
 recursed through `index_expr`/`slice_expr`. That re-derivation lived next to the
-leaf, was duplicated at the slice site, and — crucially — the *scalar-select*
+leaf, was duplicated at the slice site, and — crucially — the _scalar-select_
 index path (`compileScalarSelectSQL`, a different function) had no access to it
 at all, so `'qwerty'[<int16>2]` (a typed-int index, `numericIndex === undefined`)
 fell through to the JSON-array idiom (`json_extract` over text → wrong result).
@@ -26,7 +26,7 @@ lives in `src/ir/` (the lowest layer) so the SQL compiler imports it without a
 cycle. This is **not** the kind of split ADRs 0040/0041 rejected: those failed
 because `ast_to_ir`'s expression/shape/pointer resolution is one
 mutually-recursive builder. This is a post-builder annotation consulted by a
-*different* layer — the same shape as `inference.ts` (which already decorates the
+_different_ layer — the same shape as `inference.ts` (which already decorates the
 statement with volatility/cardinality/multiplicity/type).
 
 **What changed in the SQL compiler:**
@@ -39,8 +39,8 @@ statement with volatility/cardinality/multiplicity/type).
   `isStrValued` / `isBytesValued`. Behaviour-identical at the slice site
   (a parity test, below, locks `isStrValued` to the retired helper's logic).
 - **Fix, fact-driven:** a string/bytes base is now indexed char/byte-wise via
-  `substr` whether the index is a literal *or* a dynamic scalar
-  (`'qwerty'[<int16>2]`, `s[$i]`). The decision keys off the *value kind*
+  `substr` whether the index is a literal _or_ a dynamic scalar
+  (`'qwerty'[<int16>2]`, `s[$i]`). The decision keys off the _value kind_
   ("the base is a string") rather than "the index happens to be a literal".
   This required the SAME fact at TWO independent sites — `compileValueSetSQL`'s
   index branch and `compileScalarSelectSQL`'s index branch — which is exactly
@@ -65,7 +65,7 @@ collections by `typeref.collection` (and the `tuple` expr kind, whose typeref
 omits it); objects by schema-structural fields (`inSchema` / concrete-subtype
 `children` / `union` / `intersection`); and any other named, non-collection,
 non-object typeref as a scalar (the common cast/operator/pointer result).
-**Known limit:** a *user-defined* scalar in a user module with `inSchema` set
+**Known limit:** a _user-defined_ scalar in a user module with `inSchema` set
 could be misread as an object — out of scope here (str/bytes, the SQL-relevant
 kinds, are pinned by name and unaffected), to be revisited if a fix needs it.
 
@@ -78,7 +78,7 @@ byte-identical; just the typed/dynamic-index and scalar-select paths changed.
 
 **Why record it.** This is the first increment of the "preserve value/source
 facts before SQL lowering, then consume them" direction. It deliberately took
-the lowest-risk fact dimension (value kind) to validate the *pattern* — does an
+the lowest-risk fact dimension (value kind) to validate the _pattern_ — does an
 annotation seam reduce per-fix cost without regressions? — before betting on the
 harder, higher-impact dimensions the same direction calls for: **source identity
 / correlation** (would let SQL drop the `outerScopes` / `sourcePathAliases` /

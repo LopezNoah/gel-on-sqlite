@@ -3,8 +3,15 @@ import { applyLimitOffset, dedupeRowsById, distinctValues } from "../src/runtime
 
 describe("result_clauses — dedupeRowsById", () => {
   it("dedupes id-bearing rows by id, first-seen order", () => {
-    const rows = [{ id: "a", n: 1 }, { id: "b", n: 2 }, { id: "a", n: 3 }];
-    expect(dedupeRowsById(rows)).toEqual([{ id: "a", n: 1 }, { id: "b", n: 2 }]);
+    const rows = [
+      { id: "a", n: 1 },
+      { id: "b", n: 2 },
+      { id: "a", n: 3 },
+    ];
+    expect(dedupeRowsById(rows)).toEqual([
+      { id: "a", n: 1 },
+      { id: "b", n: 2 },
+    ]);
   });
 
   it("passes through items that are not id-bearing objects", () => {

@@ -14,7 +14,12 @@
 // verbatim from the Python suite's JSON-ish shapes) keep matching.
 
 import { openSQLite } from "../runtime/database.js";
-import { executeQuery, executeScript, type QueryResult, type QueryVariables } from "../runtime/engine.js";
+import {
+  executeQuery,
+  executeScript,
+  type QueryResult,
+  type QueryVariables,
+} from "../runtime/engine.js";
 import {
   deserializeSchemaFromGelTables,
   deserializeSchemaFromInstdata,
@@ -77,17 +82,39 @@ const jsonReplacer = (_key: string, value: unknown): unknown => {
 export class Transaction implements Executor {
   constructor(private readonly client: Client) {}
 
-  execute(query: string): Promise<void> { return this.client.execute(query); }
-  query<T = unknown>(query: string, args?: QueryVariables): Promise<T[]> { return this.client.query<T>(query, args); }
-  queryRequired<T = unknown>(query: string, args?: QueryVariables): Promise<[T, ...T[]]> { return this.client.queryRequired<T>(query, args); }
-  querySingle<T = unknown>(query: string, args?: QueryVariables): Promise<T | null> { return this.client.querySingle<T>(query, args); }
-  queryRequiredSingle<T = unknown>(query: string, args?: QueryVariables): Promise<T> { return this.client.queryRequiredSingle<T>(query, args); }
-  queryJSON(query: string): Promise<string> { return this.client.queryJSON(query); }
-  queryRequiredJSON(query: string): Promise<string> { return this.client.queryRequiredJSON(query); }
-  querySingleJSON(query: string): Promise<string> { return this.client.querySingleJSON(query); }
-  queryRequiredSingleJSON(query: string): Promise<string> { return this.client.queryRequiredSingleJSON(query); }
-  querySQL<T = unknown>(query: string, args?: unknown[]): Promise<T[]> { return this.client.querySQL<T>(query, args); }
-  executeSQL(query: string, args?: unknown[]): Promise<void> { return this.client.executeSQL(query, args); }
+  execute(query: string): Promise<void> {
+    return this.client.execute(query);
+  }
+  query<T = unknown>(query: string, args?: QueryVariables): Promise<T[]> {
+    return this.client.query<T>(query, args);
+  }
+  queryRequired<T = unknown>(query: string, args?: QueryVariables): Promise<[T, ...T[]]> {
+    return this.client.queryRequired<T>(query, args);
+  }
+  querySingle<T = unknown>(query: string, args?: QueryVariables): Promise<T | null> {
+    return this.client.querySingle<T>(query, args);
+  }
+  queryRequiredSingle<T = unknown>(query: string, args?: QueryVariables): Promise<T> {
+    return this.client.queryRequiredSingle<T>(query, args);
+  }
+  queryJSON(query: string): Promise<string> {
+    return this.client.queryJSON(query);
+  }
+  queryRequiredJSON(query: string): Promise<string> {
+    return this.client.queryRequiredJSON(query);
+  }
+  querySingleJSON(query: string): Promise<string> {
+    return this.client.querySingleJSON(query);
+  }
+  queryRequiredSingleJSON(query: string): Promise<string> {
+    return this.client.queryRequiredSingleJSON(query);
+  }
+  querySQL<T = unknown>(query: string, args?: unknown[]): Promise<T[]> {
+    return this.client.querySQL<T>(query, args);
+  }
+  executeSQL(query: string, args?: unknown[]): Promise<void> {
+    return this.client.executeSQL(query, args);
+  }
 }
 
 export class Client implements Executor {
@@ -124,7 +151,9 @@ export class Client implements Executor {
     const { db } = openSQLite(options.file);
     const schema = deserializeSchemaFromInstdata(db) ?? deserializeSchemaFromGelTables(db);
     if (!schema) {
-      throw new ClientError(`database '${options.file}' does not contain a serialized sqlite-ts schema`);
+      throw new ClientError(
+        `database '${options.file}' does not contain a serialized sqlite-ts schema`,
+      );
     }
     return new Client(db, schema, {
       defaultModule: options.defaultModule ?? "default",
@@ -147,9 +176,16 @@ export class Client implements Executor {
 
   scriptSyncEnvelope(script: string, variables?: QueryVariables): QueryResult {
     this.assertOpen();
-    return executeScript(this.db, this.schema, script, this.securityContext as never, {
-      defaultModule: this.options.defaultModule,
-    }, variables);
+    return executeScript(
+      this.db,
+      this.schema,
+      script,
+      this.securityContext as never,
+      {
+        defaultModule: this.options.defaultModule,
+      },
+      variables,
+    );
   }
 
   private decodedRows(query: string, args?: QueryVariables): unknown[] {
@@ -184,7 +220,9 @@ export class Client implements Executor {
   async queryRequired<T = unknown>(query: string, args?: QueryVariables): Promise<[T, ...T[]]> {
     const rows = this.decodedRows(query, args) as T[];
     if (rows.length === 0) {
-      throw new ResultCardinalityMismatchError("query returned no elements, at least one was expected");
+      throw new ResultCardinalityMismatchError(
+        "query returned no elements, at least one was expected",
+      );
     }
     return rows as [T, ...T[]];
   }

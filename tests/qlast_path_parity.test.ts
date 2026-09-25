@@ -108,7 +108,13 @@ const withRouting = <T>(val: string, fn: () => T): T => {
   }
 };
 
-type Status = "match" | "diverge" | "adapter-null" | "no-path-expr" | `ported-threw:${string}` | "baseline-threw";
+type Status =
+  | "match"
+  | "diverge"
+  | "adapter-null"
+  | "no-path-expr"
+  | `ported-threw:${string}`
+  | "baseline-threw";
 
 const parityStatus = (query: string): Status => {
   const ast = parseEdgeQL(query);

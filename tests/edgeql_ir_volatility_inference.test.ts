@@ -11,21 +11,22 @@ type Volatility = "immutable" | "stable" | "volatile" | "modifying";
 
 const loadSchema = (): SchemaSnapshot => {
   const source = fs.readFileSync(new URL("./schemas/cards.esdl", import.meta.url), "utf8");
-  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, { legacySyntaxCompat: true });
+  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, {
+    legacySyntaxCompat: true,
+  });
   return schemaSnapshotFromDeclarative(decl);
 };
 
 const compileQuery = (schema: SchemaSnapshot, query: string) => {
   const ast = parseEdgeQL(query) as unknown;
   const stmt = (Array.isArray(ast) ? (ast as Statement[])[0] : (ast as Statement)) as Statement;
-  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), { module: (stmt as { withModule?: string }).withModule, schema });
+  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), {
+    module: (stmt as { withModule?: string }).withModule,
+    schema,
+  });
 };
 
-const expectVolatility = (
-  schema: SchemaSnapshot,
-  source: string,
-  expected: Volatility,
-): void => {
+const expectVolatility = (schema: SchemaSnapshot, source: string, expected: Volatility): void => {
   const ir = compileQuery(schema, source);
   expect((ir as { volatility?: Volatility }).volatility).toBe(expected);
 };
@@ -49,76 +50,108 @@ describe("TestEdgeQLVolatilityInference", () => {
   });
 
   it("test_edgeql_ir_volatility_inference_01", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       WITH
         foo := random()
       SELECT
         foo
-    `, "volatile");
+    `,
+      "volatile",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_02", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       SELECT
         Card
       FILTER
         random() > 0.9
-    `, "volatile");
+    `,
+      "volatile",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_03", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       SELECT
         Card
       ORDER BY
         random()
-    `, "volatile");
+    `,
+      "volatile",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_04", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       SELECT
         Card
       LIMIT
         <int64>random()
-    `, "volatile");
+    `,
+      "volatile",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_05", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       SELECT
         Card
       OFFSET
         <int64>random()
-    `, "volatile");
+    `,
+      "volatile",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_06", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       INSERT
         Card {
           name := 'foo',
           element := 'fire',
           cost := 1,
         }
-    `, "modifying");
+    `,
+      "modifying",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_07", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       UPDATE
         Card
       SET {
         name := 'foo',
       }
-    `, "modifying");
+    `,
+      "modifying",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_08", () => {
-    expectVolatility(schema, `
+    expectVolatility(
+      schema,
+      `
       DELETE
         Card
-    `, "modifying");
+    `,
+      "modifying",
+    );
   });
 
   it("test_edgeql_ir_volatility_inference_09", () => {

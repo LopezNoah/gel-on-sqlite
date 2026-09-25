@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { SchemaSnapshot } from "../src/schema/schema.js";
-import { renderSchemaSQL, tableNameForType, collectFields, collectLinks, usesLinkTable, inlineColumnName, linkTableName, multiPropertyTableName } from "../src/codegen/sql.js";
+import {
+  renderSchemaSQL,
+  tableNameForType,
+  collectFields,
+  collectLinks,
+  usesLinkTable,
+  inlineColumnName,
+  linkTableName,
+  multiPropertyTableName,
+} from "../src/codegen/sql.js";
 import { qualifiedTypeName } from "../src/schema/schema.js";
 
 // --------------------------------------------------------------------------
@@ -100,11 +109,15 @@ describe("codegen/sql — storage strategy", () => {
   });
 
   it("linkTableName names the junction table correctly", () => {
-    expect(linkTableName("default::User", { name: "posts", targetType: "default::Post", multi: true })).toBe("default__user__posts");
+    expect(
+      linkTableName("default::User", { name: "posts", targetType: "default::Post", multi: true }),
+    ).toBe("default__user__posts");
   });
 
   it("multiPropertyTableName names the multi-property table correctly", () => {
-    expect(multiPropertyTableName("default::User", { name: "tags", type: "str", multi: true })).toBe("default__user__tags");
+    expect(
+      multiPropertyTableName("default::User", { name: "tags", type: "str", multi: true }),
+    ).toBe("default__user__tags");
   });
 });
 
@@ -206,7 +219,9 @@ describe("codegen/sql — link storage", () => {
     ]);
     const sql = renderSchemaSQL(schema);
     expect(sql).toContain('REFERENCES "default__user"("id")');
-    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")');
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")',
+    );
   });
 
   it("generates junction table for multi links", () => {
@@ -227,7 +242,9 @@ describe("codegen/sql — link storage", () => {
     expect(sql).toContain('"default__post__tags"');
     expect(sql).toContain('"source" TEXT NOT NULL');
     expect(sql).toContain('"target" TEXT NOT NULL');
-    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")');
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")',
+    );
   });
 
   it("generates junction table with property columns for links with properties", () => {
@@ -360,7 +377,7 @@ describe("codegen/sql — triggers", () => {
     const sql = renderSchemaSQL(schema);
     expect(sql).toContain("custom_log_insert");
     expect(sql).toContain("AFTER INSERT");
-    expect(sql).toContain("NEW.\"id\"");
+    expect(sql).toContain('NEW."id"');
   });
 });
 
@@ -399,9 +416,7 @@ describe("codegen/sql — complete end-to-end schema", () => {
           { name: "body", type: "str" },
           { name: "author_id", type: "uuid", required: true },
         ],
-        links: [
-          { name: "author", targetType: "default::User" },
-        ],
+        links: [{ name: "author", targetType: "default::User" }],
       },
       {
         module: "default",
@@ -412,9 +427,7 @@ describe("codegen/sql — complete end-to-end schema", () => {
         module: "default",
         name: "Comment",
         fields: [{ name: "text", type: "str" }],
-        links: [
-          { name: "post", targetType: "default::Post" },
-        ],
+        links: [{ name: "post", targetType: "default::Post" }],
       },
     ]);
 

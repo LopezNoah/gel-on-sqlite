@@ -52,6 +52,8 @@ export class GelDurableObject {
 // A default fetch handler so the script is also a valid plain Worker module.
 export default {
   fetch(): Response {
-    return new Response("Bind the GelDurableObject class to use the full sync engine on D.O. storage.");
+    return new Response(
+      "Bind the GelDurableObject class to use the full sync engine on D.O. storage.",
+    );
   },
 };

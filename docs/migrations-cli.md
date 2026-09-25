@@ -26,13 +26,13 @@ diffing — the file split is purely an authoring convenience.
 
 ## Commands
 
-| Command | What it does | Analogue |
-| --- | --- | --- |
-| `gel push` | Diff schema files against the live DB and apply directly. No files. | `drizzle-kit push` / `prisma db push` |
-| `gel status` | Print pending schema changes; exit code 1 if any (CI-friendly). | `drizzle-kit check` |
+| Command               | What it does                                                                              | Analogue                                                    |
+| --------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `gel push`            | Diff schema files against the live DB and apply directly. No files.                       | `drizzle-kit push` / `prisma db push`                       |
+| `gel status`          | Print pending schema changes; exit code 1 if any (CI-friendly).                           | `drizzle-kit check`                                         |
 | `gel generate [name]` | Write a migration file for the current delta (name positional or `--name`). No DB writes. | `drizzle-kit generate` / `prisma migrate dev --create-only` |
-| `gel migrate` | Apply pending migration files to the DB (idempotent, tracked). | `drizzle-kit migrate` / `prisma migrate deploy` |
-| `gel codegen` | Generate typed TS functions from `.edgeql` files. | `@edgedb/generate` / Prisma Client |
+| `gel migrate`         | Apply pending migration files to the DB (idempotent, tracked).                            | `drizzle-kit migrate` / `prisma migrate deploy`             |
+| `gel codegen`         | Generate typed TS functions from `.edgeql` files.                                         | `@edgedb/generate` / Prisma Client                          |
 
 Pick **one** of the two schema-sync styles per database:
 
@@ -72,7 +72,7 @@ them unchanged (they're `Promise`-shaped already):
 // Durable Object (synchronous SQL storage): full engine, reads + writes.
 import { connectDO } from "sqlite-ts/client/do";
 const client = connectDO(ctx.storage.sql);
-await createPerson(client, { name: "Ada" });   // a generated mutation works on DO
+await createPerson(client, { name: "Ada" }); // a generated mutation works on DO
 const people = await allPeople(client);
 
 // D1 (async binding): READ-ONLY today (writes need the async write path).
@@ -90,7 +90,7 @@ const SQL = await initSqlJs({ locateFile: (f) => `/sql-wasm.wasm` });
 const db = new SQL.Database(savedBytes /* from IndexedDB */ ?? undefined);
 if (!savedBytes) provisionWasm(db, SDL); // or load a DB exported elsewhere
 const client = connectWasm(db);
-await createPerson(client, { name: "Ada" });        // writes work in the browser
+await createPerson(client, { name: "Ada" }); // writes work in the browser
 const people = await allPeople(client);
 localStorage.setItem("db", /* persist */ db.export());
 ```
@@ -104,12 +104,12 @@ load an exported DB for WASM).
 
 ### Backend support matrix
 
-| Backend | Storage | Reads | Writes | Custom `_gel_*` fns |
-| --- | --- | --- | --- | --- |
-| better-sqlite3 (`Client`) | sync, native | ✓ | ✓ | ✓ (full fidelity) |
-| Durable Object (`connectDO`) | sync | ✓ | ✓ | native-lowered subset |
-| Browser / WASM (`connectWasm`) | sync (sql.js) | ✓ | ✓ | native-lowered subset |
-| Cloudflare D1 (`connectD1`) | async | ✓ | ✗ (read-only) | native-lowered subset |
+| Backend                        | Storage       | Reads | Writes        | Custom `_gel_*` fns   |
+| ------------------------------ | ------------- | ----- | ------------- | --------------------- |
+| better-sqlite3 (`Client`)      | sync, native  | ✓     | ✓             | ✓ (full fidelity)     |
+| Durable Object (`connectDO`)   | sync          | ✓     | ✓             | native-lowered subset |
+| Browser / WASM (`connectWasm`) | sync (sql.js) | ✓     | ✓             | native-lowered subset |
+| Cloudflare D1 (`connectD1`)    | async         | ✓     | ✗ (read-only) | native-lowered subset |
 
 D1 writes are deferred — see `docs/adr/0060`. The native-lowered subset (math,
 datetime, bitwise, stddev, floored `//`/`%`) covers ~94% of the conformance

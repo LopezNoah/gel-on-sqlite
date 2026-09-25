@@ -16,19 +16,29 @@ const ROOT = path.resolve(__dirname, "..");
 const ITER = parseInt(process.argv[2] ?? "2000", 10);
 
 const { openSQLite, materializeSchema } = await import(path.join(ROOT, "src/runtime/database.ts"));
-const { ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } = await import(path.join(ROOT, "src/schema/gel_persistence.ts"));
+const { ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } =
+  await import(path.join(ROOT, "src/schema/gel_persistence.ts"));
 const { executeQuery, executeScript } = await import(path.join(ROOT, "src/runtime/engine.ts"));
 const { schemaSnapshotFromDeclarative } = await import(path.join(ROOT, "src/schema/uiSchema.ts"));
 const { parseDeclarativeSchema } = await import(path.join(ROOT, "src/schema/sdl_adapter.ts"));
 const { parseEdgeQL } = await import(path.join(ROOT, "src/edgeql/parser.ts"));
-const { getCompilerService, buildCompileCacheKey } = await import(path.join(ROOT, "src/compiler/service.ts"));
+const { getCompilerService, buildCompileCacheKey } = await import(
+  path.join(ROOT, "src/compiler/service.ts")
+);
 const { SchemaSnapshot } = await import(path.join(ROOT, "src/schema/schema.ts"));
 
-const loadSchema = (name) => fs.readFileSync(path.join(ROOT, "tests", "schemas", `${name}.esdl`), "utf8");
-const loadSetup = (name) => fs.readFileSync(path.join(ROOT, "tests", "schemas", `${name}.edgeql`), "utf8");
+const loadSchema = (name) =>
+  fs.readFileSync(path.join(ROOT, "tests", "schemas", `${name}.esdl`), "utf8");
+const loadSetup = (name) =>
+  fs.readFileSync(path.join(ROOT, "tests", "schemas", `${name}.edgeql`), "utf8");
 
 const cloneDeep = (schema) =>
-  new SchemaSnapshot(schema.listTypes(), schema.listFunctions(), schema.listAliases(), schema.listScalarTypes());
+  new SchemaSnapshot(
+    schema.listTypes(),
+    schema.listFunctions(),
+    schema.listAliases(),
+    schema.listScalarTypes(),
+  );
 const cloneShared = (schema) => SchemaSnapshot.cloneShared(schema);
 const cloneSchemaSnapshot = cloneShared;
 
@@ -43,7 +53,9 @@ const time = (label, n, fn) => {
   for (let i = 0; i < n; i++) fn(i);
   const t1 = performance.now();
   const perOp = (t1 - t0) / n;
-  console.log(`  ${label.padEnd(46)} ${perOp.toFixed(4)} ms/op   (${n} ops, ${(t1 - t0).toFixed(0)}ms)`);
+  console.log(
+    `  ${label.padEnd(46)} ${perOp.toFixed(4)} ms/op   (${n} ops, ${(t1 - t0).toFixed(0)}ms)`,
+  );
   return perOp;
 };
 
@@ -60,9 +72,11 @@ for (const schemaName of ["cards", "advtypes"]) {
   //    the fingerprint cache (recompute); NEW shared clone inherits it.
   const stmt = parseEdgeQL("SELECT 1");
   time("buildKey w/ FRESH cloneDeep   (OLD)", ITER, () =>
-    buildCompileCacheKey(cloneDeep(base), stmt));
+    buildCompileCacheKey(cloneDeep(base), stmt),
+  );
   time("buildKey w/ FRESH cloneShared (NEW)", ITER, () =>
-    buildCompileCacheKey(cloneShared(base), stmt));
+    buildCompileCacheKey(cloneShared(base), stmt),
+  );
 }
 
 // 3+4. compile hit/miss on cards via the real engine path
@@ -79,10 +93,14 @@ const svc = getCompilerService();
 // HIT path: same query repeatedly
 const before = svc.stats();
 time("HIT: SELECT Card { name } (repeat)", ITER, () =>
-  executeQuery(db, cards, "SELECT Card { name }"));
+  executeQuery(db, cards, "SELECT Card { name }"),
+);
 // MISS path: unique query each iter (vary a literal). Fewer iters; each is a real compile.
 const MISS_N = Math.min(ITER, 1500);
 time("MISS: SELECT Card{name} FILTER .cost=$N (unique)", MISS_N, (i) =>
-  executeQuery(db, cards, `SELECT Card { name } FILTER .cost = ${i % 100000}`));
+  executeQuery(db, cards, `SELECT Card { name } FILTER .cost = ${i % 100000}`),
+);
 const after = svc.stats();
-console.log(`  cache stats: hits=${after.hits - before.hits} misses=${after.misses - before.misses} size=${after.size}`);
+console.log(
+  `  cache stats: hits=${after.hits - before.hits} misses=${after.misses - before.misses} size=${after.size}`,
+);

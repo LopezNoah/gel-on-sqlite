@@ -270,7 +270,11 @@ const resolveNestedModuleName = (parentModuleName: string | undefined, name: str
   return `${parentModuleName}::${name}`;
 };
 
-const appendModuleBody = (moduleBodies: Map<string, string[]>, moduleName: string, body: string): void => {
+const appendModuleBody = (
+  moduleBodies: Map<string, string[]>,
+  moduleName: string,
+  body: string,
+): void => {
   const existing = moduleBodies.get(moduleName);
   if (existing) {
     existing.push(body);
@@ -423,7 +427,7 @@ const normalizeConstraintName = (moduleName: string, name: string): string => {
 };
 
 const defaultConstraintParamNames = (name: string, arity: number): string[] | undefined => {
-  const shortName = name.includes("::") ? name.split("::").at(-1) ?? name : name;
+  const shortName = name.includes("::") ? (name.split("::").at(-1) ?? name) : name;
   if (shortName === "max_len_value") {
     return arity > 0 ? ["max"] : [];
   }
@@ -530,10 +534,10 @@ const tokenizeComputedLinkPropertyExpr = (text: string): ComputedLinkPropertyTok
       const next = text[i + 1];
       const prev = tokens.at(-1);
       if (
-        ch === "-"
-        && next !== undefined
-        && /\d/.test(next)
-        && (!prev || prev.kind === "op" || prev.kind === "lparen")
+        ch === "-" &&
+        next !== undefined &&
+        /\d/.test(next) &&
+        (!prev || prev.kind === "op" || prev.kind === "lparen")
       ) {
         const start = i;
         i += 1;
@@ -578,7 +582,9 @@ const tokenizeComputedLinkPropertyExpr = (text: string): ComputedLinkPropertyTok
       while (i < text.length && isIdentifierPart(text[i])) i += 1;
       const value = text.slice(start, i);
       const literal = parseScalarLiteral(value);
-      tokens.push(literal === undefined ? { kind: "identifier", value } : { kind: "literal", value: literal });
+      tokens.push(
+        literal === undefined ? { kind: "identifier", value } : { kind: "literal", value: literal },
+      );
       continue;
     }
 
@@ -653,12 +659,16 @@ class ComputedLinkPropertyExprParser {
     }
 
     if (this.match("dot")) {
-      const name = this.expectIdentifier("Expected field name after '.' in computed link property expression");
+      const name = this.expectIdentifier(
+        "Expected field name after '.' in computed link property expression",
+      );
       return { kind: "field_ref", name };
     }
 
     if (this.match("at")) {
-      const name = this.expectIdentifier("Expected link property name after '@' in computed link property expression");
+      const name = this.expectIdentifier(
+        "Expected link property name after '@' in computed link property expression",
+      );
       return { kind: "link_property_ref", name };
     }
 
@@ -670,7 +680,9 @@ class ComputedLinkPropertyExprParser {
       return expr;
     }
 
-    return unsupported("Expected literal, field reference, link property reference, or parenthesized expression");
+    return unsupported(
+      "Expected literal, field reference, link property reference, or parenthesized expression",
+    );
   }
 
   private current(): ComputedLinkPropertyToken | undefined {
@@ -722,7 +734,10 @@ const parseAliasSetLiteralValues = (exprText: string): ScalarValue[] | undefined
     return [];
   }
 
-  const parts = inner.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
+  const parts = inner
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
   const values = parts.map((part) => parseScalarLiteral(part));
   if (values.some((value) => value === undefined)) {
     return undefined;
@@ -739,8 +754,13 @@ const stripAliasOuterParens = (exprText: string): string => {
 };
 
 const parseAliasSourceTypeCandidate = (exprText: string): string | undefined => {
-  const stripped = stripAliasOuterParens(exprText).replace(/^select\s+/i, "").trim();
-  const match = /^([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)(?:\s*\{|\s+filter\b|\s+order\b|\s+limit\b|\s*$)/i.exec(stripped);
+  const stripped = stripAliasOuterParens(exprText)
+    .replace(/^select\s+/i, "")
+    .trim();
+  const match =
+    /^([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)(?:\s*\{|\s+filter\b|\s+order\b|\s+limit\b|\s*$)/i.exec(
+      stripped,
+    );
   return match?.[1];
 };
 
@@ -751,7 +771,8 @@ const parseAliasProjections = (exprText: string): AliasDeclaration["projections"
   }
 
   const projections: AliasDeclaration["projections"] = [];
-  const directProjectionPattern = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)\b/g;
+  const directProjectionPattern =
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)\b/g;
   for (const match of bodyMatch[1].matchAll(directProjectionPattern)) {
     projections.push({ name: match[1], sourceField: match[2] });
   }
@@ -766,7 +787,11 @@ const stripAliasOuterParenTokens = (tokens: Token[]): Token[] => {
   while (trimmed.length > 0 && trimmed[trimmed.length - 1].kind === "semi") {
     trimmed.pop();
   }
-  if (trimmed.length >= 2 && trimmed[0].kind === "lparen" && trimmed[trimmed.length - 1].kind === "rparen") {
+  if (
+    trimmed.length >= 2 &&
+    trimmed[0].kind === "lparen" &&
+    trimmed[trimmed.length - 1].kind === "rparen"
+  ) {
     let depth = 0;
     let balanced = true;
     for (let i = 0; i < trimmed.length; i++) {
@@ -809,7 +834,10 @@ const findTopLevelFilterTokenIndex = (tokens: Token[]): number => {
   let cursor = 0;
   if (tokens[cursor]?.kind === "kw_select") cursor++;
   // Skip an identifier (the source type / scalar expression)
-  if (tokens[cursor] && (tokens[cursor].kind === "identifier" || tokens[cursor].kind.startsWith("kw_"))) {
+  if (
+    tokens[cursor] &&
+    (tokens[cursor].kind === "identifier" || tokens[cursor].kind.startsWith("kw_"))
+  ) {
     cursor++;
     while (tokens[cursor]?.kind === "coloncolon") {
       cursor += 2; // :: <ident>
@@ -820,7 +848,8 @@ const findTopLevelFilterTokenIndex = (tokens: Token[]): number => {
   for (let i = cursor; i < tokens.length; i++) {
     const token = tokens[i];
     if (token.kind === "lparen" || token.kind === "lbrace" || token.kind === "lbracket") depth++;
-    else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket") depth--;
+    else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket")
+      depth--;
     else if (depth === 0 && token.kind === "kw_filter") return i;
   }
   return -1;
@@ -838,7 +867,10 @@ const collectFilterClauseTokens = (tokens: Token[], filterIndex: number): Token[
     } else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket") {
       depth--;
       if (depth < 0) break;
-    } else if (depth === 0 && (token.kind === "kw_order" || token.kind === "kw_limit" || token.kind === "kw_offset")) {
+    } else if (
+      depth === 0 &&
+      (token.kind === "kw_order" || token.kind === "kw_limit" || token.kind === "kw_offset")
+    ) {
       break;
     }
     out.push(token);
@@ -976,7 +1008,9 @@ const stripBalancedOuterParens = (source: string): string => {
       if (depth === 0) {
         // If the matching `)` for the leading `(` is also the very last paren
         // (the `eof`/`semi` may follow), the outer parens are balanced.
-        const rest = tokens.slice(i + 1).filter((token) => token.kind !== "eof" && token.kind !== "semi");
+        const rest = tokens
+          .slice(i + 1)
+          .filter((token) => token.kind !== "eof" && token.kind !== "semi");
         if (rest.length === 0) {
           const openIndex = trimmed.indexOf("(");
           const closeIndex = trimmed.lastIndexOf(")");
@@ -1007,8 +1041,12 @@ const parseAliasFilter = (exprText: string): AliasDeclaration["filter"] => {
   for (let i = 0; i < filterTokens.length; i++) {
     const token = filterTokens[i];
     if (token.kind === "lparen" || token.kind === "lbrace" || token.kind === "lbracket") depth++;
-    else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket") depth--;
-    else if (depth === 0 && (token.kind === "kw_and" || token.kind === "kw_or" || token.kind === "kw_not")) {
+    else if (token.kind === "rparen" || token.kind === "rbrace" || token.kind === "rbracket")
+      depth--;
+    else if (
+      depth === 0 &&
+      (token.kind === "kw_and" || token.kind === "kw_or" || token.kind === "kw_not")
+    ) {
       // `NOT IN` is a single operator we do want to recognize.
       if (token.kind === "kw_not" && filterTokens[i + 1]?.kind === "kw_in") continue;
       return undefined;
@@ -1042,8 +1080,7 @@ const parseAliasDeclaration = (
   const values = parseAliasSetLiteralValues(exprText);
   const sourceTypeCandidate = parseAliasSourceTypeCandidate(exprText);
   const sourceType =
-    values
-    || !sourceTypeCandidate
+    values || !sourceTypeCandidate
       ? undefined
       : normalizeTypeName(sourceTypeCandidate, resolvedName.moduleName);
 
@@ -1237,25 +1274,33 @@ const detectCountOfLink = (exprText: string): string | undefined => {
   // Peel until we reach a `function_call`.
   const root = (parsed as { kind: string; expr?: unknown }).expr as { kind?: string } | undefined;
   if (!root || root.kind !== "function_call") return undefined;
-  const call = root as { kind: "function_call"; call: { name: string; args: Array<{ kind?: string; expr?: unknown }> } };
+  const call = root as {
+    kind: "function_call";
+    call: { name: string; args: Array<{ kind?: string; expr?: unknown }> };
+  };
   // Normalise stdlib name (`std::count` vs `count`).
   const last = call.call.name.split("::").pop() ?? call.call.name;
   if (last !== "count") return undefined;
   if (call.call.args.length !== 1) return undefined;
   const argWrapper = call.call.args[0];
   // Args arrive as `{ kind: "expr", expr: <FreeObjectExpr> }`.
-  const argExpr = argWrapper.kind === "expr"
-    ? (argWrapper as unknown as { expr: { kind?: string } }).expr
-    : (argWrapper as unknown as { kind?: string });
+  const argExpr =
+    argWrapper.kind === "expr"
+      ? (argWrapper as unknown as { expr: { kind?: string } }).expr
+      : (argWrapper as unknown as { kind?: string });
   if (!argExpr || (argExpr as { kind?: string }).kind !== "field_access") return undefined;
   const fa = argExpr as { kind: "field_access"; expr: { kind?: string }; field: string };
   if (fa.expr.kind !== "current_item") return undefined;
   return fa.field;
 };
 
-const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {
+const parseComputedPropertyExpr = (
+  text: string,
+): Extract<ComputedDef, { kind: "property" }>["expr"] => {
   const trimmed = stripOuterParens(text);
-  const aggregateMatch = /^sum\(\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\)$/i.exec(trimmed);
+  const aggregateMatch = /^sum\(\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\)$/i.exec(
+    trimmed,
+  );
   if (aggregateMatch) {
     return {
       kind: "link_aggregate",
@@ -1302,7 +1347,8 @@ const parseComputedPropertyExpr = (text: string): Extract<ComputedDef, { kind: "
   const callMatch = /^([A-Za-z_][A-Za-z0-9_:]*)\((.*)\)$/s.exec(trimmed);
   if (callMatch) {
     const argsRaw = callMatch[2].trim();
-    const args = argsRaw.length === 0 ? [] : argsRaw.split(",").map((arg) => parseScalarLiteral(arg));
+    const args =
+      argsRaw.length === 0 ? [] : argsRaw.split(",").map((arg) => parseScalarLiteral(arg));
     if (args.some((arg) => arg === undefined)) {
       unsupported(`Unsupported computed declaration function arguments '${argsRaw}'`);
     }
@@ -1329,7 +1375,8 @@ const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link
     return selectTypeExpr;
   }
 
-  const backlinkMatch = /^\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?$/i.exec(trimmed);
+  const backlinkMatch =
+    /^\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?$/i.exec(trimmed);
   if (backlinkMatch) {
     return {
       kind: "backlink",
@@ -1338,7 +1385,10 @@ const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link
     };
   }
 
-  const selectBacklinkMatch = /^select\s+\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?(?:\s+limit\s+\d+)?$/i.exec(trimmed);
+  const selectBacklinkMatch =
+    /^select\s+\.<([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*is\s+([A-Za-z_][A-Za-z0-9_:]*)\s*\])?(?:\s+limit\s+\d+)?$/i.exec(
+      trimmed,
+    );
   if (selectBacklinkMatch) {
     return {
       kind: "backlink",
@@ -1347,9 +1397,15 @@ const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link
     };
   }
 
-  const selectMatch = /^select\s+\.([A-Za-z_][A-Za-z0-9_]*)(?:\s+filter\s+\.([A-Za-z_][A-Za-z0-9_]*)\s*(=|!=|like|ilike)\s*(.+))?(?:\s+order\s+by\s+\.[A-Za-z_][A-Za-z0-9_]*)?(?:\s+limit\s+\d+)?$/i.exec(trimmed);
+  const selectMatch =
+    /^select\s+\.([A-Za-z_][A-Za-z0-9_]*)(?:\s+filter\s+\.([A-Za-z_][A-Za-z0-9_]*)\s*(=|!=|like|ilike)\s*(.+))?(?:\s+order\s+by\s+\.[A-Za-z_][A-Za-z0-9_]*)?(?:\s+limit\s+\d+)?$/i.exec(
+      trimmed,
+    );
   if (selectMatch) {
-    const expr: Extract<ComputedDef, { kind: "link" }>["expr"] = { kind: "link_ref", link: selectMatch[1] };
+    const expr: Extract<ComputedDef, { kind: "link" }>["expr"] = {
+      kind: "link_ref",
+      link: selectMatch[1],
+    };
     if (selectMatch[2] && selectMatch[3] && selectMatch[4]) {
       const value = parseScalarLiteral(selectMatch[4]);
       if (value === undefined) {
@@ -1373,16 +1429,15 @@ const parseComputedLinkExpr = (text: string): Extract<ComputedDef, { kind: "link
 };
 
 const isComputedLinkNameToken = (token: Token | undefined): token is Token =>
-  token !== undefined && (
-    token.kind === "identifier"
-    || token.kind === "backtick_name"
-    || token.kind === "kw_named"
-    || token.kind === "kw_unreserved"
-    || token.kind === "kw_partial_reserved"
-    || token.kind === "kw_future_reserved"
-    || token.kind === "kw_current_reserved"
-    || token.kind.startsWith("kw_current_reserved_")
-  );
+  token !== undefined &&
+  (token.kind === "identifier" ||
+    token.kind === "backtick_name" ||
+    token.kind === "kw_named" ||
+    token.kind === "kw_unreserved" ||
+    token.kind === "kw_partial_reserved" ||
+    token.kind === "kw_future_reserved" ||
+    token.kind === "kw_current_reserved" ||
+    token.kind.startsWith("kw_current_reserved_"));
 
 const parseComputedSelectTypeLinkExpr = (
   trimmed: string,
@@ -1417,11 +1472,11 @@ const parseComputedSelectTypeLinkExpr = (
 
   const nextKind = peek().kind;
   if (
-    nextKind !== "eof"
-    && nextKind !== "kw_filter"
-    && nextKind !== "kw_order"
-    && nextKind !== "kw_limit"
-    && nextKind !== "kw_offset"
+    nextKind !== "eof" &&
+    nextKind !== "kw_filter" &&
+    nextKind !== "kw_order" &&
+    nextKind !== "kw_limit" &&
+    nextKind !== "kw_offset"
   ) {
     return undefined;
   }
@@ -1443,12 +1498,22 @@ const parseLinkDefaultTargetValues = (text: string): string[] | undefined => {
     return undefined;
   }
 
-  if (statement.filter.kind === "predicate" && statement.filter.op === "=" && typeof statement.filter.value === "string") {
+  if (
+    statement.filter.kind === "predicate" &&
+    statement.filter.op === "=" &&
+    typeof statement.filter.value === "string"
+  ) {
     return [statement.filter.value];
   }
 
-  if (statement.filter.kind === "in_predicate" && statement.filter.op === "in" && statement.filter.values.kind === "set_literal") {
-    return statement.filter.values.values.filter((value): value is string => typeof value === "string");
+  if (
+    statement.filter.kind === "in_predicate" &&
+    statement.filter.op === "in" &&
+    statement.filter.values.kind === "set_literal"
+  ) {
+    return statement.filter.values.values.filter(
+      (value): value is string => typeof value === "string",
+    );
   }
 
   return undefined;
@@ -1457,7 +1522,9 @@ const parseLinkDefaultTargetValues = (text: string): string[] | undefined => {
 // Generalization of parseLinkDefaultTargetValues: capture the filter column
 // and scalar value(s) of a `select T filter .col = <scalar>` link default, so
 // non-string lookups (`filter T.a = 4`) also resolve.
-const parseLinkDefaultFilter = (text: string): { column: string; values: ScalarValue[] } | undefined => {
+const parseLinkDefaultFilter = (
+  text: string,
+): { column: string; values: ScalarValue[] } | undefined => {
   const parsedResult = tryResult(() => parseEdgeQL(stripOuterParens(text)));
   if (!parsedResult.ok) return undefined;
   const statement = parsedResult.value;
@@ -1467,10 +1534,20 @@ const parseLinkDefaultFilter = (text: string): { column: string; values: ScalarV
   const filter = statement.filter;
   const isScalar = (v: unknown): v is ScalarValue =>
     v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
-  if (filter.kind === "predicate" && filter.op === "=" && filter.target.kind === "field" && isScalar(filter.value)) {
+  if (
+    filter.kind === "predicate" &&
+    filter.op === "=" &&
+    filter.target.kind === "field" &&
+    isScalar(filter.value)
+  ) {
     return { column: filter.target.field, values: [filter.value] };
   }
-  if (filter.kind === "in_predicate" && filter.op === "in" && filter.target.kind === "field" && filter.values.kind === "set_literal") {
+  if (
+    filter.kind === "in_predicate" &&
+    filter.op === "in" &&
+    filter.target.kind === "field" &&
+    filter.values.kind === "set_literal"
+  ) {
     const values = filter.values.values.filter(isScalar);
     if (values.length === filter.values.values.length) {
       return { column: filter.target.field, values };
@@ -1487,9 +1564,12 @@ const convertComputedDeclarationToMember = (
     return unsupported("Computed declaration requires an expression");
   }
 
-  const parsedExpr = node.kind === "LinkDeclaration" || exprText.startsWith(".<") || /^\(?\s*select\s+\./i.test(exprText)
-    ? { computedKind: "link" as const, expr: parseComputedLinkExpr(exprText) }
-    : { computedKind: "property" as const, expr: parseComputedPropertyExpr(exprText) };
+  const parsedExpr =
+    node.kind === "LinkDeclaration" ||
+    exprText.startsWith(".<") ||
+    /^\(?\s*select\s+\./i.test(exprText)
+      ? { computedKind: "link" as const, expr: parseComputedLinkExpr(exprText) }
+      : { computedKind: "property" as const, expr: parseComputedPropertyExpr(exprText) };
 
   return {
     kind: "computed",
@@ -1506,10 +1586,10 @@ const convertComputedDeclarationToMember = (
 const parseOnTargetDeleteAction = (text: string): OnTargetDeleteAction => {
   const normalized = text.trim().toLowerCase().replace(/\s+/g, "_");
   if (
-    normalized === "restrict"
-    || normalized === "delete_source"
-    || normalized === "allow"
-    || normalized === "deferred_restrict"
+    normalized === "restrict" ||
+    normalized === "delete_source" ||
+    normalized === "allow" ||
+    normalized === "deferred_restrict"
   ) {
     return normalized;
   }
@@ -1541,11 +1621,11 @@ const parseIndexExpression = (node: IndexDeclarationNode): string => {
       } else if (ch === ")" || ch === "]" || ch === ">") {
         depth -= 1;
       } else if (
-        depth === 0
-        && ch === "o"
-        && content[i + 1] === "n"
-        && (i === 0 || !isIdentifierPart(content[i - 1] ?? ""))
-        && !isIdentifierPart(content[i + 2] ?? "")
+        depth === 0 &&
+        ch === "o" &&
+        content[i + 1] === "n" &&
+        (i === 0 || !isIdentifierPart(content[i - 1] ?? "")) &&
+        !isIdentifierPart(content[i + 2] ?? "")
       ) {
         return i;
       }
@@ -1646,7 +1726,11 @@ const extractSplatStrategyFromLinkProperties = (
   return { strategy, remaining };
 };
 
-const resolveFieldTargetTypeName = (moduleName: string, declaredType: string, enumTypeName?: string): string | undefined => {
+const resolveFieldTargetTypeName = (
+  moduleName: string,
+  declaredType: string,
+  enumTypeName?: string,
+): string | undefined => {
   if (enumTypeName) {
     return normalizeTypeName(enumTypeName, moduleName);
   }
@@ -1729,11 +1813,14 @@ const parseConstraintParams = (
     return undefined;
   }
 
-  const qualifiedConstraintName = normalizeConstraintName(moduleName, qualifiedNameToString(node.name));
+  const qualifiedConstraintName = normalizeConstraintName(
+    moduleName,
+    qualifiedNameToString(node.name),
+  );
   const fallbackNames =
-    constraintParamNames.get(qualifiedConstraintName)
-    ?? defaultConstraintParamNames(qualifiedConstraintName, node.args.length)
-    ?? node.args.map((_, index) => `arg${index + 1}`);
+    constraintParamNames.get(qualifiedConstraintName) ??
+    defaultConstraintParamNames(qualifiedConstraintName, node.args.length) ??
+    node.args.map((_, index) => `arg${index + 1}`);
 
   return node.args.map((arg, index) => ({
     name: arg.name ?? fallbackNames[index] ?? `arg${index + 1}`,
@@ -1770,22 +1857,29 @@ const convertLinkProperty = (
       computed: true,
       exprText,
       computedExpr: parseComputedLinkPropertyExpr(exprText),
-      annotations: (node.body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
+      annotations: (node.body?.annotations ?? []).map((annotation) =>
+        convertAnnotation(moduleName, annotation),
+      ),
     };
   }
 
-  const declaredType = node.typeExpr?.text
-    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
-    ?? unsupported("Link property declaration requires a scalar type");
+  const declaredType =
+    node.typeExpr?.text ??
+    (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined) ??
+    unsupported("Link property declaration requires a scalar type");
   const collection = extractCollectionType(declaredType);
-  const scalarResolution = collection ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
+  const scalarResolution = collection
+    ? { scalar: "json" as const }
+    : scalarRegistry.resolve(declaredType, moduleName);
   if (!scalarResolution) {
     throw new AppError("E_SYNTAX", `Unknown scalar type '${declaredType}'`, 1, 1);
   }
 
   const body: PropertyBodyNode | null = node.body;
   if (body?.using || (body?.extending.length ?? 0) > 0) {
-    unsupported("Link property using/extending clauses are not supported by the new SDL adapter yet");
+    unsupported(
+      "Link property using/extending clauses are not supported by the new SDL adapter yet",
+    );
   }
 
   const constraints = body?.constraints ?? [];
@@ -1803,7 +1897,9 @@ const convertLinkProperty = (
     defaultExprText: body?.default?.text,
     readonly: body?.readonly ?? false,
     collection,
-    annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
+    annotations: (body?.annotations ?? []).map((annotation) =>
+      convertAnnotation(moduleName, annotation),
+    ),
   };
 };
 
@@ -1816,15 +1912,17 @@ const convertPropertyMember = (
 ): PropertyMember => {
   if (node.computed) {
     //unsupported("Computed properties are not supported by the new SDL adapter yet");
-
   }
 
-  const declaredType = overrideDeclaredType
-    ?? node.typeExpr?.text
-    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
-    ?? unsupported("Property declaration requires a scalar type");
+  const declaredType =
+    overrideDeclaredType ??
+    node.typeExpr?.text ??
+    (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined) ??
+    unsupported("Property declaration requires a scalar type");
   const collection = extractCollectionType(declaredType);
-  const scalarResolution = collection ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
+  const scalarResolution = collection
+    ? { scalar: "json" as const }
+    : scalarRegistry.resolve(declaredType, moduleName);
   if (!scalarResolution) {
     throw new AppError("E_SYNTAX", `Unknown scalar type '${declaredType}'`, 1, 1);
   }
@@ -1852,8 +1950,12 @@ const convertPropertyMember = (
     defaultExprText: body?.default?.text,
     readonly: body?.readonly ?? false,
     collection,
-    annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
-    targetTypeName: collection ? undefined : resolveFieldTargetTypeName(moduleName, declaredType, scalarResolution.enumTypeName),
+    annotations: (body?.annotations ?? []).map((annotation) =>
+      convertAnnotation(moduleName, annotation),
+    ),
+    targetTypeName: collection
+      ? undefined
+      : resolveFieldTargetTypeName(moduleName, declaredType, scalarResolution.enumTypeName),
     enumValues: scalarResolution.enumValues,
     enumTypeName: scalarResolution.enumTypeName,
     splatStrategy: extractSplatStrategyOption(body?.options),
@@ -1874,10 +1976,11 @@ const convertLinkMember = (
     unsupported("Computed links are not supported by the new SDL adapter yet");
   }
 
-  const declaredType = node.targetType?.text
-    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
-    ?? inheritedTarget
-    ?? unsupported("Link declaration requires a target type");
+  const declaredType =
+    node.targetType?.text ??
+    (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined) ??
+    inheritedTarget ??
+    unsupported("Link declaration requires a target type");
   const body: LinkBodyNode | null = node.body;
   if (body?.using || (body?.extending.length ?? 0) > 0) {
     unsupported("Link using/extending clauses are not supported by the new SDL adapter yet");
@@ -1891,8 +1994,11 @@ const convertLinkMember = (
     unsupported("Link-level indexes are not supported by the new SDL adapter yet");
   }
 
-  const { strategy: linkSplatFromProps, remaining: storedProperties } = extractSplatStrategyFromLinkProperties(body?.properties ?? []);
-  const linkProperties = storedProperties.map((property) => convertLinkProperty(moduleName, property, scalarRegistry));
+  const { strategy: linkSplatFromProps, remaining: storedProperties } =
+    extractSplatStrategyFromLinkProperties(body?.properties ?? []);
+  const linkProperties = storedProperties.map((property) =>
+    convertLinkProperty(moduleName, property, scalarRegistry),
+  );
   const multi = node.cardinality === "multi";
 
   return {
@@ -1903,17 +2009,26 @@ const convertLinkMember = (
     multi,
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
-    defaultTargetValues: body?.default ? parseLinkDefaultTargetValues(body.default.text) : undefined,
+    defaultTargetValues: body?.default
+      ? parseLinkDefaultTargetValues(body.default.text)
+      : undefined,
     defaultTargetFilter: body?.default ? parseLinkDefaultFilter(body.default.text) : undefined,
     defaultExprText: body?.default?.text,
     readonly: body?.readonly ?? false,
-    onTargetDelete: body?.onTargetDelete ? parseOnTargetDeleteAction(body.onTargetDelete) : undefined,
-    annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
+    onTargetDelete: body?.onTargetDelete
+      ? parseOnTargetDeleteAction(body.onTargetDelete)
+      : undefined,
+    annotations: (body?.annotations ?? []).map((annotation) =>
+      convertAnnotation(moduleName, annotation),
+    ),
     properties: linkProperties,
     splatStrategy: linkSplatFromProps,
-    constraints: (body?.constraints ?? []).length > 0
-      ? (body?.constraints ?? []).map((constraint) => convertConstraint(moduleName, constraint, constraintParamNames))
-      : undefined,
+    constraints:
+      (body?.constraints ?? []).length > 0
+        ? (body?.constraints ?? []).map((constraint) =>
+            convertConstraint(moduleName, constraint, constraintParamNames),
+          )
+        : undefined,
   };
 };
 
@@ -1923,10 +2038,11 @@ const convertInferredLinkMember = (
   constraintParamNames: Map<string, string[]>,
   overrideDeclaredType?: string,
 ): LinkMember => {
-  const declaredType = overrideDeclaredType
-    ?? node.typeExpr?.text
-    ?? (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined)
-    ?? unsupported("Link declaration requires a target type");
+  const declaredType =
+    overrideDeclaredType ??
+    node.typeExpr?.text ??
+    (node.declaredType ? qualifiedNameToString(node.declaredType) : undefined) ??
+    unsupported("Link declaration requires a target type");
 
   const body = node.body;
   if (body?.using) {
@@ -1945,16 +2061,23 @@ const convertInferredLinkMember = (
     multi,
     overloaded: node.overloaded,
     hasDefault: body?.default !== null && body?.default !== undefined,
-    defaultTargetValues: body?.default ? parseLinkDefaultTargetValues(body.default.text) : undefined,
+    defaultTargetValues: body?.default
+      ? parseLinkDefaultTargetValues(body.default.text)
+      : undefined,
     defaultTargetFilter: body?.default ? parseLinkDefaultFilter(body.default.text) : undefined,
     defaultExprText: body?.default?.text,
     readonly: body?.readonly ?? false,
-    annotations: (body?.annotations ?? []).map((annotation) => convertAnnotation(moduleName, annotation)),
+    annotations: (body?.annotations ?? []).map((annotation) =>
+      convertAnnotation(moduleName, annotation),
+    ),
     properties: [],
     splatStrategy: extractSplatStrategyOption(body?.options),
-    constraints: (body?.constraints ?? []).length > 0
-      ? (body?.constraints ?? []).map((constraint) => convertConstraint(moduleName, constraint, constraintParamNames))
-      : undefined,
+    constraints:
+      (body?.constraints ?? []).length > 0
+        ? (body?.constraints ?? []).map((constraint) =>
+            convertConstraint(moduleName, constraint, constraintParamNames),
+          )
+        : undefined,
   };
 };
 
@@ -1978,10 +2101,18 @@ const convertDeclarationToMember = (
         throw err;
       }
     }
-    const inheritedTarget = (declaration.targetType?.text || declaration.declaredType)
-      ? undefined
-      : inheritanceResolver.resolve(ownerTypeFullName, qualifiedNameToString(declaration.name))?.target;
-    return convertLinkMember(moduleName, declaration, scalarRegistry, inheritedTarget, constraintParamNames);
+    const inheritedTarget =
+      declaration.targetType?.text || declaration.declaredType
+        ? undefined
+        : inheritanceResolver.resolve(ownerTypeFullName, qualifiedNameToString(declaration.name))
+            ?.target;
+    return convertLinkMember(
+      moduleName,
+      declaration,
+      scalarRegistry,
+      inheritedTarget,
+      constraintParamNames,
+    );
   }
 
   if (declaration.kind === "PropertyDeclaration") {
@@ -1996,10 +2127,14 @@ const convertDeclarationToMember = (
       }
     }
 
-    let declaredType = declaration.typeExpr?.text
-      ?? (declaration.declaredType ? qualifiedNameToString(declaration.declaredType) : undefined);
+    let declaredType =
+      declaration.typeExpr?.text ??
+      (declaration.declaredType ? qualifiedNameToString(declaration.declaredType) : undefined);
     if (declaredType === undefined) {
-      const inherited = inheritanceResolver.resolve(ownerTypeFullName, qualifiedNameToString(declaration.name));
+      const inherited = inheritanceResolver.resolve(
+        ownerTypeFullName,
+        qualifiedNameToString(declaration.name),
+      );
       declaredType = inherited?.target;
     }
     if (declaredType === undefined) {
@@ -2020,21 +2155,27 @@ const convertDeclarationToMember = (
       }
       throw unsupported("Property or link declaration requires a declared type");
     }
-    const scalarResolution = extractCollectionType(declaredType) ? { scalar: "json" as const } : scalarRegistry.resolve(declaredType, moduleName);
+    const scalarResolution = extractCollectionType(declaredType)
+      ? { scalar: "json" as const }
+      : scalarRegistry.resolve(declaredType, moduleName);
     const inferredLink =
-      !declaration.explicitKeyword
-      && !scalarResolution
-      && (
-        objectTypeNames.has(normalizeTypeName(declaredType, moduleName))
-        || declaredType.includes("::")
-        || declaredType.length > 0
-      );
+      !declaration.explicitKeyword &&
+      !scalarResolution &&
+      (objectTypeNames.has(normalizeTypeName(declaredType, moduleName)) ||
+        declaredType.includes("::") ||
+        declaredType.length > 0);
 
     if (inferredLink) {
       return convertInferredLinkMember(moduleName, declaration, constraintParamNames, declaredType);
     }
 
-    return convertPropertyMember(moduleName, declaration, scalarRegistry, constraintParamNames, declaredType);
+    return convertPropertyMember(
+      moduleName,
+      declaration,
+      scalarRegistry,
+      constraintParamNames,
+      declaredType,
+    );
   }
 
   if (declaration.kind === "ConstraintDeclaration") {
@@ -2067,7 +2208,13 @@ const convertTypeDeclaration = (
   const annotations: AnnotationDef[] = [];
   const indexes: Array<{ expr: string }> = [];
   const members: TypeMember[] = [];
-  const typeConstraints: Array<{ name: string; exprText: string; fieldRefs: string[]; delegated?: boolean; exceptExpr?: string }> = [];
+  const typeConstraints: Array<{
+    name: string;
+    exprText: string;
+    fieldRefs: string[];
+    delegated?: boolean;
+    exceptExpr?: string;
+  }> = [];
 
   for (const declaration of node.body?.declarations ?? []) {
     if (declaration.kind === "AnnotationAssignment") {
@@ -2091,7 +2238,10 @@ const convertTypeDeclaration = (
       // expression text. We extract `.X` field references so cardinality
       // inference can check whether a filter pins all of them. Only minimal
       // metadata is retained — the full expression isn't evaluated here.
-      const constraintName = normalizeConstraintName(typeModuleName, qualifiedNameToString(declaration.name));
+      const constraintName = normalizeConstraintName(
+        typeModuleName,
+        qualifiedNameToString(declaration.name),
+      );
       const exprText = declaration.onExpr?.text ?? "";
       const fieldRefs: string[] = [];
       const seen = new Set<string>();
@@ -2106,7 +2256,13 @@ const convertTypeDeclaration = (
           fieldRefs.push(name);
         }
       }
-      typeConstraints.push({ name: constraintName, exprText, fieldRefs, delegated: declaration.delegated, exceptExpr: declaration.exceptExpr?.text.trim() });
+      typeConstraints.push({
+        name: constraintName,
+        exprText,
+        fieldRefs,
+        delegated: declaration.delegated,
+        exceptExpr: declaration.exceptExpr?.text.trim(),
+      });
       continue;
     }
 
@@ -2129,7 +2285,9 @@ const convertTypeDeclaration = (
     module: typeModuleName,
     name: typeName,
     abstract: node.abstract,
-    extends: node.extends.map((base) => normalizeTypeName(qualifiedNameToString(base), typeModuleName)),
+    extends: node.extends.map((base) =>
+      normalizeTypeName(qualifiedNameToString(base), typeModuleName),
+    ),
     annotations,
     indexes,
     members,
@@ -2172,7 +2330,9 @@ const convertAbstractConstraint = (
     module: resolvedName.moduleName,
     name,
     params,
-    annotations: node.annotations.map((annotation) => convertAnnotation(resolvedName.moduleName, annotation)),
+    annotations: node.annotations.map((annotation) =>
+      convertAnnotation(resolvedName.moduleName, annotation),
+    ),
   };
 };
 
@@ -2215,7 +2375,9 @@ const convertFunctionDeclaration = (
     returnOptional: node.returnOptional,
     returnSetOf: node.returnSetOf,
     volatility: node.volatility ?? undefined,
-    annotations: node.annotations.map((annotation) => convertAnnotation(resolvedName.moduleName, annotation)),
+    annotations: node.annotations.map((annotation) =>
+      convertAnnotation(resolvedName.moduleName, annotation),
+    ),
     body: {
       language: "edgeql",
       text: node.body.text,
@@ -2342,8 +2504,9 @@ const buildPointerInheritance = (documents: ParsedModuleDocument[]): PointerInhe
       for (const member of declaration.body?.declarations ?? []) {
         if (member.kind === "LinkDeclaration") {
           if (member.computed) continue;
-          const declaredType = member.targetType?.text
-            ?? (member.declaredType ? qualifiedNameToString(member.declaredType) : undefined);
+          const declaredType =
+            member.targetType?.text ??
+            (member.declaredType ? qualifiedNameToString(member.declaredType) : undefined);
           if (declaredType === undefined) continue;
           pointers.set(qualifiedNameToString(member.name), {
             target: declaredType,
@@ -2353,8 +2516,9 @@ const buildPointerInheritance = (documents: ParsedModuleDocument[]): PointerInhe
           });
         } else if (member.kind === "PropertyDeclaration") {
           if (member.computed) continue;
-          const declaredType = member.typeExpr?.text
-            ?? (member.declaredType ? qualifiedNameToString(member.declaredType) : undefined);
+          const declaredType =
+            member.typeExpr?.text ??
+            (member.declaredType ? qualifiedNameToString(member.declaredType) : undefined);
           if (declaredType === undefined) continue;
           pointers.set(qualifiedNameToString(member.name), {
             target: declaredType,
@@ -2444,7 +2608,10 @@ export const parseDeclarativeSchema = (
       if (declaration.kind === "ConstraintDeclaration" && declaration.abstract) {
         const resolvedName = resolveDeclarationName(parsedModule.moduleName, declaration.name);
         const name = normalizeConstraintName(resolvedName.moduleName, resolvedName.localName);
-        constraintParamNames.set(name, declaration.args.map((arg, index) => arg.name ?? `arg${index + 1}`));
+        constraintParamNames.set(
+          name,
+          declaration.args.map((arg, index) => arg.name ?? `arg${index + 1}`),
+        );
       }
     }
   }
@@ -2487,14 +2654,21 @@ export const parseDeclarativeSchema = (
         }
 
         case "AbstractAnnotation": {
-          const abstractAnnotation = convertAbstractAnnotation(parsedModule.moduleName, declaration);
+          const abstractAnnotation = convertAbstractAnnotation(
+            parsedModule.moduleName,
+            declaration,
+          );
           registerModule(abstractAnnotation.module);
           abstractAnnotations.push(abstractAnnotation);
           break;
         }
 
         case "ConstraintDeclaration": {
-          const constraint = convertAbstractConstraint(parsedModule.moduleName, declaration, constraintParamNames);
+          const constraint = convertAbstractConstraint(
+            parsedModule.moduleName,
+            declaration,
+            constraintParamNames,
+          );
           registerModule(constraint.module);
           constraints.push(constraint);
           break;
@@ -2515,7 +2689,8 @@ export const parseDeclarativeSchema = (
         }
 
         case "IgnoredDeclaration": {
-          const declarationKind = (declaration as { declarationKind?: "global" | "permission" }).declarationKind;
+          const declarationKind = (declaration as { declarationKind?: "global" | "permission" })
+            .declarationKind;
           const name = (declaration as { name?: string }).name;
           const exprText = (declaration as { exprText?: string }).exprText;
           if (declarationKind === "permission" && name) {
@@ -2529,7 +2704,9 @@ export const parseDeclarativeSchema = (
         }
 
         default:
-          unsupported(`Unsupported top-level declaration '${(declaration as TopLevelDeclarationNode).kind}'`);
+          unsupported(
+            `Unsupported top-level declaration '${(declaration as TopLevelDeclarationNode).kind}'`,
+          );
       }
     }
   }

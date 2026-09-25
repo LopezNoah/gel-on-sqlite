@@ -20,15 +20,11 @@ describe("name mangling (edb/schema/name.py)", () => {
     expect(mangleName("__::name")).toBe("__|name");
     // Round-tripping a view type name through a qualifier (note '|'->'||',
     // '@'->'&', '::'->'|'). From test_edgeql_select_computable_33.
-    expect(mangleName("__derived__::default|User@view~1")).toBe(
-      "__derived__|default||User&view~1",
-    );
+    expect(mangleName("__derived__::default|User@view~1")).toBe("__derived__|default||User&view~1");
   });
 
   it("get_specialized_name: mangle(base)@mangle(quals...)", () => {
-    expect(getSpecializedName("__::name", "default::User")).toBe(
-      "__|name@default|User",
-    );
+    expect(getSpecializedName("__::name", "default::User")).toBe("__|name@default|User");
   });
 });
 
@@ -38,21 +34,19 @@ describe("pointer full-names (debug PathId rendering)", () => {
     expect(pointerFullName("default", "name", "default::User")).toBe(
       "default::__|name@default|User",
     );
-    expect(pointerFullName("default", "id", "default::Issue")).toBe(
-      "default::__|id@default|Issue",
-    );
+    expect(pointerFullName("default", "id", "default::Issue")).toBe("default::__|id@default|Issue");
   });
 
   it("renders a computed pointer rooted in a view type", () => {
-    expect(
-      pointerFullName("__derived__", "todo_ids", "__derived__::default|User@view~1"),
-    ).toBe("__derived__::__|todo_ids@__derived__|default||User&view~1");
+    expect(pointerFullName("__derived__", "todo_ids", "__derived__::default|User@view~1")).toBe(
+      "__derived__::__|todo_ids@__derived__|default||User&view~1",
+    );
   });
 
   it("derivedPointerName is the __derived__-module shorthand", () => {
-    expect(
-      derivedPointerName("todo_ids", "__derived__::default|User@view~1"),
-    ).toBe("__derived__::__|todo_ids@__derived__|default||User&view~1");
+    expect(derivedPointerName("todo_ids", "__derived__::default|User@view~1")).toBe(
+      "__derived__::__|todo_ids@__derived__|default||User&view~1",
+    );
   });
 });
 
@@ -63,9 +57,7 @@ describe("derived type/expr names", () => {
 
   it("deriveViewTypeName specializes a base type with a view alias", () => {
     // From test_edgeql_select_computable_33: SELECT User { ... } result type.
-    expect(deriveViewTypeName("default::User", "view~1")).toBe(
-      "__derived__::default|User@view~1",
-    );
+    expect(deriveViewTypeName("default::User", "view~1")).toBe("__derived__::default|User@view~1");
   });
 });
 

@@ -21,21 +21,31 @@ interface CorpusEntry {
   source: string;
 }
 
-const corpus: CorpusEntry[] = JSON.parse(
-  fs.readFileSync(path.join(outdir, "corpus.json"), "utf8"),
-);
+const corpus: CorpusEntry[] = JSON.parse(fs.readFileSync(path.join(outdir, "corpus.json"), "utf8"));
 
 const results = corpus.map(({ id, source }) => {
   try {
     const stmts = parseEdgeQLScript(source);
-    return { id, ours_ok: true, ours_kinds: stmts.map((s) => s.kind), ours_err: null as string | null };
+    return {
+      id,
+      ours_ok: true,
+      ours_kinds: stmts.map((s) => s.kind),
+      ours_err: null as string | null,
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { id, ours_ok: false, ours_kinds: [] as string[], ours_err: msg.split("\n")[0].slice(0, 200) };
+    return {
+      id,
+      ours_ok: false,
+      ours_kinds: [] as string[],
+      ours_err: msg.split("\n")[0].slice(0, 200),
+    };
   }
 });
 
 fs.writeFileSync(path.join(outdir, "ours.json"), JSON.stringify(results, null, 1));
 const ok = results.filter((r) => r.ours_ok).length;
-console.log(`sqlite-ts parsed ${corpus.length} snippets: accepts ${ok}, rejects ${corpus.length - ok}`);
+console.log(
+  `sqlite-ts parsed ${corpus.length} snippets: accepts ${ok}, rejects ${corpus.length - ok}`,
+);
 console.log(`  wrote ${path.join(outdir, "ours.json")}`);

@@ -176,7 +176,10 @@ export interface ArrayLiteralValue {
   values: ScalarValue[];
 }
 
-export type TupleLiteralElementValue = ScalarValue | TupleLiteralElementArray | TupleLiteralElementObject;
+export type TupleLiteralElementValue =
+  | ScalarValue
+  | TupleLiteralElementArray
+  | TupleLiteralElementObject;
 export type TupleLiteralElementArray = Array<TupleLiteralElementValue>;
 export interface TupleLiteralElementObject {
   [key: string]: TupleLiteralElementValue;
@@ -587,7 +590,19 @@ export type FreeObjectExpr =
     }
   | {
       kind: "compare";
-      op: "=" | "!=" | ">" | "<" | ">=" | "<=" | "?=" | "?!=" | "like" | "ilike" | "not_like" | "not_ilike";
+      op:
+        | "="
+        | "!="
+        | ">"
+        | "<"
+        | ">="
+        | "<="
+        | "?="
+        | "?!="
+        | "like"
+        | "ilike"
+        | "not_like"
+        | "not_ilike";
       left: FreeObjectExpr;
       right: FreeObjectExpr;
     }
@@ -884,7 +899,12 @@ export interface ForStatement {
   variable: string;
   optional?: boolean;
   iteratorExpr: FreeObjectExpr;
-  body: InsertStatement | SelectStatement | SelectExprStatement | SelectFreeStatement | ForStatement;
+  body:
+    | InsertStatement
+    | SelectStatement
+    | SelectExprStatement
+    | SelectFreeStatement
+    | ForStatement;
   pos: SourcePos;
 }
 
@@ -1048,7 +1068,8 @@ export type Statement = (
   | DDLStatement
   | GroupStatement
   | DescribeStatement
-  | ExplainStatement) & {
+  | ExplainStatement
+) & {
   with?: WithBinding[];
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];

@@ -2,10 +2,25 @@ import { createHttpServer } from "./http/server.js";
 import { openSQLite } from "./runtime/database.js";
 import { executeQuery, executeQueryWithTrace } from "./runtime/engine.js";
 import { applySchemaSQL } from "./codegen/sql.js";
-import { applyMigrationPlan, planSchemaMigration, renderMigrationSQL } from "./schema/migrations.js";
+import {
+  applyMigrationPlan,
+  planSchemaMigration,
+  renderMigrationSQL,
+} from "./schema/migrations.js";
 import { SchemaSnapshot } from "./schema/schema.js";
-import { declarativeSchemaFromTypeDefs, renderDeclarativeSchema, schemaSnapshotFromDeclarative } from "./schema/uiSchema.js";
-import { bootstrapGelSchema, deserializeSchemaFromGelTables, deserializeSchemaFromInstdata, ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } from "./schema/gel_persistence.js";
+import {
+  declarativeSchemaFromTypeDefs,
+  renderDeclarativeSchema,
+  schemaSnapshotFromDeclarative,
+} from "./schema/uiSchema.js";
+import {
+  bootstrapGelSchema,
+  deserializeSchemaFromGelTables,
+  deserializeSchemaFromInstdata,
+  ensureGelSchemaTables,
+  serializeSchemaToGelTables,
+  serializeSchemaToInstdata,
+} from "./schema/gel_persistence.js";
 import type { TypeDef } from "./types.js";
 import { parseDeclarativeSchema } from "./schema/sdl_adapter.js";
 
@@ -37,9 +52,7 @@ export {
   renderSchemaModelModule,
 } from "./codegen/schema.js";
 
-export {
-  resolveSchemaModelForCompile,
-} from "./codegen/schema_loader.js";
+export { resolveSchemaModelForCompile } from "./codegen/schema_loader.js";
 
 const baseTypes: TypeDef[] = [
   {
@@ -75,10 +88,11 @@ const initialSchemaSource = `module default {
 
 const runtime = openSQLite(process.env.SQLITE_FILE ?? ":memory:");
 ensureGelSchemaTables(runtime.db);
-const persistedSchema = deserializeSchemaFromInstdata(runtime.db) ?? deserializeSchemaFromGelTables(runtime.db);
+const persistedSchema =
+  deserializeSchemaFromInstdata(runtime.db) ?? deserializeSchemaFromGelTables(runtime.db);
 
 let schemaSource = initialSchemaSource;
-let declarativeSchema = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true});
+let declarativeSchema = parseDeclarativeSchema(schemaSource, { legacySyntaxCompat: true });
 let schema = schemaSnapshotFromDeclarative(declarativeSchema);
 
 if (persistedSchema) {
@@ -102,7 +116,7 @@ const app = createHttpServer({
   execute: (query) => executeQuery(runtime.db, schema, query),
   executeWithTrace: (query) => executeQueryWithTrace(runtime.db, schema, query),
   applySchemaSource: (source) => {
-    const nextDeclarative = parseDeclarativeSchema(source, { legacySyntaxCompat: true});
+    const nextDeclarative = parseDeclarativeSchema(source, { legacySyntaxCompat: true });
     const migrationPlan = planSchemaMigration(declarativeSchema, nextDeclarative);
     applyMigrationPlan(runtime.db, migrationPlan);
 
@@ -120,7 +134,7 @@ const app = createHttpServer({
     };
   },
   planSchemaSource: (source) => {
-    const nextDeclarative = parseDeclarativeSchema(source, { legacySyntaxCompat: true});
+    const nextDeclarative = parseDeclarativeSchema(source, { legacySyntaxCompat: true });
     const migrationPlan = planSchemaMigration(declarativeSchema, nextDeclarative);
 
     return {

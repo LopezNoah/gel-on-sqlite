@@ -28,7 +28,16 @@ const buildSchema = (name) => {
 const formatSql = (sql) => {
   // Light pretty-print: break before major SQL keywords so the structure is
   // readable in the terminal without dragging in a real formatter.
-  const keywords = ["FROM", "WHERE", "ORDER BY", "GROUP BY", "LIMIT", "OFFSET", "UNION ALL", "JOIN"];
+  const keywords = [
+    "FROM",
+    "WHERE",
+    "ORDER BY",
+    "GROUP BY",
+    "LIMIT",
+    "OFFSET",
+    "UNION ALL",
+    "JOIN",
+  ];
   let out = sql;
   for (const kw of keywords) {
     out = out.split(` ${kw} `).join(`\n  ${kw} `);
@@ -65,11 +74,7 @@ dumpQuery(
   `SELECT User { name, deck: { name, cost } }`,
 );
 
-dumpQuery(
-  "L7903 backlink {owners: {name}}",
-  cards,
-  `SELECT Card { name, owners: { name } }`,
-);
+dumpQuery("L7903 backlink {owners: {name}}", cards, `SELECT Card { name, owners: { name } }`);
 
 dumpQuery(
   "L7768 link_aggregate sum(.deck.cost)",
@@ -81,11 +86,11 @@ dumpQuery(
   "L10791 select_expr ORDER BY",
   cards,
   `SELECT Card.cost ORDER BY Card.cost DESC`,
-  "select_expr IR is evaluated row-by-row by materializeSelectExprRows; the\n"
-  + "top-level compileToSQL emits a placeholder. The L10791 win lives in the\n"
-  + "runtime: when ORDER BY matches the SELECT entry, the row values ARE the\n"
-  + "sort keys, so engine.ts sorts the JS array directly instead of re-evaluating\n"
-  + "the IR per row.",
+  "select_expr IR is evaluated row-by-row by materializeSelectExprRows; the\n" +
+    "top-level compileToSQL emits a placeholder. The L10791 win lives in the\n" +
+    "runtime: when ORDER BY matches the SELECT entry, the row values ARE the\n" +
+    "sort keys, so engine.ts sorts the JS array directly instead of re-evaluating\n" +
+    "the IR per row.",
 );
 
 // ─── Access-policy projection (synthetic — SDL adapter doesn't parse `access
@@ -111,7 +116,12 @@ console.log(`\nEdgeQL: ${policyQuery}`);
 console.log("\nNo access policy:");
 console.log(`  IR columns: ${JSON.stringify(baselineIR.columns)}`);
 console.log("  SQL:");
-console.log(formatSql(baselineSql.sql).split("\n").map((l) => "    " + l).join("\n"));
+console.log(
+  formatSql(baselineSql.sql)
+    .split("\n")
+    .map((l) => "    " + l)
+    .join("\n"),
+);
 
 // With a policy referencing two fields the shape DOESN'T ask for (`element`,
 // `cost`) plus a literal — exercises all three condition kinds.
@@ -134,10 +144,17 @@ const policySnapshot = schemaSnapshotFromDeclarative(cardsDecl);
 const policyIR = compileToIR(policySnapshot, parseEdgeQL(policyQuery));
 const policySql = compileToSQL(policyIR);
 
-console.log("\nWith policy `allow select using (.element = global current_element and .cost = 1)`:");
+console.log(
+  "\nWith policy `allow select using (.element = global current_element and .cost = 1)`:",
+);
 console.log(`  IR columns: ${JSON.stringify(policyIR.columns)}  ← element & cost added`);
 console.log("  SQL:");
-console.log(formatSql(policySql.sql).split("\n").map((l) => "    " + l).join("\n"));
+console.log(
+  formatSql(policySql.sql)
+    .split("\n")
+    .map((l) => "    " + l)
+    .join("\n"),
+);
 console.log("");
 console.log("`element` and `cost` are projected into the SELECT even though the user only");
 console.log("asked for `{name}` — semantic.ts walks every policy condition and adds the");

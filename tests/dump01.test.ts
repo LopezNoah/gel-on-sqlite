@@ -7,12 +7,13 @@ describe("TestDump01", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "dump01_test",
-      setup: "dump01_setup"
+      setup: "dump01_setup",
     });
   });
 
   it("should expose object type annotations via schema::ObjectType", () => {
-    h.assertQueryResult(`
+    h.assertQueryResult(
+      `
       WITH MODULE schema
       SELECT ObjectType {
         name,
@@ -26,42 +27,44 @@ describe("TestDump01", () => {
         AND
         .name LIKE 'default::%'
       ORDER BY .name;
-    `, [
-      {
-        name: "default::A",
-        annotations: [{ name: "std::title", "@value": "A" }],
-      },
-      {
-        name: "default::B",
-        annotations: [{ name: "std::title", "@value": "B" }],
-      },
-      {
-        name: "default::C",
-        annotations: [{ name: "std::title", "@value": "C" }],
-      },
-      {
-        name: "default::D",
-        annotations: [
-          { name: "default::heritable_user_anno", "@value": "all D" },
-          { name: "default::user_anno", "@value": "D only" },
-          { name: "std::title", "@value": "D" },
-        ],
-      },
-      {
-        name: "default::E",
-        annotations: [
-          { name: "default::heritable_user_anno", "@value": "all D" },
-          { name: "std::title", "@value": "E" },
-        ],
-      },
-      {
-        name: "default::F",
-        annotations: [
-          { name: "default::heritable_user_anno", "@value": "all D" },
-          { name: "std::title", "@value": "F" },
-        ],
-      },
-    ]);
+    `,
+      [
+        {
+          name: "default::A",
+          annotations: [{ name: "std::title", "@value": "A" }],
+        },
+        {
+          name: "default::B",
+          annotations: [{ name: "std::title", "@value": "B" }],
+        },
+        {
+          name: "default::C",
+          annotations: [{ name: "std::title", "@value": "C" }],
+        },
+        {
+          name: "default::D",
+          annotations: [
+            { name: "default::heritable_user_anno", "@value": "all D" },
+            { name: "default::user_anno", "@value": "D only" },
+            { name: "std::title", "@value": "D" },
+          ],
+        },
+        {
+          name: "default::E",
+          annotations: [
+            { name: "default::heritable_user_anno", "@value": "all D" },
+            { name: "std::title", "@value": "E" },
+          ],
+        },
+        {
+          name: "default::F",
+          annotations: [
+            { name: "default::heritable_user_anno", "@value": "all D" },
+            { name: "std::title", "@value": "F" },
+          ],
+        },
+      ],
+    );
   });
 
   it("should expose prop and link annotations", () => {
@@ -424,10 +427,7 @@ describe("TestDump01", () => {
       [
         {
           name: "default::UserEnum",
-          ancestors: [
-            { name: "std::anyenum" },
-            { name: "std::anyscalar" },
-          ],
+          ancestors: [{ name: "std::anyenum" }, { name: "std::anyscalar" }],
           constraints: [],
         },
         {
@@ -449,10 +449,7 @@ describe("TestDump01", () => {
         },
         {
           name: "default::UserStr",
-          ancestors: [
-            { name: "std::str" },
-            { name: "std::anyscalar" },
-          ],
+          ancestors: [{ name: "std::str" }, { name: "std::anyscalar" }],
           constraints: [
             {
               name: "std::max_len_value",
@@ -704,13 +701,15 @@ describe("TestDump01", () => {
         p_duration,
       };
       `,
-      [{
-        p_datetime: "2018-05-07T20:01:22.306916+00:00",
-        p_local_datetime: "2018-05-07T20:01:22.306916",
-        p_local_date: "2018-05-07",
-        p_local_time: "20:01:22.306916",
-        p_duration: "20 hrs",
-      }],
+      [
+        {
+          p_datetime: "2018-05-07T20:01:22.306916+00:00",
+          p_local_datetime: "2018-05-07T20:01:22.306916",
+          p_local_date: "2018-05-07",
+          p_local_time: "20:01:22.306916",
+          p_duration: "20 hrs",
+        },
+      ],
     );
 
     h.assertQueryResult(
@@ -761,14 +760,8 @@ describe("TestDump01", () => {
       `,
       [
         {
-          p_datetime: [
-            "2018-05-07T20:01:22.306916+00:00",
-            "2019-05-07T20:01:22.306916+00:00",
-          ],
-          p_local_datetime: [
-            "2018-05-07T20:01:22.306916",
-            "2019-05-07T20:01:22.306916",
-          ],
+          p_datetime: ["2018-05-07T20:01:22.306916+00:00", "2019-05-07T20:01:22.306916+00:00"],
+          p_local_datetime: ["2018-05-07T20:01:22.306916", "2019-05-07T20:01:22.306916"],
           p_local_date: ["2018-05-07", "2019-05-07"],
           p_local_time: ["20:01:22.306916", "20:02:22.306916"],
           p_duration: ["20 hrs", "20 sec"],
@@ -789,15 +782,22 @@ describe("TestDump01", () => {
   });
 
   it("should store multi properties and overloaded link props in tables", () => {
-    const bColumns = h.db.prepare('PRAGMA table_info("default__b")').all() as Array<{ name: string; type: string }>;
+    const bColumns = h.db.prepare('PRAGMA table_info("default__b")').all() as Array<{
+      name: string;
+      type: string;
+    }>;
     const bTypes = new Map(bColumns.map((column) => [column.name, column.type] as const));
     expect(bTypes.get("p_bool")).toBe("TEXT");
     expect(bTypes.get("p_json")).toBe("TEXT");
 
-    const eSingleLinkColumns = h.db.prepare('PRAGMA table_info("default__e__single_link")').all() as Array<{ name: string }>;
+    const eSingleLinkColumns = h.db
+      .prepare('PRAGMA table_info("default__e__single_link")')
+      .all() as Array<{ name: string }>;
     expect(eSingleLinkColumns.map((column) => column.name)).toContain("lp0");
 
-    const eMultiLinkColumns = h.db.prepare('PRAGMA table_info("default__e__multi_link")').all() as Array<{ name: string }>;
+    const eMultiLinkColumns = h.db
+      .prepare('PRAGMA table_info("default__e__multi_link")')
+      .all() as Array<{ name: string }>;
     expect(eMultiLinkColumns.map((column) => column.name)).toContain("lp1");
   });
 
@@ -853,19 +853,12 @@ describe("TestDump01", () => {
         {
           num: 2,
           single_link: null,
-          multi_link: [
-            { val: "D01" },
-            { val: "D02" },
-          ],
+          multi_link: [{ val: "D01" }, { val: "D02" }],
         },
         {
           num: 3,
           single_link: { val: "D00" },
-          multi_link: [
-            { val: "D01" },
-            { val: "D02" },
-            { val: "D03" },
-          ],
+          multi_link: [{ val: "D01" }, { val: "D02" }, { val: "D03" }],
         },
       ],
     );
@@ -899,19 +892,12 @@ describe("TestDump01", () => {
         {
           num: 6,
           single_link: null,
-          multi_link: [
-            { val: "E01" },
-            { val: "E02" },
-          ],
+          multi_link: [{ val: "E01" }, { val: "E02" }],
         },
         {
           num: 7,
           single_link: { val: "E00" },
-          multi_link: [
-            { val: "E01" },
-            { val: "E02" },
-            { val: "E03" },
-          ],
+          multi_link: [{ val: "E01" }, { val: "E02" }, { val: "E03" }],
         },
       ],
     );
@@ -935,11 +921,7 @@ describe("TestDump01", () => {
         {
           num: 8,
           single_link: { val: "F00" },
-          multi_link: [
-            { val: "F01" },
-            { val: "F02" },
-            { val: "F03" },
-          ],
+          multi_link: [{ val: "F01" }, { val: "F02" }, { val: "F03" }],
         },
       ],
     );
@@ -1277,9 +1259,7 @@ describe("TestDump01", () => {
       [
         {
           ck: { typename: "default::C" },
-          stw: [
-            { name: "name0", typename: "default::S" },
-          ],
+          stw: [{ name: "name0", typename: "default::S" }],
         },
         {
           ck: { typename: "default::K" },

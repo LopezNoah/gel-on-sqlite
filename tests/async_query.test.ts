@@ -92,8 +92,16 @@ describe("executeSelectAsync (Tier 1: await-at-edge)", () => {
 
   it("loadSchemaAsync reconstructs a functionally-equivalent schema", async () => {
     const loaded = await loadSchemaAsync(toAsyncAdapter(db));
-    expect(loaded.listTypes().map((t) => t.name).sort()).toEqual(
-      schema.listTypes().map((t) => t.name).sort(),
+    expect(
+      loaded
+        .listTypes()
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(
+      schema
+        .listTypes()
+        .map((t) => t.name)
+        .sort(),
     );
     // End-to-end: a query run against the async-loaded schema returns the same
     // rows as the same query against the original in-memory snapshot.

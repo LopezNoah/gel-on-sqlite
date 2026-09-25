@@ -4,7 +4,7 @@ import {
   assertQueryResult,
   queryRows,
   unorderedBag,
-  unorderedSet
+  unorderedSet,
 } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLSelectInterpreter", () => {
@@ -27,19 +27,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 } ORDER BY .name;
             `,
       [
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-            {
-              "name": "Regression.",
-            },
-            {
-              "name": "Release EdgeDB",
-            },
-            {
-              "name": "Repl tweak.",
-            },
-          ]
+        {
+          name: "Improve EdgeDB repl output rendering.",
+        },
+        {
+          name: "Regression.",
+        },
+        {
+          name: "Release EdgeDB",
+        },
+        {
+          name: "Repl tweak.",
+        },
+      ],
     );
   });
 
@@ -51,13 +51,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.owner.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -77,12 +77,12 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "aliased_number": "1",
-              "total_time_spent": 50000,
-            },
-          ]
+        {
+          number: "1",
+          aliased_number: "1",
+          total_time_spent: 50000,
+        },
+      ],
     );
   });
 
@@ -101,11 +101,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "total_time_spent": 50000,
-            },
-          ]
+        {
+          number: "1",
+          total_time_spent: 50000,
+        },
+      ],
     );
   });
 
@@ -131,13 +131,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_own_text": {
-                "body": "Rewriting everything.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_own_text: {
+            body: "Rewriting everything.",
+          },
+        },
+      ],
     );
   });
 
@@ -165,13 +165,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text": {
-                "body": "Minor lexer tweaks.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text: {
+            body: "Minor lexer tweaks.",
+          },
+        },
+      ],
     );
   });
 
@@ -210,16 +210,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_own_text": {
-                "body": "Rewriting everything.",
-              },
-              "shortest_text": {
-                "body": "Minor lexer tweaks.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_own_text: {
+            body: "Rewriting everything.",
+          },
+          shortest_text: {
+            body: "Minor lexer tweaks.",
+          },
+        },
+      ],
     );
   });
 
@@ -244,13 +244,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text": {
-                "body": "Minor lexer tweaks.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text: {
+            body: "Minor lexer tweaks.",
+          },
+        },
+      ],
     );
   });
 
@@ -271,18 +271,18 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER User.name = 'Elvis';
             `,
       [
+        {
+          name: "Elvis",
+          special_texts: [
             {
-              "name": "Elvis",
-              "special_texts": [
-                {
-                  "body": "We need to be able to render data in tabular format.",
-                },
-                {
-                  "body": "Minor lexer tweaks.",
-                },
-              ],
+              body: "We need to be able to render data in tabular format.",
             },
-          ]
+            {
+              body: "Minor lexer tweaks.",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -313,24 +313,24 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY User.name;
             `,
       [
-            {
-              "name": "Elvis",
-              "special_issue": null,
+        {
+          name: "Elvis",
+          special_issue: null,
+        },
+        {
+          name: "Yury",
+          special_issue: {
+            name: "Improve EdgeDB repl output rendering.",
+            owner: {
+              name: "Yury",
             },
-            {
-              "name": "Yury",
-              "special_issue": {
-                "name": "Improve EdgeDB repl output rendering.",
-                "owner": {
-                  "name": "Yury",
-                },
-                "status": {
-                  "name": "Open",
-                },
-                "number": "2",
-              },
+            status: {
+              name: "Open",
             },
-          ]
+            number: "2",
+          },
+        },
+      ],
     );
   });
 
@@ -348,31 +348,31 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-              "name": "comment",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-              "name": "Regression.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-              "name": "Release EdgeDB",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-              "name": "Repl tweak.",
-            },
-            {
-              "body": "Rewriting everything.",
-              "name": "log",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+          name: "comment",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+          name: "Regression.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+          name: "Release EdgeDB",
+        },
+        {
+          body: "Minor lexer tweaks.",
+          name: "Repl tweak.",
+        },
+        {
+          body: "Rewriting everything.",
+          name: "log",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+          name: "Improve EdgeDB repl output rendering.",
+        },
+      ],
     );
   });
 
@@ -389,12 +389,12 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "number": "1",
-              "foo": 11,
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          number: "1",
+          foo: 11,
+        },
+      ],
     );
   });
 
@@ -414,7 +414,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 sub.body;
             `,
-      ["Minor lexer tweaks."]
+      ["Minor lexer tweaks."],
     );
   });
 
@@ -434,7 +434,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 sub.__type__.name;
             `,
-      ["default::Issue"]
+      ["default::Issue"],
     );
   });
 
@@ -454,7 +454,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 sub[IS Issue].number;
             `,
-      ["3"]
+      ["3"],
     );
   });
 
@@ -470,18 +470,18 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "number": "1",
-              "foo": 11,
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          number: "1",
+          foo: 11,
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_computable_15", () => {
     h.script(
-      "            SELECT Issue{\n                name,\n                number,\n                foo := {1, 2}\n            }\n            FILTER Issue.number = '1';\n        "
+      "            SELECT Issue{\n                name,\n                number,\n                foo := {1, 2}\n            }\n            FILTER Issue.number = '1';\n        ",
     );
   });
 
@@ -498,25 +498,25 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "number": "1",
-              "foo": null,
-              "bar": 11,
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          number: "1",
+          foo: null,
+          bar: 11,
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_computable_17", () => {
     h.script(
-      "            WITH\n                V := (SELECT Issue {\n                    foo := {1, 2}\n                } FILTER .number = '1')\n            SELECT\n                V {\n                    foo := .foo\n                };\n        "
+      "            WITH\n                V := (SELECT Issue {\n                    foo := {1, 2}\n                } FILTER .number = '1')\n            SELECT\n                V {\n                    foo := .foo\n                };\n        ",
     );
   });
 
   it("test_edgeql_select_interpreter_computable_18", () => {
     h.script(
-      "\n                    INSERT Publication {\n                        title := 'aaa'\n                    }\n                "
+      "\n                    INSERT Publication {\n                        title := 'aaa'\n                    }\n                ",
     );
     assertQueryResult(
       h,
@@ -533,16 +533,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     FILTER .title = 'aaa'
                 `,
       [
-            {
-              "title": "aaa",
-              "title1": "aaa",
-              "title2": "aaa",
-              "title3": "aaa",
-              "title4": "aaa",
-              "title5": ["aaa"],
-              "title6": ["aaa"],
-            },
-          ]
+        {
+          title: "aaa",
+          title1: "aaa",
+          title2: "aaa",
+          title3: "aaa",
+          title4: "aaa",
+          title5: ["aaa"],
+          title6: ["aaa"],
+        },
+      ],
     );
   });
 
@@ -557,11 +557,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "foo": 42,
-            },
-          ]
+        {
+          number: "1",
+          foo: 42,
+        },
+      ],
     );
   });
 
@@ -573,13 +573,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT (O {m}, O.m);
             `,
       [
-            [
-              {
-                "m": 10,
-              },
-              10,
-            ],
-          ]
+        [
+          {
+            m: 10,
+          },
+          10,
+        ],
+      ],
     );
   });
 
@@ -590,9 +590,9 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := (User {x := .name}.x, (SELECT User.name)) ORDER BY _;
             `,
       [
-            ["Elvis", "Elvis"],
-            ["Yury", "Yury"],
-          ]
+        ["Elvis", "Elvis"],
+        ["Yury", "Yury"],
+      ],
     );
     assertQueryResult(
       h,
@@ -600,9 +600,9 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := ((SELECT User.name), User {x := .name}.x) ORDER BY _;
             `,
       [
-            ["Elvis", "Elvis"],
-            ["Yury", "Yury"],
-          ]
+        ["Elvis", "Elvis"],
+        ["Yury", "Yury"],
+      ],
     );
     assertQueryResult(
       h,
@@ -611,9 +611,9 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _;
             `,
       [
-            ["Elvis", "Elvis"],
-            ["Yury", "Yury"],
-          ]
+        ["Elvis", "Elvis"],
+        ["Yury", "Yury"],
+      ],
     );
   });
 
@@ -624,14 +624,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT User {name, todo_ids := .todo.id} FILTER .name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "todo_ids": [
-                "str",
-                "str",
-              ],
-            },
-          ]
+        {
+          name: "Elvis",
+          todo_ids: ["str", "str"],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -641,17 +638,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT Z {name, asdf_id := .asdf.id} FILTER .name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "asdf_id": "str",
-            },
-          ]
+        {
+          name: "Elvis",
+          asdf_id: "str",
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_computable_34", () => {
     h.script(
-      "            SELECT Issue{\n                number,\n                foo := .owner.todo UNION .owner.todo,\n            }\n            FILTER Issue.number = '1';\n        "
+      "            SELECT Issue{\n                number,\n                foo := .owner.todo UNION .owner.todo,\n            }\n            FILTER Issue.number = '1';\n        ",
     );
   });
 
@@ -666,13 +663,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER .number = '3'
             `,
       [
-            {
-              "number": "3",
-              "__type__": {
-                "name": "default::Issue",
-              },
-            },
-          ]
+        {
+          number: "3",
+          __type__: {
+            name: "default::Issue",
+          },
+        },
+      ],
     );
   });
 
@@ -686,7 +683,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.name LIKE '%edgedb'
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -698,10 +695,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -713,13 +710,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -734,19 +731,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -758,16 +755,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -779,13 +776,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -800,10 +797,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -815,10 +812,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -830,19 +827,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -857,16 +854,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -878,16 +875,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -898,7 +895,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.name NOT ILIKE '%re%'
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -913,16 +910,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -934,13 +931,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -952,13 +949,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
   });
 
@@ -973,19 +970,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -997,19 +994,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1021,16 +1018,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
   });
 
@@ -1049,13 +1046,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "__type__": {
-                "name": "default::Issue",
-              },
-            },
-          ]
+        {
+          number: "1",
+          __type__: {
+            name: "default::Issue",
+          },
+        },
+      ],
     );
   });
 
@@ -1065,7 +1062,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT User.__type__.name LIMIT 1;
             `,
-      ["default::User"]
+      ["default::User"],
     );
   });
 
@@ -1084,11 +1081,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number = '2';
             `,
       [
-            {
-              "number": "2",
-              "related_to": [],
-            },
-          ]
+        {
+          number: "2",
+          related_to: [],
+        },
+      ],
     );
   });
 
@@ -1102,13 +1099,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             OFFSET 2;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1119,16 +1116,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             LIMIT 3;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1139,13 +1136,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             OFFSET 2 LIMIT 3;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1159,13 +1156,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             OFFSET 1 + 1;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1176,16 +1173,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             LIMIT 6 // 2;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1196,13 +1193,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             OFFSET 4 - 2 LIMIT 5 * 2 - 7;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1216,13 +1213,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             OFFSET (SELECT count(Status));
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1233,16 +1230,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             LIMIT (SELECT count(Status) + 1);
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1254,13 +1251,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             LIMIT (SELECT count(Priority) + 1);
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1281,19 +1278,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY User.name;
             `,
       [
-            {
-              "name": "Elvis",
-              "owner_of": {
-                "number": "1",
-              },
-            },
-            {
-              "name": "Yury",
-              "owner_of": {
-                "number": "2",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          owner_of: {
+            number: "1",
+          },
+        },
+        {
+          name: "Yury",
+          owner_of: {
+            number: "2",
+          },
+        },
+      ],
     );
   });
 
@@ -1314,42 +1311,38 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "1",
-                },
-                {
-                  "number": "4",
-                },
-              ],
+              number: "1",
             },
             {
-              "name": "Yury",
-              "owner_of": [
-                {
-                  "number": "2",
-                },
-              ],
+              number: "4",
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          owner_of: [
+            {
+              number: "2",
+            },
+          ],
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_limit_10", () => {
     expect(() => {
-      h.script(
-        "\n                SELECT 1 LIMIT -1\n            "
-      );
+      h.script("\n                SELECT 1 LIMIT -1\n            ");
     }).toThrow(new RegExp("LIMIT must not be negative"));
   });
 
   it("test_edgeql_select_interpreter_offset_01", () => {
     expect(() => {
-      h.script(
-        "\n                SELECT 1 OFFSET -1\n            "
-      );
+      h.script("\n                SELECT 1 OFFSET -1\n            ");
     }).toThrow(new RegExp("OFFSET must not be negative"));
   });
 
@@ -1365,15 +1358,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } FILTER User.name = 'Elvis';
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "body": "Rewriting everything.",
-                },
-              ],
+              body: "Rewriting everything.",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1391,21 +1384,21 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } FILTER User.name = 'Elvis';
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "1",
-                },
-              ],
+              number: "1",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_polymorphic_04", () => {
     h.script(
-      "\n                SELECT User {\n                    [IS Named].id,\n                };\n            "
+      "\n                SELECT User {\n                    [IS Named].id,\n                };\n            ",
     );
   });
 
@@ -1417,26 +1410,22 @@ describe("TestEdgeQLSelectInterpreter", () => {
             filter exists .related_to;
             `,
       unorderedBag([
-            {
-              "number": "3",
-              "related_to": [
-                {},
-              ],
-            },
-            {
-              "number": "4",
-              "related_to": [
-                {},
-              ],
-            },
-          ])
+        {
+          number: "3",
+          related_to: [{}],
+        },
+        {
+          number: "4",
+          related_to: [{}],
+        },
+      ]),
     );
   });
 
   it("test_edgeql_select_interpreter_reverse_link_03", () => {
     expect(() => {
       h.script(
-        "\n                SELECT\n                    User.<owner[IS Text]@since\n                "
+        "\n                SELECT\n                    User.<owner[IS Text]@since\n                ",
       );
     }).toThrow(new RegExp("property 'since' does not exist"));
   });
@@ -1447,14 +1436,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT (User.<owner[IS Comment], User.<owner[IS Issue]);
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_select_interpreter_empty_intersection_property", () => {
     expect(() => {
       h.script(
-        "\n                SELECT\n                    User.<owner[IS Status]@since\n                "
+        "\n                SELECT\n                    User.<owner[IS Status]@since\n                ",
       );
     }).toThrow(new RegExp("property 'since' does not exist"));
   });
@@ -1466,13 +1455,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT (SELECT (SELECT Issue { watchers: {name} }).watchers);
             `,
       unorderedBag([
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ])
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ]),
     );
   });
 
@@ -1488,27 +1477,27 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } ORDER BY Issue.number;
             `,
       [
+        {
+          number: "1",
+          related_to: [],
+        },
+        {
+          number: "2",
+          related_to: [],
+        },
+        {
+          number: "3",
+          related_to: [
             {
-              "number": "1",
-              "related_to": [],
+              number: "2",
             },
-            {
-              "number": "2",
-              "related_to": [],
-            },
-            {
-              "number": "3",
-              "related_to": [
-                {
-                  "number": "2",
-                },
-              ],
-            },
-            {
-              "number": "4",
-              "related_to": [],
-            },
-          ]
+          ],
+        },
+        {
+          number: "4",
+          related_to: [],
+        },
+      ],
     );
   });
 
@@ -1526,23 +1515,23 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "4",
-                },
-              ],
+              number: "4",
             },
+          ],
+        },
+        {
+          name: "Yury",
+          owner_of: [
             {
-              "name": "Yury",
-              "owner_of": [
-                {
-                  "number": "3",
-                },
-              ],
+              number: "3",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1560,29 +1549,29 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "4",
-                },
-                {
-                  "number": "1",
-                },
-              ],
+              number: "4",
             },
             {
-              "name": "Yury",
-              "owner_of": [
-                {
-                  "number": "3",
-                },
-                {
-                  "number": "2",
-                },
-              ],
+              number: "1",
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          owner_of: [
+            {
+              number: "3",
+            },
+            {
+              number: "2",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -1601,10 +1590,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -1623,33 +1612,33 @@ describe("TestEdgeQLSelectInterpreter", () => {
             };
             `,
       unorderedBag([
+        {
+          name: "Elvis",
+          foo: [
             {
-              "name": "Elvis",
-              "foo": [
-                {
-                  "bar": "Elvis",
-                  "number": "1",
-                },
-                {
-                  "bar": "Elvis",
-                  "number": "4",
-                },
-              ],
+              bar: "Elvis",
+              number: "1",
             },
             {
-              "name": "Yury",
-              "foo": [
-                {
-                  "bar": "Yury",
-                  "number": "2",
-                },
-                {
-                  "bar": "Yury",
-                  "number": "3",
-                },
-              ],
+              bar: "Elvis",
+              number: "4",
             },
-          ])
+          ],
+        },
+        {
+          name: "Yury",
+          foo: [
+            {
+              bar: "Yury",
+              number: "2",
+            },
+            {
+              bar: "Yury",
+              number: "3",
+            },
+          ],
+        },
+      ]),
     );
   });
 
@@ -1668,11 +1657,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "foo": "Open",
-            },
-          ]
+        {
+          name: "Elvis",
+          foo: "Open",
+        },
+      ],
     );
   });
 
@@ -1695,11 +1684,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # wrong in the query
             `,
       [
-            {
-              "name": "Elvis",
-              "foo": "Open",
-            },
-          ]
+        {
+          name: "Elvis",
+          foo: "Open",
+        },
+      ],
     );
   });
 
@@ -1712,63 +1701,79 @@ describe("TestEdgeQLSelectInterpreter", () => {
                         x := .number ++ "!"
                     }), Issue).0.x ++ (SELECT Issue.number));
             `,
-      unorderedSet(["1!1", "2!2", "3!3", "4!4"])
+      unorderedSet(["1!1", "2!2", "3!3", "4!4"]),
     );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_01", () => {
     expect(() => {
       h.script(
-        "\n                SELECT User {\n                    name := 1\n                }\n            "
+        "\n                SELECT User {\n                    name := 1\n                }\n            ",
       );
-    }).toThrow(new RegExp("cannot redefine property 'name' of object type 'default::User' as scalar type 'std::int64'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine property 'name' of object type 'default::User' as scalar type 'std::int64'",
+      ),
+    );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_02", () => {
     expect(() => {
       h.script(
-        "\n                SELECT User {\n                    name := Issue\n                }\n            "
+        "\n                SELECT User {\n                    name := Issue\n                }\n            ",
       );
-    }).toThrow(new RegExp("cannot redefine property 'name' of object type 'default::User' as object type 'default::Issue'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine property 'name' of object type 'default::User' as object type 'default::Issue'",
+      ),
+    );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_03", () => {
     expect(() => {
       h.script(
-        "\n                SELECT Issue {\n                    related_to := 1\n                }\n            "
+        "\n                SELECT Issue {\n                    related_to := 1\n                }\n            ",
       );
-    }).toThrow(new RegExp("cannot redefine link 'related_to' of object type 'default::Issue' as scalar type 'std::int64'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine link 'related_to' of object type 'default::Issue' as scalar type 'std::int64'",
+      ),
+    );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_04", () => {
     expect(() => {
       h.script(
-        "\n                SELECT Issue {\n                    related_to := Text\n                }\n            "
+        "\n                SELECT Issue {\n                    related_to := Text\n                }\n            ",
       );
-    }).toThrow(new RegExp("cannot redefine link 'related_to' of object type 'default::Issue' as object type 'default::Text'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine link 'related_to' of object type 'default::Issue' as object type 'default::Text'",
+      ),
+    );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_05", () => {
     h.script(
-      "\n                SELECT Issue {\n                    priority := Priority\n                }\n            "
+      "\n                SELECT Issue {\n                    priority := Priority\n                }\n            ",
     );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_06", () => {
     h.script(
-      "\n                SELECT Issue {\n                    multi owner := User\n                }\n            "
+      "\n                SELECT Issue {\n                    multi owner := User\n                }\n            ",
     );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_07", () => {
     h.script(
-      "\n                SELECT Issue {\n                    single related_to := (SELECT Issue LIMIT 1)\n                }\n            "
+      "\n                SELECT Issue {\n                    single related_to := (SELECT Issue LIMIT 1)\n                }\n            ",
     );
   });
 
   it("test_edgeql_select_interpreter_tvariant_bad_08", () => {
     h.script(
-      "\n                SELECT Issue {\n                    owner := (SELECT User LIMIT 1)\n                }\n            "
+      "\n                SELECT Issue {\n                    owner := (SELECT User LIMIT 1)\n                }\n            ",
     );
   });
 
@@ -1782,10 +1787,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+      ],
     );
   });
 
@@ -1799,10 +1804,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-          ]
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+      ],
     );
   });
 
@@ -1823,23 +1828,23 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "open": "yes",
-            },
-            {
-              "number": "2",
-              "open": "yes",
-            },
-            {
-              "number": "3",
-              "open": "no",
-            },
-            {
-              "number": "4",
-              "open": "no",
-            },
-          ]
+        {
+          number: "1",
+          open: "yes",
+        },
+        {
+          number: "2",
+          open: "yes",
+        },
+        {
+          number: "3",
+          open: "no",
+        },
+        {
+          number: "4",
+          open: "no",
+        },
+      ],
     );
   });
 
@@ -1860,10 +1865,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -1890,13 +1895,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1919,7 +1924,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER NOT EXISTS Issue.priority
             )));
             `,
-      [2]
+      [2],
     );
   });
 
@@ -1941,16 +1946,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1992,31 +1997,31 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-            {
-              "number": "4",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+        {
+          number: "4",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2059,13 +2064,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2087,13 +2092,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -2109,13 +2114,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -2131,10 +2136,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -2150,22 +2155,22 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -2181,22 +2186,22 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -2211,34 +2216,34 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_setops_14", () => {
     h.script(
-      "\n                SELECT {\n                    Issue{number := 'foo'}, Issue\n                }.number;\n                "
+      "\n                SELECT {\n                    Issue{number := 'foo'}, Issue\n                }.number;\n                ",
     );
   });
 
   it("test_edgeql_select_interpreter_setops_15", () => {
     h.script(
-      "\n                WITH\n                    I := Issue{number := 'foo'}\n                SELECT {I, Issue}.number;\n                "
+      "\n                WITH\n                    I := Issue{number := 'foo'}\n                SELECT {I, Issue}.number;\n                ",
     );
   });
 
@@ -2249,7 +2254,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # Named doesn't have a property number.
             SELECT Issue[IS Named].number;
             `,
-      unorderedSet(["1", "2", "3", "4"])
+      unorderedSet(["1", "2", "3", "4"]),
     );
   });
 
@@ -2261,7 +2266,12 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # duck-typed to be effectively equivalent to Issue[IS Named].
             SELECT (Issue UNION <Named>{}).name;
             `,
-      unorderedSet(["Improve EdgeDB repl output rendering.", "Regression.", "Release EdgeDB", "Repl tweak."])
+      unorderedSet([
+        "Improve EdgeDB repl output rendering.",
+        "Regression.",
+        "Release EdgeDB",
+        "Repl tweak.",
+      ]),
     );
   });
 
@@ -2274,14 +2284,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # Issue], which is just an Issue.
             SELECT (Issue UNION <Issue>{}).name;
             `,
-      unorderedSet(["Improve EdgeDB repl output rendering.", "Regression.", "Release EdgeDB", "Repl tweak."])
+      unorderedSet([
+        "Improve EdgeDB repl output rendering.",
+        "Regression.",
+        "Release EdgeDB",
+        "Repl tweak.",
+      ]),
     );
     assertQueryResult(
       h,
       `
             SELECT (Issue UNION <Issue>{}).number;
             `,
-      unorderedSet(["1", "2", "3", "4"])
+      unorderedSet(["1", "2", "3", "4"]),
     );
   });
 
@@ -2292,7 +2307,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             with A := Owned except {LogEntry, Comment}
             select all(A in Issue) and all(Issue in A)
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -2300,7 +2315,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             with A := Owned intersect Issue
             select all(A in Owned[is Issue]) and all(Owned[is Issue] in A)
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
@@ -2314,10 +2329,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             select (B except A) {name};
             `,
       [
-            {
-              "name": "Regression.",
-            },
-          ]
+        {
+          name: "Regression.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2328,10 +2343,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             select (B intersect A) {name};
             `,
       [
-            {
-              "name": "Release EdgeDB",
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+        },
+      ],
     );
   });
 
@@ -2341,14 +2356,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             select (Issue except Named);
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select (Issue intersect <Named>{});
             `,
-      []
+      [],
     );
   });
 
@@ -2364,7 +2379,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 {'minor', 'fix', 'lexer'}
             order by _
             `,
-      ["by", "introduced", "lexer", "regression", "tweak.", "tweaks."]
+      ["by", "introduced", "lexer", "regression", "tweak.", "tweaks."],
     );
     assertQueryResult(
       h,
@@ -2376,16 +2391,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
               str_lower(array_unpack(str_split(A.name, ' ')))
             order by _
             `,
-      [
-            "by",
-            "fix",
-            "introduced",
-            "lexer",
-            "lexer",
-            "minor",
-            "regression",
-            "tweaks.",
-          ]
+      ["by", "fix", "introduced", "lexer", "lexer", "minor", "regression", "tweaks."],
     );
   });
 
@@ -2398,17 +2404,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
               intersect {1, 2, 2, 3, 3, 3, 7, 7, 7, 7, 7, 7, 7}
             order by _
             `,
-      [
-            2,
-            2,
-            3,
-            7,
-            7,
-            7,
-            7,
-            7,
-            7,
-          ]
+      [2, 2, 3, 7, 7, 7, 7, 7, 7],
     );
     assertQueryResult(
       h,
@@ -2419,16 +2415,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
               str_lower(array_unpack(str_split(Issue.body, ' ')))
             order by _
             `,
-      [
-            "edgedb",
-            "edgedb",
-            "improve",
-            "output",
-            "regression.",
-            "rendering.",
-            "repl",
-            "repl",
-          ]
+      ["edgedb", "edgedb", "improve", "output", "regression.", "rendering.", "repl", "repl"],
     );
   });
 
@@ -2440,19 +2427,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.priority.name ASC EMPTY LAST THEN Issue.name;
             `,
       [
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-            {
-              "name": "Repl tweak.",
-            },
-            {
-              "name": "Regression.",
-            },
-            {
-              "name": "Release EdgeDB",
-            },
-          ]
+        {
+          name: "Improve EdgeDB repl output rendering.",
+        },
+        {
+          name: "Repl tweak.",
+        },
+        {
+          name: "Regression.",
+        },
+        {
+          name: "Release EdgeDB",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2461,19 +2448,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.priority.name ASC EMPTY FIRST THEN Issue.name;
             `,
       [
-            {
-              "name": "Regression.",
-            },
-            {
-              "name": "Release EdgeDB",
-            },
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-            {
-              "name": "Repl tweak.",
-            },
-          ]
+        {
+          name: "Regression.",
+        },
+        {
+          name: "Release EdgeDB",
+        },
+        {
+          name: "Improve EdgeDB repl output rendering.",
+        },
+        {
+          name: "Repl tweak.",
+        },
+      ],
     );
   });
 
@@ -2485,25 +2472,25 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY len(Text.body) DESC;
             `,
       [
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-            },
-          ]
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Minor lexer tweaks.",
+        },
+      ],
     );
   });
 
@@ -2517,13 +2504,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             );
             `,
       [
-            {
-              "name": "Yury",
-            },
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -2537,13 +2524,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2556,10 +2543,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER Issue.owner.<owner[IS Comment].issue = Issue;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -2580,27 +2567,27 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "owner": {
-                "name": "Elvis",
-              },
-              "status": {
-                "name": "Open",
-              },
-              "name": "Release EdgeDB",
-              "number": "1",
-            },
-            {
-              "owner": {
-                "name": "Yury",
-              },
-              "status": {
-                "name": "Open",
-              },
-              "name": "Improve EdgeDB repl output rendering.",
-              "number": "2",
-            },
-          ]
+        {
+          owner: {
+            name: "Elvis",
+          },
+          status: {
+            name: "Open",
+          },
+          name: "Release EdgeDB",
+          number: "1",
+        },
+        {
+          owner: {
+            name: "Yury",
+          },
+          status: {
+            name: "Open",
+          },
+          name: "Improve EdgeDB repl output rendering.",
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -2610,14 +2597,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT std::len(User.name) ORDER BY User.name;
             `,
-      [5, 4]
+      [5, 4],
     );
     assertQueryResult(
       h,
       `
             SELECT std::sum(<std::int64>Issue.number);
             `,
-      [10]
+      [10],
     );
   });
 
@@ -2635,16 +2622,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2659,10 +2646,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -2680,16 +2667,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2707,16 +2694,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2734,10 +2721,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -2751,13 +2738,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -2771,13 +2758,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -2791,10 +2778,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -2808,10 +2795,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -2825,13 +2812,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2845,13 +2832,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2865,16 +2852,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2888,16 +2875,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2911,13 +2898,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2939,10 +2926,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -2965,10 +2952,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -2991,10 +2978,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3017,10 +3004,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3033,7 +3020,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.status.name = 'Open'
             );
             `,
-      [true]
+      [true],
     );
   });
 
@@ -3047,19 +3034,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "kind": "Open",
-            },
-            {
-              "kind": "High",
-            },
-            {
-              "kind": "Low",
-            },
-            {
-              "kind": "Closed",
-            },
-          ]
+        {
+          kind: "Open",
+        },
+        {
+          kind: "High",
+        },
+        {
+          kind: "Low",
+        },
+        {
+          kind: "Closed",
+        },
+      ],
     );
   });
 
@@ -3074,16 +3061,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.priority.name EMPTY LAST THEN Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3101,35 +3088,35 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "h1": null,
-              "h2": false,
-              "l1": null,
-              "l2": true,
-            },
-            {
-              "number": "2",
-              "h1": true,
-              "h2": true,
-              "l1": false,
-              "l2": false,
-            },
-            {
-              "number": "3",
-              "h1": false,
-              "h2": false,
-              "l1": true,
-              "l2": true,
-            },
-            {
-              "number": "4",
-              "h1": null,
-              "h2": false,
-              "l1": null,
-              "l2": true,
-            },
-          ]
+        {
+          number: "1",
+          h1: null,
+          h2: false,
+          l1: null,
+          l2: true,
+        },
+        {
+          number: "2",
+          h1: true,
+          h2: true,
+          l1: false,
+          l2: false,
+        },
+        {
+          number: "3",
+          h1: false,
+          h2: false,
+          l1: true,
+          l2: true,
+        },
+        {
+          number: "4",
+          h1: null,
+          h2: false,
+          l1: null,
+          l2: true,
+        },
+      ],
     );
   });
 
@@ -3149,13 +3136,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3170,13 +3157,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3191,13 +3178,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3207,7 +3194,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT (SELECT T := Text[IS Issue] ORDER BY T.body).number;
             `,
-      ["4", "1", "3", "2"]
+      ["4", "1", "3", "2"],
     );
   });
 
@@ -3221,7 +3208,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 ORDER BY T.name
             ).name;
             `,
-      ["Release EdgeDB"]
+      ["Release EdgeDB"],
     );
   });
 
@@ -3236,7 +3223,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 EXISTS Issue.<issue             # has Comment [1]
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -3251,7 +3238,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 EXISTS Issue.<issue             # has Comment [1]
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -3267,10 +3254,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3286,10 +3273,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3305,10 +3292,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -3324,10 +3311,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -3343,13 +3330,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -3365,13 +3352,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -3386,32 +3373,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": false,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": true,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": false,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: false,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: true,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: false,
+        },
+      ],
     );
   });
 
@@ -3426,32 +3413,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": true,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": false,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": true,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: true,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: false,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: true,
+        },
+      ],
     );
   });
 
@@ -3468,32 +3455,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, false],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [true],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, false],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [true],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
   });
 
@@ -3511,32 +3498,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [true, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [false],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [true, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [false],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
   });
 
@@ -3552,13 +3539,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.priority.name THEN Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -3574,13 +3561,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3595,13 +3582,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3614,13 +3601,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -3636,16 +3623,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3659,16 +3646,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3684,16 +3671,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -3709,16 +3696,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -3734,19 +3721,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3762,19 +3749,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3790,13 +3777,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3812,13 +3799,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3834,16 +3821,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3859,16 +3846,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3888,16 +3875,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3925,13 +3912,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -3946,32 +3933,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": true,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": true,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": false,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: true,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: true,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: false,
+        },
+      ],
     );
   });
 
@@ -3986,32 +3973,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": false,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": false,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": true,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: false,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: false,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: true,
+        },
+      ],
     );
   });
 
@@ -4028,32 +4015,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [true],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [true, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [true],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [true, true],
+        },
+      ],
     );
   });
 
@@ -4071,32 +4058,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [false],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, false],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [false],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, false],
+        },
+      ],
     );
   });
 
@@ -4109,10 +4096,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4122,10 +4109,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -4138,10 +4125,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4151,10 +4138,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -4172,13 +4159,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -4193,32 +4180,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": false,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": false,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": true,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: false,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: false,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: true,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4230,32 +4217,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": true,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": true,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": false,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: true,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: true,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: false,
+        },
+      ],
     );
   });
 
@@ -4270,32 +4257,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [false],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [false],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4307,32 +4294,32 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [true],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [true],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
   });
 
@@ -4346,7 +4333,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # empty set is empty.
             SELECT Issue.number = <str>{};
             `,
-      []
+      [],
     );
   });
 
@@ -4357,28 +4344,28 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # Test short-circuiting operations with empty
             SELECT Issue.number = '1' OR <bool>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             SELECT Issue.number = 'X' OR <bool>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             SELECT Issue.number = '1' AND <bool>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             SELECT Issue.number = 'X' AND <bool>{};
             `,
-      []
+      [],
     );
   });
 
@@ -4389,28 +4376,28 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # Test short-circuiting operations with empty
             SELECT count(Issue.number = '1' OR <bool>{});
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
       `
             SELECT count(Issue.number = 'X' OR <bool>{});
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
       `
             SELECT count(Issue.number = '1' AND <bool>{});
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
       `
             SELECT count(Issue.number = 'X' AND <bool>{});
             `,
-      [0]
+      [0],
     );
   });
 
@@ -4425,23 +4412,23 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } ORDER BY .number;
             `,
       [
-            {
-              "number": "1",
-              "time_estimate": null,
-            },
-            {
-              "number": "2",
-              "time_estimate": null,
-            },
-            {
-              "number": "3",
-              "time_estimate": null,
-            },
-            {
-              "number": "4",
-              "time_estimate": null,
-            },
-          ]
+        {
+          number: "1",
+          time_estimate: null,
+        },
+        {
+          number: "2",
+          time_estimate: null,
+        },
+        {
+          number: "3",
+          time_estimate: null,
+        },
+        {
+          number: "4",
+          time_estimate: null,
+        },
+      ],
     );
   });
 
@@ -4451,7 +4438,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT <Issue>{}
             `,
-      []
+      [],
     );
   });
 
@@ -4461,7 +4448,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT NOT EXISTS (<Issue>{})
             `,
-      [true]
+      [true],
     );
   });
 
@@ -4471,7 +4458,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT ((SELECT Issue FILTER false) ?= <Issue>{})
             `,
-      [true]
+      [true],
     );
   });
 
@@ -4481,7 +4468,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT count(<Issue>{}) = 0
             `,
-      [true]
+      [true],
     );
   });
 
@@ -4493,7 +4480,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT Status.name ++ Priority.name
             ORDER BY Status.name THEN Priority.name;
             `,
-      ["ClosedHigh", "ClosedLow", "OpenHigh", "OpenLow"]
+      ["ClosedHigh", "ClosedLow", "OpenHigh", "OpenLow"],
     );
   });
 
@@ -4505,7 +4492,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT Issue.status.name ++ Issue.priority.name
             ORDER BY Issue.number;
             `,
-      ["OpenHigh", "ClosedLow"]
+      ["OpenHigh", "ClosedLow"],
     );
   });
 
@@ -4517,16 +4504,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT User.name ++ Issue.number
             ORDER BY User.name THEN Issue.number;
             `,
-      [
-            "Elvis1",
-            "Elvis2",
-            "Elvis3",
-            "Elvis4",
-            "Yury1",
-            "Yury2",
-            "Yury3",
-            "Yury4",
-          ]
+      ["Elvis1", "Elvis2", "Elvis3", "Elvis4", "Yury1", "Yury2", "Yury3", "Yury4"],
     );
   });
 
@@ -4538,7 +4516,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT User.name ++ User.<owner[IS Issue].number
             ORDER BY User.name THEN User.<owner[IS Issue].number;
             `,
-      ["Elvis1", "Elvis4", "Yury2", "Yury3"]
+      ["Elvis1", "Elvis4", "Yury2", "Yury3"],
     );
   });
 
@@ -4551,10 +4529,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _;
             `,
       [
-            ["Elvis", "Yury"],
-            ["Yury", "Elvis"],
-            ["Yury", "Elvis"],
-          ]
+        ["Elvis", "Yury"],
+        ["Yury", "Elvis"],
+        ["Yury", "Elvis"],
+      ],
     );
   });
 
@@ -4566,7 +4544,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := Issue.owner.name ++ Issue.watchers.name
             ORDER BY _;
             `,
-      ["ElvisYury", "YuryElvis", "YuryElvis"]
+      ["ElvisYury", "YuryElvis", "YuryElvis"],
     );
   });
 
@@ -4576,7 +4554,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT _ := count(Issue.owner.name ++ Issue.watchers.name);
             `,
-      [3]
+      [3],
     );
     assertQueryResult(
       h,
@@ -4584,7 +4562,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := count(DISTINCT (
                 Issue.owner.name ++ Issue.watchers.name));
             `,
-      [2]
+      [2],
     );
   });
 
@@ -4595,7 +4573,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := Issue.owner.name ++ <str>count(Issue.watchers.name)
             ORDER BY _;
             `,
-      ["Elvis0", "Elvis1", "Yury1", "Yury1"]
+      ["Elvis0", "Elvis1", "Yury1", "Yury1"],
     );
   });
 
@@ -4606,7 +4584,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := count(
                 Issue.owner.name ++ <str>count(Issue.watchers.name));
             `,
-      [4]
+      [4],
     );
   });
 
@@ -4622,7 +4600,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 })
             SELECT count(x.name ++ <str>x.w);
             `,
-      [4]
+      [4],
     );
   });
 
@@ -4636,7 +4614,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 <str>Issue.time_estimate ?? '0'
             );
             `,
-      [4]
+      [4],
     );
   });
 
@@ -4650,7 +4628,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 <str>Issue.time_estimate
             );
             `,
-      [1]
+      [1],
     );
   });
 
@@ -4660,7 +4638,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT count(count(Issue.watchers));
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -4669,7 +4647,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 (Issue, count(Issue.watchers))
             );
             `,
-      [4]
+      [4],
     );
   });
 
@@ -4684,23 +4662,23 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number ++ Issue2.number;
             `,
       [
-            "11",
-            "12",
-            "13",
-            "14",
-            "21",
-            "22",
-            "23",
-            "24",
-            "31",
-            "32",
-            "33",
-            "34",
-            "41",
-            "42",
-            "43",
-            "44",
-          ]
+        "11",
+        "12",
+        "13",
+        "14",
+        "21",
+        "22",
+        "23",
+        "24",
+        "31",
+        "32",
+        "33",
+        "34",
+        "41",
+        "42",
+        "43",
+        "44",
+      ],
     );
   });
 
@@ -4719,7 +4697,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     SELECT Issue FILTER Issue.number IN {'1', '6'}
                 );
             `,
-      []
+      [],
     );
   });
 
@@ -4739,7 +4717,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     (SELECT sub FILTER sub = Issue)
                 );
             `,
-      []
+      [],
     );
   });
 
@@ -4764,16 +4742,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4797,7 +4775,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY
                 Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -4819,13 +4797,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4851,13 +4829,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -4884,13 +4862,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -4900,7 +4878,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT Issue.number ++ (SELECT Issue.number);
             `,
-      unorderedSet(["11", "22", "33", "44"])
+      unorderedSet(["11", "22", "33", "44"]),
     );
   });
 
@@ -4914,23 +4892,23 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number ++ sub;
             `,
       unorderedSet([
-            "11",
-            "12",
-            "13",
-            "14",
-            "21",
-            "22",
-            "23",
-            "24",
-            "31",
-            "32",
-            "33",
-            "34",
-            "41",
-            "42",
-            "43",
-            "44",
-          ])
+        "11",
+        "12",
+        "13",
+        "14",
+        "21",
+        "22",
+        "23",
+        "24",
+        "31",
+        "32",
+        "33",
+        "34",
+        "41",
+        "42",
+        "43",
+        "44",
+      ]),
     );
   });
 
@@ -4954,15 +4932,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "body_length": 33,
-            },
-            {
-              "number": "3",
-              "body_length": 19,
-            },
-          ]
+        {
+          number: "1",
+          body_length: 33,
+        },
+        {
+          number: "3",
+          body_length: 19,
+        },
+      ],
     );
   });
 
@@ -4979,10 +4957,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 );
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -5001,10 +4979,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 ).owner;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -5037,13 +5015,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5061,10 +5039,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 );
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+      ],
     );
   });
 
@@ -5086,10 +5064,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 );
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+      ],
     );
   });
 
@@ -5103,7 +5081,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 U2 := DETACHED User
             SELECT U2.name ++ U2.name;
             `,
-      unorderedSet(["ElvisElvis", "YuryYury"])
+      unorderedSet(["ElvisElvis", "YuryYury"]),
     );
     assertQueryResult(
       h,
@@ -5111,7 +5089,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             # DETACHED is reused on both sides of '+' directly
             SELECT (DETACHED User).name ++ (DETACHED User).name;
             `,
-      unorderedSet(["ElvisElvis", "ElvisYury", "YuryElvis", "YuryYury"])
+      unorderedSet(["ElvisElvis", "ElvisYury", "YuryElvis", "YuryYury"]),
     );
   });
 
@@ -5127,7 +5105,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     } FILTER .name = 'Elvis'
                 ).num_issues;
             `,
-      [2]
+      [2],
     );
   });
 
@@ -5145,7 +5123,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 U.num_issues;
             `,
-      [2]
+      [2],
     );
   });
 
@@ -5165,7 +5143,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 U.friend.name;
             `,
-      ["Yury"]
+      ["Yury"],
     );
   });
 
@@ -5183,7 +5161,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 I.owner = U;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -5203,7 +5181,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY
                 I.number;
             `,
-      ["1", "4"]
+      ["1", "4"],
     );
   });
 
@@ -5225,7 +5203,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY
                 I.number;
             `,
-      []
+      [],
     );
   });
 
@@ -5254,14 +5232,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text_shape": {
-                "body": "Minor lexer tweaks.",
-                "foo": "Minor lexer tweaks.!",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text_shape: {
+            body: "Minor lexer tweaks.",
+            foo: "Minor lexer tweaks.!",
+          },
+        },
+      ],
     );
   });
 
@@ -5287,11 +5265,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text_foo": "Minor lexer tweaks.!",
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text_foo: "Minor lexer tweaks.!",
+        },
+      ],
     );
   });
 
@@ -5331,33 +5309,33 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 Developers.name;
             `,
       [
+        {
+          name: "Elvis",
+          open_issues: [
             {
-              "name": "Elvis",
-              "open_issues": [
-                {
-                  "number": "1",
-                  "spent_time": 50000,
-                },
-                {
-                  "number": "4",
-                  "spent_time": 0,
-                },
-              ],
+              number: "1",
+              spent_time: 50000,
             },
             {
-              "name": "Yury",
-              "open_issues": [
-                {
-                  "number": "2",
-                  "spent_time": 0,
-                },
-                {
-                  "number": "3",
-                  "spent_time": 0,
-                },
-              ],
+              number: "4",
+              spent_time: 0,
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          open_issues: [
+            {
+              number: "2",
+              spent_time: 0,
+            },
+            {
+              number: "3",
+              spent_time: 0,
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -5371,7 +5349,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[2];
             `,
-      ["l"]
+      ["l"],
     );
     assertQueryResult(
       h,
@@ -5381,7 +5359,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[-2];
             `,
-      ["D"]
+      ["D"],
     );
     assertQueryResult(
       h,
@@ -5391,7 +5369,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[2:4];
             `,
-      ["le"]
+      ["le"],
     );
     assertQueryResult(
       h,
@@ -5401,7 +5379,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[2:];
             `,
-      ["lease EdgeDB"]
+      ["lease EdgeDB"],
     );
     assertQueryResult(
       h,
@@ -5411,7 +5389,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[:2];
             `,
-      ["Re"]
+      ["Re"],
     );
     assertQueryResult(
       h,
@@ -5421,7 +5399,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[2:-1];
             `,
-      ["lease EdgeD"]
+      ["lease EdgeD"],
     );
     assertQueryResult(
       h,
@@ -5431,7 +5409,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[-2:];
             `,
-      ["DB"]
+      ["DB"],
     );
     assertQueryResult(
       h,
@@ -5441,7 +5419,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER Issue.number = '1'
             ).name[:-2];
             `,
-      ["Release Edge"]
+      ["Release Edge"],
     );
   });
 
@@ -5459,14 +5437,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "type_name": "default::Issue",
-              "a": "l",
-              "b": "lease EdgeD",
-              "c": "fault::Issu",
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          type_name: "default::Issue",
+          a: "l",
+          b: "lease EdgeD",
+          c: "fault::Issu",
+        },
+      ],
     );
   });
 
@@ -5476,329 +5454,193 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             select [1,2,3,4,5][1:];
             `,
-      [
-            [2, 3, 4, 5],
-          ]
+      [[2, 3, 4, 5]],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3,4,5][:3];
             `,
-      [
-            [1, 2, 3],
-          ]
+      [[1, 2, 3]],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][1:<int64>{}];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][1:<optional int64>$0];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][<optional int64>$0:2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][<optional int64>$0:<optional int64>$1];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select to_json('[true, 3, 4, null]')[1:];
                 `,
-      ["[3, 4, null]"]
+      ["[3, 4, null]"],
     );
     assertQueryResult(
       h,
       `
                 select to_json('[true, 3, 4, null]')[:2];
                 `,
-      ["[true, 3]"]
+      ["[true, 3]"],
     );
     assertQueryResult(
       h,
       `
             select (<optional json>$0)[2:];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select to_json('"hello world"')[2:];
                 `,
-      ["\"llo world\""]
+      ['"llo world"'],
     );
     assertQueryResult(
       h,
       `
                 select to_json('"hello world"')[:4];
                 `,
-      ["\"hell\""]
+      ['"hell"'],
     );
     assertQueryResult(
       h,
       `
             select (<array<str>>[])[0:];
             `,
-      [
-            [],
-          ]
+      [[]],
     );
-    assertQueryResult(
-      h,
-      `select to_json('[]')[0:];`,
+    assertQueryResult(h, `select to_json('[]')[0:];`, [[]]);
+    assertQueryResult(h, `select [(1,'foo'), (2,'bar'), (3,'baz')][1:];`, [
       [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [(1,'foo'), (2,'bar'), (3,'baz')][1:];`,
+        [2, "bar"],
+        [3, "baz"],
+      ],
+    ]);
+    assertQueryResult(h, `select [(1,'foo'), (2,'bar'), (3,'baz')][:2];`, [
       [
-            [
-              [2, "bar"],
-              [3, "baz"],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [(1,'foo'), (2,'bar'), (3,'baz')][:2];`,
-      [
-            [
-              [1, "foo"],
-              [2, "bar"],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [(1,'foo'), (2,'bar'), (3,'baz')][1:2];`,
-      [
-            [
-              [2, "bar"],
-            ],
-          ]
-    );
+        [1, "foo"],
+        [2, "bar"],
+      ],
+    ]);
+    assertQueryResult(h, `select [(1,'foo'), (2,'bar'), (3,'baz')][1:2];`, [[[2, "bar"]]]);
     assertQueryResult(
       h,
       `
                 select [(1,'foo'), (2,'bar'), (3,'baz')][<optional int64>$0:];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional array<int32>>$0)[2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional str>$0)[2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select to_json(<optional str>$0)[2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional array<int32>>$0)[1:2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional str>$0)[1:2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select to_json(<optional str>$0)[1:2];
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_select_interpreter_bigint_index_01", () => {
     expect(() => {
-      h.script(
-        "select [1, 2, 3][1099511627776];"
-      );
+      h.script("select [1, 2, 3][1099511627776];");
     }).toThrow(new RegExp("array index 1099511627776 is out of bounds"));
     expect(() => {
-      h.script(
-        "select [1, 2, 3][-1099511627776];"
-      );
+      h.script("select [1, 2, 3][-1099511627776];");
     }).toThrow(new RegExp("array index -1099511627776 is out of bounds"));
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][0:1099511627776];`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][0:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][-1099511627776:1099511627776];`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][-1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][1099511627776:1099511627776];`,
-      [
-            [],
-          ]
-    );
+    assertQueryResult(h, `select [1, 2, 3][0:1099511627776];`, [[1, 2, 3]]);
+    assertQueryResult(h, `select [1, 2, 3][0:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select [1, 2, 3][-1099511627776:1099511627776];`, [[1, 2, 3]]);
+    assertQueryResult(h, `select [1, 2, 3][1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select [1, 2, 3][-1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select [1, 2, 3][1099511627776:1099511627776];`, [[]]);
   });
 
   it("test_edgeql_select_interpreter_bigint_index_02", () => {
     expect(() => {
-      h.script(
-        "select \"Hello world!\"[1099511627776];"
-      );
+      h.script('select "Hello world!"[1099511627776];');
     }).toThrow(new RegExp("index 1099511627776 is out of bounds"));
     expect(() => {
-      h.script(
-        "select \"Hello world!\"[-1099511627776];"
-      );
+      h.script('select "Hello world!"[-1099511627776];');
     }).toThrow(new RegExp("index -1099511627776 is out of bounds"));
-    assertQueryResult(
-      h,
-      `select "Hello world!"[6:1099511627776];`,
-      ["world!"]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[6:-1099511627776];`,
-      [""]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[-1099511627776:1099511627776];`,
-      ["Hello world!"]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[1099511627776:-1099511627776];`,
-      [""]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[-1099511627776:-1099511627776];`,
-      [""]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[1099511627776:1099511627776];`,
-      [""]
-    );
+    assertQueryResult(h, `select "Hello world!"[6:1099511627776];`, ["world!"]);
+    assertQueryResult(h, `select "Hello world!"[6:-1099511627776];`, [""]);
+    assertQueryResult(h, `select "Hello world!"[-1099511627776:1099511627776];`, ["Hello world!"]);
+    assertQueryResult(h, `select "Hello world!"[1099511627776:-1099511627776];`, [""]);
+    assertQueryResult(h, `select "Hello world!"[-1099511627776:-1099511627776];`, [""]);
+    assertQueryResult(h, `select "Hello world!"[1099511627776:1099511627776];`, [""]);
   });
 
   it("test_edgeql_select_interpreter_bigint_index_03", () => {
     expect(() => {
-      h.script(
-        "select to_json(\"[1, 2, 3]\")[1099511627776];"
-      );
+      h.script('select to_json("[1, 2, 3]")[1099511627776];');
     }).toThrow(new RegExp("index 1099511627776 is out of bounds"));
     expect(() => {
-      h.script(
-        "select to_json(\"[1, 2, 3]\")[-1099511627776];"
-      );
+      h.script('select to_json("[1, 2, 3]")[-1099511627776];');
     }).toThrow(new RegExp("index -1099511627776 is out of bounds"));
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1:1099511627776];`,
-      [
-            [2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[-1099511627776:1099511627776];`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[-1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1099511627776:1099511627776];`,
-      [
-            [],
-          ]
-    );
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1:1099511627776];`, [[2, 3]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[-1099511627776:1099511627776];`, [[1, 2, 3]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[-1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1099511627776:1099511627776];`, [[]]);
   });
 
   it("test_edgeql_select_interpreter_tuple_01", () => {
@@ -5810,9 +5652,9 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Status.name;
             `,
       [
-            ["Closed", 2],
-            ["Open", 2],
-          ]
+        ["Closed", 2],
+        ["Open", 2],
+      ],
     );
   });
 
@@ -5835,23 +5677,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY _.0 THEN _.1;
             `,
       [
-            [
-              "Elvis",
-              ["Closed", 1],
-            ],
-            [
-              "Elvis",
-              ["Open", 1],
-            ],
-            [
-              "Yury",
-              ["Closed", 1],
-            ],
-            [
-              "Yury",
-              ["Open", 1],
-            ],
-          ]
+        ["Elvis", ["Closed", 1]],
+        ["Elvis", ["Open", 1]],
+        ["Yury", ["Closed", 1]],
+        ["Yury", ["Open", 1]],
+      ],
     );
   });
 
@@ -5871,13 +5701,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 User.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -5895,13 +5725,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 User.name;
             `,
       [
-            {
-              "t": [
-                [1, 2],
-                [3, 4],
-              ],
-            },
-          ]
+        {
+          t: [
+            [1, 2],
+            [3, 4],
+          ],
+        },
+      ],
     );
   });
 
@@ -5915,11 +5745,11 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 );
             `,
       [
-            {
-              "statuses": 2,
-              "issues": 4,
-            },
-          ]
+        {
+          statuses: 2,
+          issues: 4,
+        },
+      ],
     );
   });
 
@@ -5935,7 +5765,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT
                 counts.statuses + counts.issues;
             `,
-      [6]
+      [6],
     );
   });
 
@@ -5956,7 +5786,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     AND Issue.status = criteria.status
             ).number;
             `,
-      ["2"]
+      ["2"],
     );
   });
 
@@ -5970,12 +5800,12 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 );
             `,
       [
-            {
-              "user": {
-                "name": "Yury",
-              },
-            },
-          ]
+        {
+          user: {
+            name: "Yury",
+          },
+        },
+      ],
     );
   });
 
@@ -5988,7 +5818,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     user := (SELECT User{name} FILTER User.name = 'Yury')
                 ).user.name;
             `,
-      ["Yury"]
+      ["Yury"],
     );
   });
 
@@ -6004,7 +5834,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     =
                 (user := (SELECT U2{name} FILTER U2.name = 'Yury'));
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -6018,7 +5848,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 (user := (SELECT U2{name} FILTER U2.name = 'Elvis'));
 
             `,
-      [false]
+      [false],
     );
   });
 
@@ -6029,7 +5859,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT User.todo@rank + <int64>User.todo.number
             ORDER BY User.todo.number;
             `,
-      [43, 44, 45, 46]
+      [43, 44, 45, 46],
     );
   });
 
@@ -6040,7 +5870,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT Issue.<todo[IS User]@rank + <int64>Issue.number
             ORDER BY Issue.number;
             `,
-      [43, 44, 45, 46]
+      [43, 44, 45, 46],
     );
   });
 
@@ -6058,39 +5888,39 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          todo: [
             {
-              "name": "Elvis",
-              "todo": [
-                {
-                  "number": "1",
-                  "@rank": 42,
-                },
-                {
-                  "number": "2",
-                  "@rank": 42,
-                },
-              ],
+              number: "1",
+              "@rank": 42,
             },
             {
-              "name": "Yury",
-              "todo": [
-                {
-                  "number": "3",
-                  "@rank": 42,
-                },
-                {
-                  "number": "4",
-                  "@rank": 42,
-                },
-              ],
+              number: "2",
+              "@rank": 42,
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          todo: [
+            {
+              number: "3",
+              "@rank": 42,
+            },
+            {
+              number: "4",
+              "@rank": 42,
+            },
+          ],
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_linkproperty_04", () => {
     h.script(
-      "\n            SELECT\n                Issue { since := (SELECT .owner)@since }\n            "
+      "\n            SELECT\n                Issue { since := (SELECT .owner)@since }\n            ",
     );
   });
 
@@ -6114,14 +5944,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 .name = "Elvis"
             `,
       [
+        {
+          todo: [
             {
-              "todo": [
-                {
-                  "@rank": 10,
-                },
-              ],
+              "@rank": 10,
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -6136,23 +5966,23 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "open": "yes",
-            },
-            {
-              "number": "2",
-              "open": "yes",
-            },
-            {
-              "number": "3",
-              "open": "no",
-            },
-            {
-              "number": "4",
-              "open": "no",
-            },
-          ]
+        {
+          number: "1",
+          open: "yes",
+        },
+        {
+          number: "2",
+          open: "yes",
+        },
+        {
+          number: "3",
+          open: "no",
+        },
+        {
+          number: "4",
+          open: "no",
+        },
+      ],
     );
   });
 
@@ -6168,29 +5998,29 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "foo": "bar",
-            },
-            {
-              "number": "2",
-              "foo": "Open",
-            },
-            {
-              "number": "3",
-              "foo": "Closed",
-            },
-            {
-              "number": "4",
-              "foo": "Closed",
-            },
-          ]
+        {
+          number: "1",
+          foo: "bar",
+        },
+        {
+          number: "2",
+          foo: "Open",
+        },
+        {
+          number: "3",
+          foo: "Closed",
+        },
+        {
+          number: "4",
+          foo: "Closed",
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_if_else_03", () => {
     h.script(
-      "\n                SELECT Issue {\n                    foo := 'bar' IF Issue.number = '1' ELSE 123\n                };\n                "
+      "\n                SELECT Issue {\n                    foo := 'bar' IF Issue.number = '1' ELSE 123\n                };\n                ",
     );
   });
 
@@ -6206,19 +6036,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "kind": "Open",
-            },
-            {
-              "kind": "High",
-            },
-            {
-              "kind": "Low",
-            },
-            {
-              "kind": "Closed",
-            },
-          ]
+        {
+          kind: "Open",
+        },
+        {
+          kind: "High",
+        },
+        {
+          kind: "Low",
+        },
+        {
+          kind: "Closed",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6230,19 +6060,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "kind": "Open",
-            },
-            {
-              "kind": "High",
-            },
-            {
-              "kind": "Low",
-            },
-            {
-              "kind": "Closed",
-            },
-          ]
+        {
+          kind: "Open",
+        },
+        {
+          kind: "High",
+        },
+        {
+          kind: "Low",
+        },
+        {
+          kind: "Closed",
+        },
+      ],
     );
   });
 
@@ -6258,10 +6088,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6273,10 +6103,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -6292,16 +6122,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6313,16 +6143,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -6334,7 +6164,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                  b := (SELECT Issue FILTER .number = '1'),
             SELECT a.number IF a.time_estimate < b.time_estimate ELSE b.number;
             `,
-      []
+      [],
     );
   });
 
@@ -6350,10 +6180,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 .number = '1';
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -6369,10 +6199,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 .name = 'Yury';
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -6389,14 +6219,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } FILTER .status.name = 'Open' AND .owner.name = 'Elvis';
             `,
       [
-            {
-              "number": "1",
-              "watchers": {
-                "name": "Yury",
-                "name_upper": "YURY",
-              },
-            },
-          ]
+        {
+          number: "1",
+          watchers: {
+            name: "Yury",
+            name_upper: "YURY",
+          },
+        },
+      ],
     );
   });
 
@@ -6410,16 +6240,16 @@ describe("TestEdgeQLSelectInterpreter", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "4",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "4",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -6434,10 +6264,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
             FILTER .number = '1';
         `,
       [
-            {
-              "sub": "1",
-            },
-          ]
+        {
+          sub: "1",
+        },
+      ],
     );
   });
 
@@ -6451,10 +6281,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6465,10 +6295,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6479,10 +6309,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -6504,13 +6334,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 .number;
             `,
       [
-            {
-              "name": "Release EdgeDB",
-            },
-            {
-              "name": "Regression.",
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+        },
+        {
+          name: "Regression.",
+        },
+      ],
     );
   });
 
@@ -6532,23 +6362,23 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY .number;
             `,
       [
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-              "number": "2",
-            },
-            {
-              "name": "Repl tweak.",
-              "number": "3",
-            },
-            {
-              "name": "Regression.",
-              "number": "4",
-            },
-            {
-              "name": "Regression.",
-              "number": "4",
-            },
-          ]
+        {
+          name: "Improve EdgeDB repl output rendering.",
+          number: "2",
+        },
+        {
+          name: "Repl tweak.",
+          number: "3",
+        },
+        {
+          name: "Regression.",
+          number: "4",
+        },
+        {
+          name: "Regression.",
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -6570,19 +6400,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             );
             `,
       unorderedBag([
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-              "number": "2",
-            },
-            {
-              "name": "Repl tweak.",
-              "number": "3",
-            },
-            {
-              "name": "Regression.",
-              "number": "4",
-            },
-          ])
+        {
+          name: "Improve EdgeDB repl output rendering.",
+          number: "2",
+        },
+        {
+          name: "Repl tweak.",
+          number: "3",
+        },
+        {
+          name: "Regression.",
+          number: "4",
+        },
+      ]),
     );
   });
 
@@ -6598,10 +6428,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 FILTER .name = 'Release EdgeDB';
             `,
       [
-            {
-              "asdf": null,
-            },
-          ]
+        {
+          asdf: null,
+        },
+      ],
     );
   });
 
@@ -6617,7 +6447,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 } FILTER Issue.number = '1'
             ) = to_json('{"number": "1", "time_estimate": 3000}');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -6629,7 +6459,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 } FILTER Issue.number = '2'
             ) = to_json('{"number": "2", "time_estimate": null}');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6639,14 +6469,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT (<str>1)[0];
             `,
-      ["1"]
+      ["1"],
     );
     assertQueryResult(
       h,
       `
             SELECT (<str>Issue.time_estimate)[0];
             `,
-      ["3"]
+      ["3"],
     );
   });
 
@@ -6656,14 +6486,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT EXISTS Issue{number};
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `
             SELECT EXISTS Issue;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6673,243 +6503,67 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT EXISTS Issue{number};
             `,
-      [true]
+      [true],
     );
   });
 
   it("test_edgeql_select_interpreter_is_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT 5 IS int64;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyint;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyreal;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyscalar;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS int16;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS float64;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyfloat;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS str;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS Object;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT 5 IS int64;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS anyint;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS anyreal;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS anyscalar;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS int16;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS float64;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS anyfloat;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS str;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS Object;`, [false]);
   });
 
   it("test_edgeql_select_interpreter_is_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS int64;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyint;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyreal;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyscalar;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS int16;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS float64;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyfloat;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS str;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS Object;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT 5.5 IS int64;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS anyint;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS anyreal;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS anyscalar;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS int16;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS float64;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS anyfloat;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS str;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS Object;`, [false]);
   });
 
   it("test_edgeql_select_interpreter_is_03", () => {
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS int64 LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyint LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyreal LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyscalar LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS int16 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS float64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyfloat LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS str LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS Object LIMIT 1;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT Issue.time_estimate IS int64 LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyint LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyreal LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyscalar LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS int16 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS float64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyfloat LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS str LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS Object LIMIT 1;`, [false]);
   });
 
   it("test_edgeql_select_interpreter_is_04", () => {
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS int64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyint LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyreal LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyscalar LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS int16 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS float64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyfloat LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS str LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS Object LIMIT 1;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT Issue.number IS int64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyint LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyreal LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyscalar LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.number IS int16 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS float64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyfloat LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS str LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.number IS Object LIMIT 1;`, [false]);
   });
 
   it("test_edgeql_select_interpreter_is_05", () => {
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS int64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyint LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyreal LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyscalar LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS int16 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS float64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyfloat LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS str LIMIT 1;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT Issue.status IS int64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyint LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyreal LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyscalar LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS int16 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS float64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyfloat LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS str LIMIT 1;`, [false]);
   });
 
   it("test_edgeql_select_interpreter_is_06", () => {
@@ -6918,7 +6572,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT 5 IS anytype;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6928,7 +6582,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT 5 IS anyint;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6938,7 +6592,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT 5.5 IS anyfloat;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6948,12 +6602,14 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             SELECT Issue.time_estimate IS anytype LIMIT 1;
             `,
-      [true]
+      [true],
     );
   });
 
   it("test_edgeql_select_interpreter_big_set_literal", () => {
-    let res = queryRows<unknown>(h, `
+    let res = queryRows<unknown>(
+      h,
+      `
             SELECT {
                  (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),
                  (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),
@@ -6966,12 +6622,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
                  (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),
                  (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),
             };
-        `);
-    expect(((res).length === 100)).toBeTruthy();
+        `,
+    );
+    expect(res.length === 100).toBeTruthy();
   });
 
   it("test_edgeql_select_interpreter_big_unions", () => {
-    let res = queryRows<unknown>(h, `
+    let res = queryRows<unknown>(
+      h,
+      `
             SELECT (
                  (1,) union (1,) union (1,) union (1,) union (1,) union
                  (1,) union (1,) union (1,) union (1,) union (1,) union
@@ -6994,124 +6653,31 @@ describe("TestEdgeQLSelectInterpreter", () => {
                  (1,) union (1,) union (1,) union (1,) union (1,) union
                  (1,) union (1,) union (1,) union (1,) union (1,)
             );
-        `);
-    expect(((res).length === 100)).toBeTruthy();
+        `,
+    );
+    expect(res.length === 100).toBeTruthy();
   });
 
   it("test_edgeql_select_interpreter_set_literal_in_order", () => {
-    assertQueryResult(
-      h,
-      `SELECT {0, 1}`,
-      [0, 1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 0 union 1`,
-      [0, 1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {0, 1, 2, 3}`,
-      [0, 1, 2, 3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 0 union 1 union 2 union 3`,
-      [0, 1, 2, 3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-          ]
-    );
+    assertQueryResult(h, `SELECT {0, 1}`, [0, 1]);
+    assertQueryResult(h, `SELECT 0 union 1`, [0, 1]);
+    assertQueryResult(h, `SELECT {0, 1, 2, 3}`, [0, 1, 2, 3]);
+    assertQueryResult(h, `SELECT 0 union 1 union 2 union 3`, [0, 1, 2, 3]);
+    assertQueryResult(h, `SELECT {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}`, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     assertQueryResult(
       h,
       `SELECT 0 union 1 union 2 union 3 union 4 union 5 union 6 union 7 union 8 union 9`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-          ]
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     );
     assertQueryResult(
       h,
       `SELECT {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            20,
-            21,
-            22,
-            23,
-            24,
-          ]
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
     );
     assertQueryResult(
       h,
       `SELECT 0 union 1 union 2 union 3 union 4 union 5 union 6 union 7 union 8 union 9 union 10 union 11 union 12 union 13 union 14 union 15 union 16 union 17 union 18 union 19 union 20 union 21 union 22 union 23 union 24`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            20,
-            21,
-            22,
-            23,
-            24,
-          ]
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
     );
   });
 
@@ -7132,15 +6698,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
                     .name = 'screenshot.png'
             `,
       [
+        {
+          referrers: [
             {
-              "referrers": [
-                {
-                  "name": "Improve EdgeDB repl output rendering.",
-                  "number": "2",
-                },
-              ],
+              name: "Improve EdgeDB repl output rendering.",
+              number: "2",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -7150,7 +6716,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
                 SELECT array_agg(Issue ORDER BY .body)[0].owner.name;
             `,
-      ["Elvis"]
+      ["Elvis"],
     );
   });
 
@@ -7161,7 +6727,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT _ := array_unpack(array_agg(Issue)).owner.name
                 ORDER BY _;
             `,
-      ["Elvis", "Yury"]
+      ["Elvis", "Yury"],
     );
   });
 
@@ -7172,7 +6738,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 WITH items := array_agg((SELECT Named ORDER BY .name))
                 SELECT items[0] IS Status;
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -7182,16 +6748,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT (items, items[0], items[0].name,
                         items[0] IS Status);
             `,
-      [
-            [
-              [
-                {},
-              ],
-              {},
-              "Closed",
-              true,
-            ],
-          ]
+      [[[{}], {}, "Closed", true]],
     );
     assertQueryResult(
       h,
@@ -7200,23 +6757,9 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT _ := (items.0, items.1, items.1[0].name) ORDER BY _.0;
             `,
       [
-            [
-              "Elvis",
-              [
-                {},
-                {},
-              ],
-              "Improve EdgeDB repl output rendering.",
-            ],
-            [
-              "Yury",
-              [
-                {},
-                {},
-              ],
-              "Regression.",
-            ],
-          ]
+        ["Elvis", [{}, {}], "Improve EdgeDB repl output rendering."],
+        ["Yury", [{}, {}], "Regression."],
+      ],
     );
   });
 
@@ -7229,27 +6772,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT (L, L);
             `,
       [
-            [
-              [
-                "x",
-                {},
-              ],
-              [
-                "x",
-                {},
-              ],
-            ],
-            [
-              [
-                "x",
-                {},
-              ],
-              [
-                "x",
-                {},
-              ],
-            ],
-          ]
+        [
+          ["x", {}],
+          ["x", {}],
+        ],
+        [
+          ["x", {}],
+          ["x", {}],
+        ],
+      ],
     );
   });
 
@@ -7260,30 +6791,33 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT (User, User {name}) ORDER BY .1.name;
             `,
       [
-            [
-              {},
-              {
-                "name": "Elvis",
-              },
-            ],
-            [
-              {},
-              {
-                "name": "Yury",
-              },
-            ],
-          ]
+        [
+          {},
+          {
+            name: "Elvis",
+          },
+        ],
+        [
+          {},
+          {
+            name: "Yury",
+          },
+        ],
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_expr_objects_07", () => {
-    let res = queryRows<{ id: string; name: string }>(h, `
+    let res = queryRows<{ id: string; name: string }>(
+      h,
+      `
             SELECT User {
                 name,
                 id
             }
             ORDER BY User.name;
-        `);
+        `,
+    );
     assertQueryResult(
       h,
       `
@@ -7292,7 +6826,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := (L, L.1 {name})
             ORDER BY _.1.name;
             `,
-      res.map((user) => [["x", { "id": user.id }], { "name": user.name }])
+      res.map((user) => [["x", { id: user.id }], { name: user.name }]),
     );
     assertQueryResult(
       h,
@@ -7302,7 +6836,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT _ := (L.1 {name}, L)
             ORDER BY _.0.name;
             `,
-      res.map((user) => [{ "name": user.name }, ["x", { "id": user.id }]])
+      res.map((user) => [{ name: user.name }, ["x", { id: user.id }]]),
     );
   });
 
@@ -7314,13 +6848,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 [(SELECT Issue {number, name} FILTER .number = "1")];
             `,
       [
-            [
-              {
-                "number": "1",
-                "name": "Release EdgeDB",
-              },
-            ],
-          ]
+        [
+          {
+            number: "1",
+            name: "Release EdgeDB",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7330,24 +6864,20 @@ describe("TestEdgeQLSelectInterpreter", () => {
                  Issue.status.name);
             `,
       [
-            [
-              {
-                "number": "1",
-                "name": "Release EdgeDB",
-              },
-              "Open",
-            ],
-          ]
+        [
+          {
+            number: "1",
+            name: "Release EdgeDB",
+          },
+          "Open",
+        ],
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_banned_free_shape_01", () => {
-    h.script(
-      "\n            SELECT DISTINCT {{ z := 1 }, { z := 2 }};\n        "
-    );
-    h.script(
-      "\n            SELECT DISTINCT { z := 1 } = { z := 2 };\n        "
-    );
+    h.script("\n            SELECT DISTINCT {{ z := 1 }, { z := 2 }};\n        ");
+    h.script("\n            SELECT DISTINCT { z := 1 } = { z := 2 };\n        ");
   });
 
   it("test_edgeql_select_interpreter_free_shape_01", () => {
@@ -7362,13 +6892,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT _ := (User { tag := User.name }) ORDER BY _.name;
             `,
       [
-            {
-              "tag": "Elvis",
-            },
-            {
-              "tag": "Yury",
-            },
-          ]
+        {
+          tag: "Elvis",
+        },
+        {
+          tag: "Yury",
+        },
+      ],
     );
   });
 
@@ -7382,17 +6912,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 } FILTER .name = 'Elvis';
             `,
       [
+        {
+          z: [
             {
-              "z": [
-                {
-                  "name": "Regression.",
-                },
-                {
-                  "name": "Release EdgeDB",
-                },
-              ],
+              name: "Regression.",
             },
-          ]
+            {
+              name: "Release EdgeDB",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -7406,17 +6936,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 } FILTER .name = 'Elvis';
             `,
       [
+        {
+          z: [
             {
-              "z": [
-                {
-                  "name": "Regression.",
-                },
-                {
-                  "name": "Release EdgeDB",
-                },
-              ],
+              name: "Regression.",
             },
-          ]
+            {
+              name: "Release EdgeDB",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -7429,10 +6959,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )]);
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7445,10 +6975,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )])) { name };
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7461,10 +6991,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )).1;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7477,10 +7007,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )])) {name};
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7493,10 +7023,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )])) {name} ;
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7509,10 +7039,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )])) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7525,13 +7055,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )]) {name});
             `,
       [
-            [
-              0,
-              {
-                "name": "Elvis",
-              },
-            ],
-          ]
+        [
+          0,
+          {
+            name: "Elvis",
+          },
+        ],
+      ],
     );
   });
 
@@ -7544,10 +7074,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )).1 UNION (SELECT User FILTER false)) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7560,10 +7090,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )).1 ?? (SELECT User FILTER false)) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7576,10 +7106,10 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 )).1 if 1 = 1 ELSE (SELECT User FILTER false)) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -7590,17 +7120,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <array<User>>{} UNION [User]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7608,17 +7138,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <array<User>>{} ?? [User]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7626,17 +7156,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <array<User>>{} IF false ELSE [User]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7644,17 +7174,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT assert_exists([User])
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -7665,15 +7195,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <array<User>>{} UNION array_agg(User)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7681,15 +7211,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <array<User>>{} ?? array_agg(User)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7697,15 +7227,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <array<User>>{} IF false ELSE array_agg(User)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7713,15 +7243,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT assert_exists(array_agg(User))
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -7732,19 +7262,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <tuple<User, int64>>{} UNION (User, 2)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7752,19 +7282,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <tuple<User, int64>>{} ?? (User, 2)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7772,19 +7302,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT <tuple<User, int64>>{} IF false ELSE (User, 2)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7792,19 +7322,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT assert_exists((User, 2))
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
   });
 
@@ -7815,17 +7345,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT [(User,)][0]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7833,17 +7363,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT [((SELECT User {name} ORDER BY .name),)][0]
             `,
       [
-            [
-              {
-                "name": "Elvis",
-              },
-            ],
-            [
-              {
-                "name": "Yury",
-              },
-            ],
-          ]
+        [
+          {
+            name: "Elvis",
+          },
+        ],
+        [
+          {
+            name: "Yury",
+          },
+        ],
+      ],
     );
   });
 
@@ -7854,17 +7384,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT ([User],).0
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7872,17 +7402,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT ([(SELECT User {name} ORDER BY .name)],).0
             `,
       [
-            [
-              {
-                "name": "Elvis",
-              },
-            ],
-            [
-              {
-                "name": "Yury",
-              },
-            ],
-          ]
+        [
+          {
+            name: "Elvis",
+          },
+        ],
+        [
+          {
+            name: "Yury",
+          },
+        ],
+      ],
     );
   });
 
@@ -7893,21 +7423,21 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT { z := ([User],).0 }
             `,
       [
-            {
-              "z": [
-                [
-                  {
-                    "id": "str",
-                  },
-                ],
-                [
-                  {
-                    "id": "str",
-                  },
-                ],
-              ],
-            },
-          ]
+        {
+          z: [
+            [
+              {
+                id: "str",
+              },
+            ],
+            [
+              {
+                id: "str",
+              },
+            ],
+          ],
+        },
+      ],
     );
   });
 
@@ -7919,17 +7449,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT (Z, array_agg(array_unpack(Z))).1;
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7938,17 +7468,17 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT (Z, array_agg(array_unpack(Z))).1;
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -7959,15 +7489,15 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT X := array_agg(User) FILTER X[0].name != 'Sully';
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -7975,19 +7505,19 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT X := [User] FILTER X[0].name = 'Elvis';
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
   it("test_edgeql_assert_fail_object_computed_02", () => {
     expect(() => {
       h.script(
-        "\n                SELECT array_agg((SELECT User {m := Publication}))[{1000}].m;\n            "
+        "\n                SELECT array_agg((SELECT User {m := Publication}))[{1000}].m;\n            ",
       );
     }).toThrow(new RegExp("array index 1000 is out of bounds"));
   });
@@ -8003,39 +7533,37 @@ describe("TestEdgeQLSelectInterpreter", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": [2, 0],
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": [4, 0],
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": [10, 0],
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: [2, 0],
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: [4, 0],
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: [10, 0],
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_subshape_filter_01", () => {
-    h.script(
-      "\n            SELECT Comment { owner: { name } FILTER false }\n            "
-    );
+    h.script("\n            SELECT Comment { owner: { name } FILTER false }\n            ");
   });
 
   it("test_edgeql_select_interpreter_nested_order_01", () => {
@@ -8050,27 +7578,27 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 ORDER BY .key.name;
             `,
       [
-            {
-              "key": {
-                "name": "Improve EdgeDB repl output rendering.",
-              },
-            },
-            {
-              "key": {
-                "name": "Regression.",
-              },
-            },
-            {
-              "key": {
-                "name": "Release EdgeDB",
-              },
-            },
-            {
-              "key": {
-                "name": "Repl tweak.",
-              },
-            },
-          ]
+        {
+          key: {
+            name: "Improve EdgeDB repl output rendering.",
+          },
+        },
+        {
+          key: {
+            name: "Regression.",
+          },
+        },
+        {
+          key: {
+            name: "Release EdgeDB",
+          },
+        },
+        {
+          key: {
+            name: "Repl tweak.",
+          },
+        },
+      ],
     );
   });
 
@@ -8086,31 +7614,31 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 ORDER BY .key.number THEN .key.name;
             `,
       [
-            {
-              "key": {
-                "name": "Release EdgeDB",
-                "number": "1",
-              },
-            },
-            {
-              "key": {
-                "name": "Improve EdgeDB repl output rendering.",
-                "number": "2",
-              },
-            },
-            {
-              "key": {
-                "name": "Repl tweak.",
-                "number": "3",
-              },
-            },
-            {
-              "key": {
-                "name": "Regression.",
-                "number": "4",
-              },
-            },
-          ]
+        {
+          key: {
+            name: "Release EdgeDB",
+            number: "1",
+          },
+        },
+        {
+          key: {
+            name: "Improve EdgeDB repl output rendering.",
+            number: "2",
+          },
+        },
+        {
+          key: {
+            name: "Repl tweak.",
+            number: "3",
+          },
+        },
+        {
+          key: {
+            name: "Regression.",
+            number: "4",
+          },
+        },
+      ],
     );
   });
 
@@ -8120,7 +7648,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             select (select {1,2} filter random() > 0) filter random() > 0
             `,
-      unorderedSet([1, 2])
+      unorderedSet([1, 2]),
     );
   });
 
@@ -8130,7 +7658,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             select {1,2,3,4+0} filter random() > 0
             `,
-      unorderedSet([1, 2, 3, 4])
+      unorderedSet([1, 2, 3, 4]),
     );
   });
 
@@ -8140,7 +7668,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
       `
             for x in 2 union (select {1,x} filter random() > 0)
             `,
-      unorderedSet([1, 2])
+      unorderedSet([1, 2]),
     );
   });
 
@@ -8152,13 +7680,13 @@ describe("TestEdgeQLSelectInterpreter", () => {
             SELECT Z
             `,
       [
-            {
-              "name": "str",
-            },
-            {
-              "name": "str",
-            },
-          ]
+        {
+          name: "str",
+        },
+        {
+          name: "str",
+        },
+      ],
     );
   });
 
@@ -8170,21 +7698,21 @@ describe("TestEdgeQLSelectInterpreter", () => {
             ORDER BY User.is_elvis
             `,
       [
-            {
-              "is_elvis": false,
-              "name": "Yury",
-            },
-            {
-              "is_elvis": true,
-              "name": "Elvis",
-            },
-          ]
+        {
+          is_elvis: false,
+          name: "Yury",
+        },
+        {
+          is_elvis: true,
+          name: "Elvis",
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_interpreter_card_blowup_01", () => {
     h.script(
-      "\n        SELECT Comment {\n          issue := assert_exists(( .issue {\n            status1 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status2 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status3 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status4 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status5 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status6 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status7 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status8 := ( .status { a := .__type__.name, b := .__type__.id } ),\n          })),\n        };\n        "
+      "\n        SELECT Comment {\n          issue := assert_exists(( .issue {\n            status1 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status2 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status3 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status4 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status5 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status6 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status7 := ( .status { a := .__type__.name, b := .__type__.id } ),\n            status8 := ( .status { a := .__type__.name, b := .__type__.id } ),\n          })),\n        };\n        ",
     );
   });
 
@@ -8195,7 +7723,7 @@ describe("TestEdgeQLSelectInterpreter", () => {
                 SELECT Issue.name
                 FILTER Issue.number > '2';
             `,
-      unorderedBag(["Repl tweak.", "Regression."])
+      unorderedBag(["Repl tweak.", "Regression."]),
     );
   });
 });

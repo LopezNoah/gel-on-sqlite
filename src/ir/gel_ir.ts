@@ -49,7 +49,11 @@ export interface TypeRef extends Base {
 }
 
 export interface PointerRef extends Base {
-  kind: "pointer_ref" | "tuple_indirection_pointer_ref" | "special_pointer_ref" | "type_intersection_pointer_ref";
+  kind:
+    | "pointer_ref"
+    | "tuple_indirection_pointer_ref"
+    | "special_pointer_ref"
+    | "type_intersection_pointer_ref";
   id: UUID;
   name: string;
   shortName: string;
@@ -206,7 +210,14 @@ export interface ShapeElement extends Base {
 }
 
 export interface Statement extends Base {
-  kind: "statement" | "select_stmt" | "insert_stmt" | "update_stmt" | "delete_stmt" | "group_stmt" | "config_stmt";
+  kind:
+    | "statement"
+    | "select_stmt"
+    | "insert_stmt"
+    | "update_stmt"
+    | "delete_stmt"
+    | "group_stmt"
+    | "config_stmt";
   expr: Set;
   scopeTree: ScopeTreeNode;
   views: Record<string, string>;
@@ -702,7 +713,13 @@ export type GroupElementsField =
   // plain field passthrough (`name`)
   | { name: string; kind: "field" }
   // `z := .b <= 1` — an element field path compared against a literal
-  | { name: string; kind: "compare"; steps: string[]; op: "=" | "!=" | "<" | "<=" | ">" | ">="; rhs: string | number | boolean }
+  | {
+      name: string;
+      kind: "compare";
+      steps: string[];
+      op: "=" | "!=" | "<" | "<=" | ">" | ">=";
+      rhs: string | number | boolean;
+    }
   // `b: {c, z := .d <= 1}` — re-project a nested object field (recursive)
   | { name: string; kind: "object_shape"; fields: GroupElementsField[] }
   // `n := count(.elements)` — count of an array-valued element field (used

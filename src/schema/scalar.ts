@@ -82,7 +82,7 @@ export class ScalarRegistry {
     // Check for anonymous enum resolution (Matches Python AnonymousEnumTypeShell.resolve)
     if (lower === "anyenum" && !this.aliasMap.has(normalized)) {
       throw new errors.InvalidPropertyDefinitionError(
-        'this type cannot be anonymous',
+        "this type cannot be anonymous",
         // Note: The Python code includes a hint about defining the enum first
       );
     }
@@ -118,15 +118,13 @@ export class ScalarRegistry {
     if (options.enumValues) {
       const uniqueValues = new Set(options.enumValues);
       if (uniqueValues.size !== options.enumValues.length) {
-        throw new errors.SchemaDefinitionError(
-          `enums cannot contain duplicate values`
-        );
+        throw new errors.SchemaDefinitionError(`enums cannot contain duplicate values`);
       }
 
       // 2. Validation: Enums must be the only supertype (Python: CreateScalarType)
       if (options.bases && options.bases.length > 1) {
         throw new errors.SchemaError(
-          `invalid scalar type definition, enumeration must be the only supertype specified`
+          `invalid scalar type definition, enumeration must be the only supertype specified`,
         );
       }
     }
@@ -136,9 +134,7 @@ export class ScalarRegistry {
       for (const base of options.bases) {
         const baseLower = base.toLowerCase();
         if (baseLower.startsWith("array<") || baseLower.startsWith("tuple<")) {
-          throw new errors.SchemaError(
-            `scalar type may not have a collection base type`
-          );
+          throw new errors.SchemaError(`scalar type may not have a collection base type`);
         }
       }
     }
@@ -148,7 +144,7 @@ export class ScalarRegistry {
       enumValues: options.enumValues ? [...options.enumValues] : undefined,
       bases: options.bases,
     };
-    
+
     this.aliasMap.set(normalized, info);
     if (lower !== normalized) {
       this.aliasMap.set(lower, info);
@@ -215,9 +211,7 @@ export class ScalarRegistry {
   }
 }
 
-export const scalarTypeDeclarationToTypeDef = (
-  decl: ScalarTypeDeclaration,
-): TypeDef => ({
+export const scalarTypeDeclarationToTypeDef = (decl: ScalarTypeDeclaration): TypeDef => ({
   module: decl.module,
   name: decl.name,
   fields: [

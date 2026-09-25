@@ -1,6 +1,7 @@
 # 0063 — Extract exclusive-conflict detection (emitter-style)
 
 ## Status
+
 Accepted and IMPLEMENTED. Behaviour-neutral (verified by failing-name diff
 against pristine HEAD on `edgeql_insert` + `edgeql_update`). Continues the carve
 of the write executor begun in ADRs 0037 / 0039 / 0046.
@@ -10,7 +11,7 @@ of the write executor begun in ADRs 0037 / 0039 / 0046.
 `runWriteWithAccessPolicies` (`engine.ts`, ~580 lines) was declared "irreducible
 mutation mechanics" once access-policy, default-resolution, and the INSERT row
 emitter were carved out. But the `UNLESS CONFLICT` machinery — ~270 lines across
-six functions — remained dissolved into the executor and was reachable *only* by
+six functions — remained dissolved into the executor and was reachable _only_ by
 performing a full INSERT against a real DB:
 
 - `exclusiveChecksFor` — enumerate the exclusive constraints reachable from a
@@ -51,7 +52,7 @@ The write executor's one probe site becomes
 **Why plan + run, not a pure SQL emitter** (the alternative considered): the
 probe is not a fixed SQL string — it reads `PRAGMA table_info` at run time to
 skip tables/columns that don't exist in the physical layout. So the pure half is
-the *plan* (which tables/columns/values, the casefold flag, the multi-set
+the _plan_ (which tables/columns/values, the casefold flag, the multi-set
 items), and the DB-coupled half is the introspection-gated execution. The plan
 is the part every constraint kind crosses, and it tests without a DB.
 

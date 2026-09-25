@@ -7,7 +7,9 @@ import { getCompilerService } from "../src/compiler/service.js";
 const dir = path.join(import.meta.dirname, "../tests/schemas");
 const read = (f: string) => fs.readFileSync(path.join(dir, f), "utf8");
 const strip = (s: string) => s.replace(/#[^\n]*/g, "");
-const decl = parseDeclarativeSchema(`module default {\n${strip(read("cards.esdl"))}\n}`, { legacySyntaxCompat: true });
+const decl = parseDeclarativeSchema(`module default {\n${strip(read("cards.esdl"))}\n}`, {
+  legacySyntaxCompat: true,
+});
 const schema = schemaSnapshotFromDeclarative(decl);
 const ast = parseEdgeQL(process.argv[2] ?? "select 1");
 const stmt = Array.isArray(ast) ? ast[0] : ast;
@@ -17,5 +19,12 @@ const subject = g?.subject ?? g?.expr;
 let cursor = subject;
 while (cursor?.expr?.kind === "select_expr") cursor = cursor.expr.result;
 console.log("cursor kind:", cursor?.expr?.kind, "named:", cursor?.expr?.named);
-console.log("elements:", JSON.stringify((cursor?.expr?.elements ?? []).map((e) => ({ name: e.name, kind: e.val?.expr?.kind })), null, 1));
+console.log(
+  "elements:",
+  JSON.stringify(
+    (cursor?.expr?.elements ?? []).map((e) => ({ name: e.name, kind: e.val?.expr?.kind })),
+    null,
+    1,
+  ),
+);
 console.log("byAtoms:", g?.byAtoms, "hidden:", g?.hiddenByFields);

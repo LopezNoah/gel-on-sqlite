@@ -7,13 +7,7 @@ import { compilePathQlast } from "../src/compiler/qlast_setgen.js";
 import { qlastPathDeps } from "../src/compiler/ast_to_ir.js";
 import type { IRCompileContext } from "../src/compiler/ast_to_ir.js";
 import type { Pointer, TypeRoot } from "../src/ir/gel_ir.js";
-import type {
-  ObjectRef,
-  Path,
-  Ptr,
-  TypeIntersection,
-  TypeName,
-} from "../src/edgeql/qlast.js";
+import type { ObjectRef, Path, Ptr, TypeIntersection, TypeName } from "../src/edgeql/qlast.js";
 
 // Tracer bullet for the qlast-based AST→IR port: drive `compilePathQlast`
 // (a faithful port of Gel's setgen.py `compile_path`) directly with hand-built
@@ -94,10 +88,7 @@ describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   });
 
   it("chains pointer steps for `Movie.reviews.body`", () => {
-    const set = runPath(
-      path([objectRef("Movie"), ptr("reviews"), ptr("body")]),
-      makeCtx(),
-    );
+    const set = runPath(path([objectRef("Movie"), ptr("reviews"), ptr("body")]), makeCtx());
     expect(set.expr.kind).toBe("pointer");
     const body = set.expr as Pointer;
     expect(body.ptrref.shortName).toBe("body");
@@ -110,10 +101,7 @@ describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   });
 
   it("narrows on `Movie[is Film]`", () => {
-    const set = runPath(
-      path([objectRef("Movie"), typeIntersection("Film")]),
-      makeCtx(),
-    );
+    const set = runPath(path([objectRef("Movie"), typeIntersection("Film")]), makeCtx());
     expect(set.typeref.nameHint).toContain("Film");
   });
 
@@ -129,9 +117,9 @@ describe("compilePathQlast (qlast → Live IR tracer bullet)", () => {
   });
 
   it("defers an unresolved pointer (so the gate falls back to legacy)", () => {
-    expect(() =>
-      runPath(path([objectRef("Movie"), ptr("nope")]), makeCtx()),
-    ).toThrow(/unresolved pointer 'nope'/);
+    expect(() => runPath(path([objectRef("Movie"), ptr("nope")]), makeCtx())).toThrow(
+      /unresolved pointer 'nope'/,
+    );
   });
 
   it("ports link-property access: rejects a property the link lacks", () => {

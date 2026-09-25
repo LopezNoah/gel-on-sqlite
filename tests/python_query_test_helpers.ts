@@ -68,8 +68,10 @@ function numbersClose(actual: number, expected: number): boolean {
   if (Number.isInteger(actual) && Number.isInteger(expected)) {
     return actual === expected;
   }
-  return Math.abs(actual - expected)
-    <= Math.max(DEFAULT_REL_TOL * Math.max(Math.abs(actual), Math.abs(expected)), DEFAULT_ABS_TOL);
+  return (
+    Math.abs(actual - expected) <=
+    Math.max(DEFAULT_REL_TOL * Math.max(Math.abs(actual), Math.abs(expected)), DEFAULT_ABS_TOL)
+  );
 }
 
 function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
@@ -79,12 +81,17 @@ function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
     return "str";
   }
   // Snap float-close actuals onto the template value (Python isclose default).
-  if (typeof expected === "number" && typeof actual === "number"
-      && numbersClose(actual, expected)) {
+  if (
+    typeof expected === "number" &&
+    typeof actual === "number" &&
+    numbersClose(actual, expected)
+  ) {
     return expected;
   }
-  if ((expected === "int" || expected === "float" || expected === "decimal")
-      && typeof actual === "number") {
+  if (
+    (expected === "int" || expected === "float" || expected === "decimal") &&
+    typeof actual === "number"
+  ) {
     return expected;
   }
   if (expected === "bool" && typeof actual === "boolean") {
@@ -93,9 +100,12 @@ function normalizeAgainstTemplate(actual: unknown, expected: unknown): unknown {
   if (isUnorderedBag(expected) || isUnorderedSet(expected)) {
     // The engine sometimes returns set-typed values pre-wrapped as
     // `{__kind: "set", items: [...]}` — unwrap so we don't double-wrap.
-    const actualItems = isUnorderedBag(actual) || isUnorderedSet(actual)
-      ? (actual.items as unknown[])
-      : Array.isArray(actual) ? actual : [actual];
+    const actualItems =
+      isUnorderedBag(actual) || isUnorderedSet(actual)
+        ? (actual.items as unknown[])
+        : Array.isArray(actual)
+          ? actual
+          : [actual];
     // Pick the best-matching template per item rather than pairing by array
     // index: bag/set results come back in arbitrary order (e.g. multi-link
     // rows ordered by random ids), so index-based pairing nondeterministically
@@ -233,13 +243,15 @@ export function expectLike(actual: unknown, expected: unknown): void {
     const expectedSet = new Set(expected.items.map(canonical));
     // Normalize each actual item against the best-matching template so
     // float-closeness and placeholder semantics apply inside sets too.
-    const actualSet = new Set((actual as unknown[]).map((item) => {
-      for (const tmpl of expected.items) {
-        const candidate = canonical(normalizeAgainstTemplate(item, tmpl));
-        if (expectedSet.has(candidate)) return candidate;
-      }
-      return canonical(item);
-    }));
+    const actualSet = new Set(
+      (actual as unknown[]).map((item) => {
+        for (const tmpl of expected.items) {
+          const candidate = canonical(normalizeAgainstTemplate(item, tmpl));
+          if (expectedSet.has(candidate)) return candidate;
+        }
+        return canonical(item);
+      }),
+    );
     expect(actualSet).toEqual(expectedSet);
     return;
   }
@@ -270,19 +282,27 @@ export function expectLike(actual: unknown, expected: unknown): void {
   }
   // `'UUID'` is upstream's sentinel for "any UUID string" — matches either the
   // canonical dashed form or the dashless 32-hex form this engine emits.
-  if (expected === "UUID" && typeof actual === "string"
-      && /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(actual)) {
+  if (
+    expected === "UUID" &&
+    typeof actual === "string" &&
+    /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(actual)
+  ) {
     return;
   }
-  if ((expected === "int" || expected === "float" || expected === "decimal")
-      && typeof actual === "number") {
+  if (
+    (expected === "int" || expected === "float" || expected === "decimal") &&
+    typeof actual === "number"
+  ) {
     return;
   }
   if (expected === "bool" && typeof actual === "boolean") {
     return;
   }
-  if (typeof expected === "number" && typeof actual === "number"
-      && numbersClose(actual, expected)) {
+  if (
+    typeof expected === "number" &&
+    typeof actual === "number" &&
+    numbersClose(actual, expected)
+  ) {
     return;
   }
 
@@ -311,9 +331,9 @@ export function assertQueryResult(
 export function queryRows<T = unknown>(h: QueryHarness, query: string): T[] {
   const result = h.query(query) as unknown;
   if (result && typeof result === "object" && "rows" in (result as Record<string, unknown>)) {
-    return ((result as { rows?: T[] }).rows ?? []);
+    return (result as { rows?: T[] }).rows ?? [];
   }
-  return Array.isArray(result) ? result as T[] : [result as T];
+  return Array.isArray(result) ? (result as T[]) : [result as T];
 }
 
 export function querySingle<T = unknown>(h: QueryHarness, query: string): T {

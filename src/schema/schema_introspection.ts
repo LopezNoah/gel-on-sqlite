@@ -14,7 +14,15 @@
 // `expr_tuple_16` queries. Phases 2-3 add ObjectType, ScalarType, Pointer,
 // Tuple, Constraint, Annotation, Index, Function, etc. with their links.
 
-import type { AliasDef, AnnotationDef, ConstraintDef, FieldDef, FunctionDef, LinkDef, TypeDef } from "../types.js";
+import type {
+  AliasDef,
+  AnnotationDef,
+  ConstraintDef,
+  FieldDef,
+  FunctionDef,
+  LinkDef,
+  TypeDef,
+} from "../types.js";
 import type { ScalarTypeDeclaration } from "./scalar.js";
 import type { SchemaSnapshot } from "./schema.js";
 import { qualifiedTypeName } from "./schema.js";
@@ -171,10 +179,7 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
   {
     name: "ScalarType",
     module: "schema",
-    fields: [
-      ...typeFields(),
-      { name: "default", type: "str" },
-    ],
+    fields: [...typeFields(), { name: "default", type: "str" }],
     links: [
       indexedTypeLink("ancestors"),
       { name: "constraints", targetType: "schema::Constraint", multi: true },
@@ -289,7 +294,12 @@ export const schemaIntrospectionTypeDefs = (): TypeDef[] => [
   { name: "Branch", module: "sys", fields: [{ name: "name", type: "str", required: true }] },
   { name: "Database", module: "sys", fields: [{ name: "name", type: "str", required: true }] },
   { name: "ConfigObject", module: "cfg", abstract: true, fields: [{ name: "name", type: "str" }] },
-  { name: "AbstractConfig", module: "cfg", abstract: true, fields: [{ name: "name", type: "str" }] },
+  {
+    name: "AbstractConfig",
+    module: "cfg",
+    abstract: true,
+    fields: [{ name: "name", type: "str" }],
+  },
   { name: "Config", module: "cfg", fields: [{ name: "name", type: "str" }] },
 ];
 
@@ -310,7 +320,8 @@ const isSystemMetaTypeName = (name: string): boolean =>
 
 const SCHEMA_TYPE_TABLE = "schema__type";
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
-const scopedIdFor = (scope: string, name: string): string => syntheticIntrospectionId(`${scope}:${name}`);
+const scopedIdFor = (scope: string, name: string): string =>
+  syntheticIntrospectionId(`${scope}:${name}`);
 
 type SQLParam = string | number | boolean | null;
 
@@ -331,7 +342,9 @@ export const populateSchemaIntrospection = (
   extraAliasNames: readonly string[] = [],
   runtimeExprAliases?: RuntimeExprAliasMap,
 ): void => {
-  const typeNames = schemaIntrospectionTypeDefs().map((typeDef) => `${typeDef.module ?? "schema"}::${typeDef.name}`);
+  const typeNames = schemaIntrospectionTypeDefs().map(
+    (typeDef) => `${typeDef.module ?? "schema"}::${typeDef.name}`,
+  );
   const tableNames = typeNames.map(tableNameForType);
   const linkTableNames = schemaIntrospectionTypeDefs().flatMap((typeDef) => {
     const ownerName = `${typeDef.module ?? "schema"}::${typeDef.name}`;
@@ -415,7 +428,9 @@ export const populateSchemaIntrospection = (
     annotations: readonly AnnotationDef[] | undefined,
   ): void => {
     for (const annotation of annotations ?? []) {
-      insertLink(ownerType, "annotations", sourceId, ensureAnnotation(annotation.name), { value: annotation.value });
+      insertLink(ownerType, "annotations", sourceId, ensureAnnotation(annotation.name), {
+        value: annotation.value,
+      });
     }
   };
 
@@ -457,7 +472,15 @@ export const populateSchemaIntrospection = (
   }
 
   for (const scalarType of schema.listScalarTypes()) {
-    populateScalarType(db, schema, insertRow, insertLink, ensureTypeRow, linkAnnotations, scalarType);
+    populateScalarType(
+      db,
+      schema,
+      insertRow,
+      insertLink,
+      ensureTypeRow,
+      linkAnnotations,
+      scalarType,
+    );
   }
 
   for (const fn of schema.listFunctions()) {
@@ -488,19 +511,53 @@ const populateSystemObjects = (insertRow: InsertRow): void => {
   // denormalized-extent counts. Distinct ids per table — every row is gid-stamped
   // by an AFTER INSERT trigger and __gel_global_ids.id is UNIQUE.
   insertRow("cfg__config", { id: scopedIdFor("cfg::Config", "main"), name: "cfg::Config" });
-  insertRow("cfg__abstractconfig", { id: scopedIdFor("cfg::AbstractConfig", "main"), name: "cfg::Config" });
-  insertRow("cfg__configobject", { id: scopedIdFor("cfg::ConfigObject", "main"), name: "cfg::Config" });
+  insertRow("cfg__abstractconfig", {
+    id: scopedIdFor("cfg::AbstractConfig", "main"),
+    name: "cfg::Config",
+  });
+  insertRow("cfg__configobject", {
+    id: scopedIdFor("cfg::ConfigObject", "main"),
+    name: "cfg::Config",
+  });
 };
 
 // The standard infix/prefix/postfix/ternary operators (edb/lib/std). Immutable.
 // One row per operator name (overloads collapse) — enough for count(Operator)>0
 // and `SELECT Operator FILTER .name = 'std::+'`.
 const STD_OPERATORS: readonly string[] = [
-  "std::!=", "std::%", "std::*", "std::+", "std::++", "std::-", "std::/", "std:://",
-  "std::<", "std::<=", "std::=", "std::>", "std::>=", "std::?!=", "std::?=", "std::??",
-  "std::AND", "std::DISTINCT", "std::EXCEPT", "std::EXISTS", "std::IF", "std::ILIKE",
-  "std::IN", "std::INTERSECT", "std::LIKE", "std::NOT", "std::NOT ILIKE", "std::NOT IN",
-  "std::NOT LIKE", "std::OR", "std::UNION", "std::[]", "std::^",
+  "std::!=",
+  "std::%",
+  "std::*",
+  "std::+",
+  "std::++",
+  "std::-",
+  "std::/",
+  "std:://",
+  "std::<",
+  "std::<=",
+  "std::=",
+  "std::>",
+  "std::>=",
+  "std::?!=",
+  "std::?=",
+  "std::??",
+  "std::AND",
+  "std::DISTINCT",
+  "std::EXCEPT",
+  "std::EXISTS",
+  "std::IF",
+  "std::ILIKE",
+  "std::IN",
+  "std::INTERSECT",
+  "std::LIKE",
+  "std::NOT",
+  "std::NOT ILIKE",
+  "std::NOT IN",
+  "std::NOT LIKE",
+  "std::OR",
+  "std::UNION",
+  "std::[]",
+  "std::^",
 ];
 const PREFIX_OPERATORS = new Set(["std::NOT", "std::EXISTS", "std::DISTINCT"]);
 const TERNARY_OPERATORS = new Set(["std::IF"]);
@@ -511,7 +568,11 @@ const populateOperators = (insertRow: InsertRow): void => {
       id: scopedIdFor("schema::Operator", name),
       name,
       volatility: "Immutable",
-      operator_kind: PREFIX_OPERATORS.has(name) ? "Prefix" : TERNARY_OPERATORS.has(name) ? "Ternary" : "Infix",
+      operator_kind: PREFIX_OPERATORS.has(name)
+        ? "Prefix"
+        : TERNARY_OPERATORS.has(name)
+          ? "Ternary"
+          : "Infix",
       abstract: 0,
       is_abstract: 0,
     });
@@ -612,10 +673,12 @@ const populateCollectionTypes = (
     writeCollection(name, false);
   }
 
-  const tupleRows = db.prepare("SELECT name, from_alias FROM schema__tuple").all() as Array<{ name: string; from_alias: number }>;
+  const tupleRows = db.prepare("SELECT name, from_alias FROM schema__tuple").all() as Array<{
+    name: string;
+    from_alias: number;
+  }>;
   for (const tuple of tupleRows) writeCollection(tuple.name, Boolean(tuple.from_alias));
 };
-
 
 // Names already written to a `schema__*` table this round — used so the std-lib
 // populators below don't double-insert a row a user definition already covers.
@@ -629,18 +692,43 @@ const existingNames = (db: IntrospectionDB, table: string): Set<string> => {
 // with abstract := true). Pseudo-types (anytype/anytuple/anyobject) are NOT
 // here — they are schema::PseudoType, populated separately.
 const STD_CONCRETE_SCALARS: readonly string[] = [
-  "std::bool", "std::bytes", "std::str", "std::int16", "std::int32", "std::int64",
-  "std::float32", "std::float64", "std::bigint", "std::decimal", "std::uuid", "std::json",
-  "std::datetime", "std::duration",
-  "cal::local_date", "cal::local_time", "cal::local_datetime",
-  "cal::relative_duration", "cal::date_duration",
+  "std::bool",
+  "std::bytes",
+  "std::str",
+  "std::int16",
+  "std::int32",
+  "std::int64",
+  "std::float32",
+  "std::float64",
+  "std::bigint",
+  "std::decimal",
+  "std::uuid",
+  "std::json",
+  "std::datetime",
+  "std::duration",
+  "cal::local_date",
+  "cal::local_time",
+  "cal::local_datetime",
+  "cal::relative_duration",
+  "cal::date_duration",
 ];
 const STD_ABSTRACT_SCALARS: readonly string[] = [
-  "std::anyscalar", "std::anyenum", "std::anyint", "std::anyfloat", "std::anyreal",
-  "std::anynumeric", "std::anydiscrete", "std::anycontiguous", "std::anypoint",
+  "std::anyscalar",
+  "std::anyenum",
+  "std::anyint",
+  "std::anyfloat",
+  "std::anyreal",
+  "std::anynumeric",
+  "std::anydiscrete",
+  "std::anycontiguous",
+  "std::anypoint",
 ];
 
-const populateStdScalarTypes = (db: IntrospectionDB, insertRow: InsertRow, ensureTypeRow: EnsureTypeRow): void => {
+const populateStdScalarTypes = (
+  db: IntrospectionDB,
+  insertRow: InsertRow,
+  ensureTypeRow: EnsureTypeRow,
+): void => {
   const present = existingNames(db, "schema__scalartype");
   const write = (name: string, isAbstract: boolean): void => {
     if (present.has(name)) return;
@@ -700,7 +788,10 @@ const STD_ABSTRACT_CONSTRAINTS: ReadonlyArray<{ name: string; errmessage: string
   { name: "std::min_ex_value", errmessage: "{__subject__} must be greater than {min}." },
   { name: "std::len_value", errmessage: "invalid {__subject__}" },
   { name: "std::min_len_value", errmessage: "{__subject__} must be at least {min} characters." },
-  { name: "std::max_len_value", errmessage: "{__subject__} must be no longer than {max} characters." },
+  {
+    name: "std::max_len_value",
+    errmessage: "{__subject__} must be no longer than {max} characters.",
+  },
   { name: "std::regexp", errmessage: "invalid {__subject__}" },
 ];
 
@@ -724,7 +815,17 @@ const populateAbstractConstraints = (insertRow: InsertRow): void => {
 // across edb/lib/*.edgeql so `SELECT schema::Module` and `'std' IN
 // schema::Module.name` behave like real Gel.
 const STD_MODULES: readonly string[] = [
-  "std", "schema", "sys", "cfg", "math", "cal", "fts", "enc", "net", "pg", "default",
+  "std",
+  "schema",
+  "sys",
+  "cfg",
+  "math",
+  "cal",
+  "fts",
+  "enc",
+  "net",
+  "pg",
+  "default",
 ];
 
 const populateModules = (insertRow: InsertRow, schema: SchemaSnapshot): void => {
@@ -739,8 +840,18 @@ const populateModules = (insertRow: InsertRow, schema: SchemaSnapshot): void => 
 };
 
 type InsertRow = (table: string, row: Record<string, SQLParam>) => void;
-type InsertLink = (ownerType: string, linkName: string, sourceId: string, targetId: string, properties?: Record<string, SQLParam>) => void;
-type LinkAnnotations = (ownerType: string, sourceId: string, annotations: readonly AnnotationDef[] | undefined) => void;
+type InsertLink = (
+  ownerType: string,
+  linkName: string,
+  sourceId: string,
+  targetId: string,
+  properties?: Record<string, SQLParam>,
+) => void;
+type LinkAnnotations = (
+  ownerType: string,
+  sourceId: string,
+  annotations: readonly AnnotationDef[] | undefined,
+) => void;
 type EnsureTypeRow = (name: string, fromAlias?: boolean, isAbstract?: boolean) => string;
 
 const populateObjectType = (
@@ -959,7 +1070,10 @@ const populateConstraint = (
   linkAnnotations("schema::Constraint", id, data.constraint.annotations);
   for (const [index, param] of (data.constraint.params ?? []).entries()) {
     if (param.name === "__subject__") continue;
-    const paramId = scopedIdFor("schema::ConstraintParam", `${data.scope}:${data.constraint.name}:param:${index}:${param.name}`);
+    const paramId = scopedIdFor(
+      "schema::ConstraintParam",
+      `${data.scope}:${data.constraint.name}:param:${index}:${param.name}`,
+    );
     insertRow("schema__constraintparam", { id: paramId, name: param.name });
     insertLink("schema::Constraint", "params", id, paramId, { value: String(param.value) });
   }
@@ -985,7 +1099,12 @@ const populateScalarType = (
     is_abstract: 0,
     default: null,
   });
-  for (const [index, ancestor] of scalarAncestorsForDeclaration(schema, name, scalarType.baseTypeName, scalarType.enumValues).entries()) {
+  for (const [index, ancestor] of scalarAncestorsForDeclaration(
+    schema,
+    name,
+    scalarType.baseTypeName,
+    scalarType.enumValues,
+  ).entries()) {
     insertLink("schema::ScalarType", "ancestors", id, ensureTypeRow(ancestor), { index });
   }
   for (const [index, constraint] of (scalarType.constraints ?? []).entries()) {
@@ -1014,19 +1133,29 @@ const populateFunction = (
     id,
     name,
     volatility: fn.volatility ?? null,
-    return_typemod: fn.returnOptional ? "OptionalType" : fn.returnSetOf ? "SetOfType" : "SingletonType",
+    return_typemod: fn.returnOptional
+      ? "OptionalType"
+      : fn.returnSetOf
+        ? "SetOfType"
+        : "SingletonType",
     return_type_id: ensureTypeRow(returnTypeName),
   });
   linkAnnotations("schema::Function", id, fn.annotations);
 
   for (const [index, param] of fn.params.entries()) {
-    const paramTypeName = param.variadic ? `array<${displayTypeName(param.type)}>` : displayTypeName(param.type);
+    const paramTypeName = param.variadic
+      ? `array<${displayTypeName(param.type)}>`
+      : displayTypeName(param.type);
     const paramId = scopedIdFor("schema::FunctionParam", `${signature}:param:${index}`);
     insertRow("schema__functionparam", {
       id: paramId,
       num: index,
       name: param.name,
-      kind: param.variadic ? "VariadicParam" : param.namedOnly ? "NamedOnlyParam" : "PositionalParam",
+      kind: param.variadic
+        ? "VariadicParam"
+        : param.namedOnly
+          ? "NamedOnlyParam"
+          : "PositionalParam",
       typemod: param.optional ? "OptionalType" : param.setOf ? "SetOfType" : "SingletonType",
       type_id: ensureTypeRow(paramTypeName),
     });
@@ -1069,10 +1198,17 @@ const populateTupleAliases = (
   }
 };
 
-const parseAliasLinkOverrides = (exprText: string, moduleName: string): Array<{ name: string; targetType: string }> => {
-  const compact = exprText.replace(/^[ \t]*#.*$/gm, "").replace(/\s+/g, " ").trim();
+const parseAliasLinkOverrides = (
+  exprText: string,
+  moduleName: string,
+): Array<{ name: string; targetType: string }> => {
+  const compact = exprText
+    .replace(/^[ \t]*#.*$/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
   const overrides: Array<{ name: string; targetType: string }> = [];
-  const linkPattern = /\b([A-Za-z_][\w]*)\s*:=\s*\(?\s*(?:SELECT\s+)?[A-Za-z_][\w:]*\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\{([^}]*)\}/gi;
+  const linkPattern =
+    /\b([A-Za-z_][\w]*)\s*:=\s*\(?\s*(?:SELECT\s+)?[A-Za-z_][\w:]*\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\{([^}]*)\}/gi;
   for (const match of compact.matchAll(linkPattern)) {
     overrides.push({
       name: match[1],
@@ -1123,14 +1259,47 @@ const scalarAncestorsForDeclaration = (
   const lower = (base.includes("::") ? base.slice(base.lastIndexOf("::") + 2) : base).toLowerCase();
   if (lower === "anyenum") return ["std::anyenum", "std::anyscalar"];
   if (lower === "str" || lower === "bytes") return ["std::str", "std::anyscalar"];
-  if (lower === "int" || lower === "int64") return ["std::int64", "std::anyint", "std::anyreal", "std::anydiscrete", "std::anypoint", "std::anyscalar"];
-  if (lower === "int32") return ["std::int32", "std::anyint", "std::anyreal", "std::anydiscrete", "std::anypoint", "std::anyscalar"];
-  if (lower === "int16") return ["std::int16", "std::anyint", "std::anyreal", "std::anydiscrete", "std::anypoint", "std::anyscalar"];
+  if (lower === "int" || lower === "int64")
+    return [
+      "std::int64",
+      "std::anyint",
+      "std::anyreal",
+      "std::anydiscrete",
+      "std::anypoint",
+      "std::anyscalar",
+    ];
+  if (lower === "int32")
+    return [
+      "std::int32",
+      "std::anyint",
+      "std::anyreal",
+      "std::anydiscrete",
+      "std::anypoint",
+      "std::anyscalar",
+    ];
+  if (lower === "int16")
+    return [
+      "std::int16",
+      "std::anyint",
+      "std::anyreal",
+      "std::anydiscrete",
+      "std::anypoint",
+      "std::anyscalar",
+    ];
   if (lower === "bool") return ["std::bool", "std::anyscalar"];
   const qualifiedBase = base.includes("::") ? base : `${scalarName.split("::")[0]}::${base}`;
   const baseDecl = schema.getScalarType(qualifiedBase);
   return baseDecl
-    ? [qualifiedBase, ...scalarAncestorsForDeclaration(schema, qualifiedBase, baseDecl.baseTypeName, baseDecl.enumValues, seen)]
+    ? [
+        qualifiedBase,
+        ...scalarAncestorsForDeclaration(
+          schema,
+          qualifiedBase,
+          baseDecl.baseTypeName,
+          baseDecl.enumValues,
+          seen,
+        ),
+      ]
     : [qualifiedBase, "std::anyscalar"];
 };
 

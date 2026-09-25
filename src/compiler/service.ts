@@ -2,16 +2,23 @@ import "../codegen/generated/schema_model.js";
 
 import type { Statement } from "../edgeql/ast.js";
 import { AppError } from "../errors.js";
-import type { Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
+import type { Statement as GelIRStatement } from "../ir/gel_ir.js";
 import type { IRStatement, OverlayIR } from "../ir/model.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import { stableJson, type SchemaSnapshot } from "../schema/schema.js";
-import { makeLinkStorageOwnerResolver, makeTypeStorageColumnsResolver } from "../schema/physical_layout.js";
+import {
+  makeLinkStorageOwnerResolver,
+  makeTypeStorageColumnsResolver,
+} from "../schema/physical_layout.js";
 import { compileGelIRToSQL, type GelIRSQLArtifact } from "../sql/gel_ir_compiler.js";
 import type { ScalarValue } from "../types.js";
 import { compileDmlToIR } from "./dml_lowering.js";
 import type { GeneratedSchema } from "../codegen/schema.js";
-import { compileASTToGelIR, expandSchemaAliasesInStatement, isGelIRCompatibleStatement } from "./ast_to_ir.js";
+import {
+  compileASTToGelIR,
+  expandSchemaAliasesInStatement,
+  isGelIRCompatibleStatement,
+} from "./ast_to_ir.js";
 
 export interface CompilerCacheStats {
   hits: number;
@@ -58,7 +65,11 @@ export class CompilerService {
   private hits = 0;
   private misses = 0;
 
-  compile(schema: SchemaSnapshot, rawStatement: Statement, context: CompileContext = {}): CompileArtifact {
+  compile(
+    schema: SchemaSnapshot,
+    rawStatement: Statement,
+    context: CompileContext = {},
+  ): CompileArtifact {
     // Expand schema-alias references once before lowering into IR.
     const statement = expandSchemaAliasesInStatement(rawStatement, schema);
     const key = buildCompileCacheKey(schema, statement, context);
@@ -98,7 +109,22 @@ export class CompilerService {
     } catch (err) {
       if (!isSelectExprWrappingGroup) throw err;
       sql = { sql: "", params: [], loweringMode: "fallback_multi_query" } as GelIRSQLArtifact;
-      gelIr = { kind: "statement", expr: { kind: "set", expr: { kind: "type_root", typeref: { kind: "type_ref", id: "schema::Type", isScalar: false } }, pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] }, typeref: { kind: "type_ref", id: "schema::Type", isScalar: false }, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false } } as unknown as GelIRStatement;
+      gelIr = {
+        kind: "statement",
+        expr: {
+          kind: "set",
+          expr: {
+            kind: "type_root",
+            typeref: { kind: "type_ref", id: "schema::Type", isScalar: false },
+          },
+          pathId: { kind: "path_id", namespace: [], isPointerPath: false, steps: [] },
+          typeref: { kind: "type_ref", id: "schema::Type", isScalar: false },
+          shape: [],
+          isBinding: false,
+          isMaterializedRef: false,
+          isSchemaAlias: false,
+        },
+      } as unknown as GelIRStatement;
     }
     // Mutations compile through the standalone DML lowering (the runtime
     // mutation plan — the DML IR the engine's write path consumes). Every other
@@ -109,7 +135,10 @@ export class CompilerService {
     // (validation) propagate as before.
     const ir: IRStatement | undefined =
       statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete"
-        ? compileDmlToIR(schema, statement, { globals: context.globals, allowUserSpecifiedId: context.allowUserSpecifiedId })
+        ? compileDmlToIR(schema, statement, {
+            globals: context.globals,
+            allowUserSpecifiedId: context.allowUserSpecifiedId,
+          })
         : undefined;
     const sharedGelIr = freezeShared(gelIr);
     this.cache.set(key, {
@@ -155,7 +184,11 @@ export const getCompilerService = (): CompilerService => {
   return defaultCompilerService;
 };
 
-export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statement, context: CompileContext = {}): string => {
+export const buildCompileCacheKey = (
+  schema: SchemaSnapshot,
+  statement: Statement,
+  context: CompileContext = {},
+): string => {
   // Memoized on the snapshot instance (and inherited by clones), so this is a
   // cache hit for every query on an unchanged schema — see contentFingerprint.
   const schemaFingerprint = schema.contentFingerprint();
@@ -167,13 +200,15 @@ export const buildCompileCacheKey = (schema: SchemaSnapshot, statement: Statemen
   // key only affects cache hit/miss, never correctness — distinct ASTs still
   // produce distinct strings.
   const statementFingerprint = JSON.stringify(statement);
-  const overlaysFingerprint = stableJson((context.overlays ?? []).map((overlay) => ({
-    table: overlay.table,
-    sourcePathId: overlay.sourcePathId,
-    operation: overlay.operation,
-    policyPhase: overlay.policyPhase,
-    rewritePhase: overlay.rewritePhase,
-  })));
+  const overlaysFingerprint = stableJson(
+    (context.overlays ?? []).map((overlay) => ({
+      table: overlay.table,
+      sourcePathId: overlay.sourcePathId,
+      operation: overlay.operation,
+      policyPhase: overlay.policyPhase,
+      rewritePhase: overlay.rewritePhase,
+    })),
+  );
   const globalsFingerprint = stableJson(context.globals ?? {});
   const paramsFingerprint = stableJson(context.params ?? {});
   const targetFingerprint = context.target ?? "sqlite";
@@ -201,7 +236,10 @@ const compileSqlFromGelIR = (
   context: CompileContext,
 ): { sql: GelIRSQLArtifact; gelIr: GelIRStatement } => {
   if (!isGelIRCompatibleStatement(statement)) {
-    throw new AppError("E_UNSUPPORTED", `Statement kind '${statement.kind}' is not supported by GEL IR SQL lowering`);
+    throw new AppError(
+      "E_UNSUPPORTED",
+      `Statement kind '${statement.kind}' is not supported by GEL IR SQL lowering`,
+    );
   }
 
   const gelIr = compileASTToGelIR(statement, {

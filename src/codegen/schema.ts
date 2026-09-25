@@ -52,7 +52,12 @@ const cloneField = (field: FieldDef): FieldDef => ({
     : undefined,
   collection: field.collection
     ? field.collection.kind === "tuple"
-      ? { kind: "tuple", elementNames: field.collection.elementNames ? [...field.collection.elementNames] : undefined }
+      ? {
+          kind: "tuple",
+          elementNames: field.collection.elementNames
+            ? [...field.collection.elementNames]
+            : undefined,
+        }
       : { kind: "array" }
     : undefined,
   enumValues: field.enumValues ? [...field.enumValues] : undefined,
@@ -66,7 +71,12 @@ const cloneLink = (link: LinkDef): LinkDef => ({
     annotations: property.annotations?.map((annotation) => ({ ...annotation })),
     collection: property.collection
       ? property.collection.kind === "tuple"
-        ? { kind: "tuple", elementNames: property.collection.elementNames ? [...property.collection.elementNames] : undefined }
+        ? {
+            kind: "tuple",
+            elementNames: property.collection.elementNames
+              ? [...property.collection.elementNames]
+              : undefined,
+          }
         : { kind: "array" }
       : undefined,
   })),
@@ -117,7 +127,11 @@ export const generateSchemaModel = (schema: SchemaSnapshot): GeneratedSchema => 
     return dedupeByName([...typeDef.links.map(cloneLink), ...inherited]);
   };
 
-  const isSubtypeOf = (candidateName: string, targetName: string, seen = new Set<string>()): boolean => {
+  const isSubtypeOf = (
+    candidateName: string,
+    targetName: string,
+    seen = new Set<string>(),
+  ): boolean => {
     if (seen.has(candidateName)) {
       return false;
     }

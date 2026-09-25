@@ -60,7 +60,9 @@ function visit(node: ts.Node): void {
         const indent = " ".repeat(node.getStart(sf) - node.getStart(sf) + 2); // 2 spaces inside it()
         const callStart = node.getStart(sf);
         const callEnd = node.getEnd();
-        const outer = " ".repeat(callStart - sf.getLineStarts()[sf.getLineAndCharacterOfPosition(callStart).line]);
+        const outer = " ".repeat(
+          callStart - sf.getLineStarts()[sf.getLineAndCharacterOfPosition(callStart).line],
+        );
         const inner = outer + "  ";
         const newText =
           `it(${JSON.stringify(cleanName)}, () => {\n` +

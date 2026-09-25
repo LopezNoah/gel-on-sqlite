@@ -16,7 +16,7 @@ The domain term is recorded in `CONTEXT.md` ("Qualified type name").
 
 The inference oracle (`semantic.ts`) keeps its own `normalizeTypeName` closure (it closes over `activeModule`), quarantined per `docs/adr/0001`.
 
-**Verification.** Behaviour-neutral within the suite's order-flakiness: the schema-parsing-heavy slice (`inspect` / `inspect_corpus` / `codegen_sql` / `userddl` / `linkprops` / `linkatoms` / `select` / `insert`, 908 tests) went `203 failed / 702 passed` → `202 / 703` (one *fewer* failure, zero new). 0 type errors — the flip is type-checked, and an arg-order mistake on a `(string, string)` call would not be caught by types, so the schema-load coverage (every test loads a schema through `sdl_adapter`) is the net.
+**Verification.** Behaviour-neutral within the suite's order-flakiness: the schema-parsing-heavy slice (`inspect` / `inspect_corpus` / `codegen_sql` / `userddl` / `linkprops` / `linkatoms` / `select` / `insert`, 908 tests) went `203 failed / 702 passed` → `202 / 703` (one _fewer_ failure, zero new). 0 type errors — the flip is type-checked, and an arg-order mistake on a `(string, string)` call would not be caught by types, so the schema-load coverage (every test loads a schema through `sdl_adapter`) is the net.
 
 **Consequences.** The qualification rule has one home and one argument order; the reversed-order hazard is gone from the live pipeline. The union-aware and `TypeRef`-aware variants are documented as distinct, so a future reader doesn't "merge" them into the core rule.
 

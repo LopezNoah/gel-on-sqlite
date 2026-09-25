@@ -29,153 +29,191 @@ describe("TestEdgeQLUserDDL", () => {
   });
 
   it("test_edgeql_userddl_01", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_01(
           a: anytype
       ) -> bool
           USING EdgeQL $$
               SELECT a IS float32
           $$;
-    `)).toThrow(/cannot create.*func_01.*generic types are not supported in user-defined functions/i);
+    `),
+    ).toThrow(/cannot create.*func_01.*generic types are not supported in user-defined functions/i);
   });
 
   it("test_edgeql_userddl_02", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_02(
           a: anyreal
       ) -> bool
           USING EdgeQL $$
               SELECT a IS float32
           $$;
-    `)).toThrow(/cannot create.*func_02.*generic types are not supported in user-defined functions/i);
+    `),
+    ).toThrow(/cannot create.*func_02.*generic types are not supported in user-defined functions/i);
   });
 
   it("test_edgeql_userddl_03", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_03(
           a: str
       ) -> anytype
           USING EdgeQL $$
               SELECT a
           $$;
-    `)).toThrow(/cannot create.*func_03.*generic types are not supported in user-defined functions/i);
+    `),
+    ).toThrow(/cannot create.*func_03.*generic types are not supported in user-defined functions/i);
   });
 
   it("test_edgeql_userddl_04", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_04(
           a: str
       ) -> anyscalar
           USING EdgeQL $$
               SELECT a
           $$;
-    `)).toThrow(/cannot create.*func_04.*generic types are not supported in user-defined functions/i);
+    `),
+    ).toThrow(/cannot create.*func_04.*generic types are not supported in user-defined functions/i);
   });
 
   it("test_edgeql_userddl_05", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_05(
           a: str
       ) -> str
           USING SQL FUNCTION 'lower';
-    `)).toThrow(/cannot create.*func_05.*USING SQL FUNCTION.*not supported in user-defined functions/i);
+    `),
+    ).toThrow(
+      /cannot create.*func_05.*USING SQL FUNCTION.*not supported in user-defined functions/i,
+    );
   });
 
   it("test_edgeql_userddl_06", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_06(
           a: str
       ) -> str
           USING SQL $$ SELECT "a" $$;
-    `)).toThrow(/cannot create.*func_06.*USING SQL.*not supported in user-defined functions/i);
+    `),
+    ).toThrow(/cannot create.*func_06.*USING SQL.*not supported in user-defined functions/i);
   });
 
   it("test_edgeql_userddl_07", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE INFIX OPERATOR
       std::\`+\` (l: std::str, r: std::str) -> std::str
           USING SQL OPERATOR r'||';
-    `)).toThrow(/user-defined operators are not supported/i);
+    `),
+    ).toThrow(/user-defined operators are not supported/i);
   });
 
   it("test_edgeql_userddl_08", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE CAST FROM std::int64 TO std::duration {
           USING SQL CAST;
           ALLOW ASSIGNMENT;
       };
-    `)).toThrow(/user-defined casts are not supported/i);
+    `),
+    ).toThrow(/user-defined casts are not supported/i);
   });
 
   it("test_edgeql_userddl_09", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION std::func_09(
           a: str
       ) -> str
           USING EdgeQL $$
               SELECT a
           $$;
-    `)).toThrow(/cannot create.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot create.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_10", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION std::math::func_10(
           a: str
       ) -> str
           USING EdgeQL $$
               SELECT a
           $$;
-    `)).toThrow(/cannot create.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot create.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_11", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE TYPE std::Foo_11;
-    `)).toThrow(/cannot create.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot create.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_12", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE TYPE std::math::Foo_11;
-    `)).toThrow(/cannot create.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot create.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_13", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       DROP TYPE std::Object;
-    `)).toThrow(/cannot delete.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot delete.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_15", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       ALTER TYPE std::Object {
           CREATE PROPERTY foo_15 -> std::str;
       };
-    `)).toThrow(/cannot alter.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot alter.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_17", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       DROP MODULE std;
-    `)).toThrow(/cannot delete.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot delete.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_18", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       DROP MODULE std::math;
-    `)).toThrow(/cannot delete.*module std is read-only/i);
+    `),
+    ).toThrow(/cannot delete.*module std is read-only/i);
   });
 
   it("test_edgeql_userddl_19", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_19(
           a: SET OF str
       ) -> bool
           USING EdgeQL $$
               SELECT EXISTS a
           $$;
-    `)).toThrow(/cannot create.*func_19.*SET OF parameters in user-defined EdgeQL functions are not supported/i);
+    `),
+    ).toThrow(
+      /cannot create.*func_19.*SET OF parameters in user-defined EdgeQL functions are not supported/i,
+    );
   });
 
   it("test_edgeql_userddl_20 [xerror: engine does not apply user-defined functions per-element on multi-set arguments — first SELECT returns {'q','a'} correctly, second yields count 1 instead of 4]", () => {
@@ -187,20 +225,13 @@ describe("TestEdgeQLUserDDL", () => {
               SELECT {a, 'a'}
           $$;
     `);
-    assertQueryResult(
-      h,
-      `SELECT func_20('q');`,
-      unorderedSet(['q', 'a']),
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(func_20({'q', 'w'}));`,
-      [4],
-    );
+    assertQueryResult(h, `SELECT func_20('q');`, unorderedSet(["q", "a"]));
+    assertQueryResult(h, `SELECT count(func_20({'q', 'w'}));`, [4]);
   });
 
   it("test_edgeql_userddl_21", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func(
           a: str
       ) -> bool
@@ -210,7 +241,8 @@ describe("TestEdgeQLUserDDL", () => {
           $$;
           SET force_return_cast := true;
       };
-    `)).toThrow(/'force_return_cast' is not a valid field/i);
+    `),
+    ).toThrow(/'force_return_cast' is not a valid field/i);
   });
 
   it("test_edgeql_userddl_22", () => {
@@ -225,16 +257,13 @@ describe("TestEdgeQLUserDDL", () => {
           CREATE CONSTRAINT uppercase
       };
     `);
-    assertQueryResult(
-      h,
-      `SELECT <upper_str>'123_HELLO';`,
-      unorderedSet(['123_HELLO']),
-    );
+    assertQueryResult(h, `SELECT <upper_str>'123_HELLO';`, unorderedSet(["123_HELLO"]));
   });
 
   it("test_edgeql_userddl_23", () => {
-    expect(() => h.script(`CREATE PSEUDO TYPE foo;`))
-      .toThrow(/user-defined pseudo types are not supported/i);
+    expect(() => h.script(`CREATE PSEUDO TYPE foo;`)).toThrow(
+      /user-defined pseudo types are not supported/i,
+    );
   });
 
   it("test_edgeql_userddl_24", () => {
@@ -256,7 +285,8 @@ describe("TestEdgeQLUserDDL", () => {
   });
 
   it("test_edgeql_userddl_25", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       CREATE FUNCTION func_25(
           a: bool
       ) -> bool {
@@ -265,7 +295,8 @@ describe("TestEdgeQLUserDDL", () => {
               NOT a
           );
       }
-    `)).toThrow(/'fallback' is not a valid field/i);
+    `),
+    ).toThrow(/'fallback' is not a valid field/i);
   });
 
   it("test_edgeql_userddl_26", () => {
@@ -279,13 +310,15 @@ describe("TestEdgeQLUserDDL", () => {
       }
     `);
 
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       ALTER FUNCTION func_26(
           a: bool
       ) {
           SET fallback := true;
       }
-    `)).toThrow(/'fallback' is not a valid field/i);
+    `),
+    ).toThrow(/'fallback' is not a valid field/i);
   });
 
   it("test_edgeql_userddl_27", () => {
@@ -299,7 +332,8 @@ describe("TestEdgeQLUserDDL", () => {
       }
     `);
 
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       ALTER FUNCTION func_27(
           a: bool
       ) {
@@ -307,13 +341,16 @@ describe("TestEdgeQLUserDDL", () => {
           # allowed in user-space.
           SET fallback := false;
       }
-    `)).toThrow(/'fallback' is not a valid field/i);
+    `),
+    ).toThrow(/'fallback' is not a valid field/i);
   });
 
   it("test_edgeql_userddl_28", () => {
-    expect(() => h.script(`
+    expect(() =>
+      h.script(`
       create type Foo extending cfg::ConfigObject;
-    `)).toThrow(/cannot extend system type/i);
+    `),
+    ).toThrow(/cannot extend system type/i);
   });
 
   it("test_edgeql_userddl_29", () => {
@@ -324,14 +361,12 @@ describe("TestEdgeQLUserDDL", () => {
       configure session reset __internal_testmode;
     `);
 
-    expect(() => h.script(`create module ext::_test::foo;`))
-      .toThrow(/module ext is read-only/i);
-    expect(() => h.script(`create type ext::_test::foo;`))
-      .toThrow(/module ext is read-only/i);
-    expect(() => h.script(`alter type ext::_test::X { create property x -> str };`))
-      .toThrow(/module ext is read-only/i);
-    expect(() => h.script(`drop type ext::_test::X;`))
-      .toThrow(/module ext is read-only/i);
+    expect(() => h.script(`create module ext::_test::foo;`)).toThrow(/module ext is read-only/i);
+    expect(() => h.script(`create type ext::_test::foo;`)).toThrow(/module ext is read-only/i);
+    expect(() => h.script(`alter type ext::_test::X { create property x -> str };`)).toThrow(
+      /module ext is read-only/i,
+    );
+    expect(() => h.script(`drop type ext::_test::X;`)).toThrow(/module ext is read-only/i);
   });
 
   it.skip("test_edgeql_userddl_all_extensions_01 [xerror: sqlite-ts does not support START MIGRATION / POPULATE MIGRATION / COMMIT MIGRATION]", () => {

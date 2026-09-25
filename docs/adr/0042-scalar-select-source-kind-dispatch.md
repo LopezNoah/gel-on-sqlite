@@ -11,8 +11,8 @@
 
 The call sites keep each guard but delegate. Two **distinct return semantics** are preserved exactly:
 
-- branches that *fall through* on failure (`type_cast`, `for_expr`, `if_else_expr` — they continue to later guards) → `if (kind === X) { const r = helper(...); if (r !== null) return r; }`, with the helper returning `null` where the inline code fell through;
-- the branch that *always returns* when entered (`select_expr` — its `if (!inner) return null` exits the whole function) → `if (kind === X) return helper(...);`.
+- branches that _fall through_ on failure (`type_cast`, `for_expr`, `if_else_expr` — they continue to later guards) → `if (kind === X) { const r = helper(...); if (r !== null) return r; }`, with the helper returning `null` where the inline code fell through;
+- the branch that _always returns_ when entered (`select_expr` — its `if (!inner) return null` exits the whole function) → `if (kind === X) return helper(...);`.
 
 The function shrinks ~2,225 → ~1,892 lines; the four shapes now have names and are independently readable.
 

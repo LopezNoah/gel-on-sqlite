@@ -19,7 +19,10 @@ describe("buildInsertRowSql", () => {
   it("emits quoted columns with positional params, in order", () => {
     const built = buildInsertRowSql(
       "default::User",
-      [["name", "ada"], ["age", 36]] as Array<[string, ScalarValue]>,
+      [
+        ["name", "ada"],
+        ["age", 36],
+      ] as Array<[string, ScalarValue]>,
       [],
       pos,
     );
@@ -30,7 +33,10 @@ describe("buildInsertRowSql", () => {
   it("coerces booleans to 1/0 in params", () => {
     const built = buildInsertRowSql(
       "T",
-      [["active", true], ["archived", false]] as Array<[string, ScalarValue]>,
+      [
+        ["active", true],
+        ["archived", false],
+      ] as Array<[string, ScalarValue]>,
       [],
       pos,
     );
@@ -40,7 +46,10 @@ describe("buildInsertRowSql", () => {
   it("splices a compiled SQL expression and its params for a deferred column", () => {
     const built = buildInsertRowSql(
       "T",
-      [["name", "ada"], ["slug", PENDING_INSERT_SQL_EXPR_VALUE as ScalarValue]] as Array<[string, ScalarValue]>,
+      [
+        ["name", "ada"],
+        ["slug", PENDING_INSERT_SQL_EXPR_VALUE as ScalarValue],
+      ] as Array<[string, ScalarValue]>,
       [{ column: "slug", sql: "lower(?)", params: ["ADA"] }],
       pos,
     );

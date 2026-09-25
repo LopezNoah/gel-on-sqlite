@@ -110,13 +110,13 @@ export const createHttpServer = (deps: {
           ok: true,
           data: trace.result,
           steps: {
-              ast: trace.ast,
-              ir: trace.ir,
-              sql: trace.sql,
-              compiler: trace.compiler,
-              sqlTrail: trace.sqlTrail,
-              overlays: trace.overlays,
-            },
+            ast: trace.ast,
+            ir: trace.ir,
+            sql: trace.sql,
+            compiler: trace.compiler,
+            sqlTrail: trace.sqlTrail,
+            overlays: trace.overlays,
+          },
         });
         return;
       }

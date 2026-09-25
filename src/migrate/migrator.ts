@@ -33,27 +33,23 @@ import {
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { materializeSchema } from "../runtime/schema_materialize.js";
 import type { SQLiteDatabase } from "../runtime/database.js";
-import {
-  nextSeq,
-  readJournal,
-  readSnapshotSource,
-  writeMigration,
-} from "./migration_files.js";
+import { nextSeq, readJournal, readSnapshotSource, writeMigration } from "./migration_files.js";
 
 /** gel_instdata key holding the SDL source of the last-applied schema. */
 const SDL_KEY = "schema_sdl";
 
-const GLOBAL_IDS_DDL =
-  `CREATE TABLE IF NOT EXISTS "__gel_global_ids" ("id" TEXT PRIMARY KEY, "type_name" TEXT NOT NULL)`;
-const MIGRATION_HISTORY_DDL =
-  `CREATE TABLE IF NOT EXISTS "__gel_migration_history" ("migration_id" TEXT PRIMARY KEY, "checksum" TEXT NOT NULL, "applied_at" TEXT NOT NULL)`;
+const GLOBAL_IDS_DDL = `CREATE TABLE IF NOT EXISTS "__gel_global_ids" ("id" TEXT PRIMARY KEY, "type_name" TEXT NOT NULL)`;
+const MIGRATION_HISTORY_DDL = `CREATE TABLE IF NOT EXISTS "__gel_migration_history" ("migration_id" TEXT PRIMARY KEY, "checksum" TEXT NOT NULL, "applied_at" TEXT NOT NULL)`;
 
 const EMPTY_SCHEMA: DeclarativeSchema = { modules: [], types: [] };
 
 const parseSdl = (source: string): DeclarativeSchema =>
-  source.trim() === "" ? EMPTY_SCHEMA : parseDeclarativeSchema(source, { legacySyntaxCompat: true });
+  source.trim() === ""
+    ? EMPTY_SCHEMA
+    : parseDeclarativeSchema(source, { legacySyntaxCompat: true });
 
-const snapshotOf = (source: string): SchemaSnapshot => loadSchema(source, { legacySyntaxCompat: true });
+const snapshotOf = (source: string): SchemaSnapshot =>
+  loadSchema(source, { legacySyntaxCompat: true });
 
 // `planSchemaMigration` always re-emits idempotent `CREATE TABLE IF NOT EXISTS`
 // steps, so a non-empty plan does NOT mean the schema changed. The reliable
@@ -184,7 +180,8 @@ export const generate = (
   const journal = readJournal(migrationsDir);
   const last = journal.entries[journal.entries.length - 1];
   const baselineSource = last ? readSnapshotSource(migrationsDir, last.idx) : "";
-  if (!schemaChanged(baselineSource, targetSource)) return { status: "no-changes", stepCount: 0, sql: "" };
+  if (!schemaChanged(baselineSource, targetSource))
+    return { status: "no-changes", stepCount: 0, sql: "" };
   const plan = planSchemaMigration(parseSdl(baselineSource), parseSdl(targetSource));
 
   const idx = nextSeq(journal);
@@ -243,7 +240,10 @@ export const migrate = (db: SQLiteDatabase, migrationsDir: string): MigrateResul
     // Re-derive the plan from consecutive snapshots; expectChecksum pins it to
     // exactly what `generate` recorded.
     const plan = planSchemaMigration(parseSdl(prevSource), parseSdl(thisSource));
-    applyMigrationPlanWithOptions(db, plan, { migrationId: entry.id, expectChecksum: entry.checksum });
+    applyMigrationPlanWithOptions(db, plan, {
+      migrationId: entry.id,
+      expectChecksum: entry.checksum,
+    });
     newlyApplied.push(entry.id);
     prevSource = thisSource;
     lastSource = thisSource;

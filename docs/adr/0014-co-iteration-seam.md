@@ -5,7 +5,7 @@ The round-3 review's candidate #4 wanted a test seam for the Runtime evaluator's
 **Decision (done):** Add `src/runtime/co_iteration.ts` with two pure functions:
 
 - `findBindingRoot(expr)` — the root WITH-binding name an operand walks (`x` / `x.a` / `<int64>x[0]` → `"x"`), following `field_access` / `index_access` / `cast` wrappers. It was defined **identically** inside both the `math` and `compare` cases.
-- `coIteratedBinding(left, right, env)` — the shared *detection*: when both operands walk the same binding and it is bound to a set (array) in `env`, return `{ root, rows }` so the caller iterates the operands in lockstep (`WITH x := {1,2,3} SELECT x * x` ⇒ {1,4,9}, not the 9-element Cartesian product); `null` otherwise.
+- `coIteratedBinding(left, right, env)` — the shared _detection_: when both operands walk the same binding and it is bound to a set (array) in `env`, return `{ root, rows }` so the caller iterates the operands in lockstep (`WITH x := {1,2,3} SELECT x * x` ⇒ {1,4,9}, not the 9-element Cartesian product); `null` otherwise.
 
 The `math` and `compare` cases now call `coIteratedBinding` and keep only their genuinely-different per-row bodies — `math` binds the scalar `row` and applies the operator; `compare` binds `[row]` and runs the LCP `?=`/`?!=` comparison. Pinned by `tests/co_iteration.test.ts` (9 unit tests): wrapper-walking, same/different roots, non-set binding, absent binding, non-binding operand.
 

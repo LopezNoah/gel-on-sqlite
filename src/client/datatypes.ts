@@ -71,7 +71,13 @@ export class LocalDateTime {
 
   toString(): string {
     const date = new LocalDate(this.year, this.month, this.day).toString();
-    const time = new LocalTime(this.hour, this.minute, this.second, this.millisecond, this.microsecond).toString();
+    const time = new LocalTime(
+      this.hour,
+      this.minute,
+      this.second,
+      this.millisecond,
+      this.microsecond,
+    ).toString();
     return `${date}T${time}`;
   }
 
@@ -80,15 +86,22 @@ export class LocalDateTime {
   }
 
   static fromString(value: string): LocalDateTime | null {
-    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/.exec(value.trim());
+    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/.exec(
+      value.trim(),
+    );
     if (!m) return null;
     const fraction = (m[7] ?? "").padEnd(6, "0");
     const millisecond = fraction ? Number(fraction.slice(0, 3)) : 0;
     const microsecond = fraction ? Number(fraction.slice(3, 6)) : 0;
     return new LocalDateTime(
-      Number(m[1]), Number(m[2]), Number(m[3]),
-      Number(m[4]), Number(m[5]), Number(m[6]),
-      millisecond, microsecond,
+      Number(m[1]),
+      Number(m[2]),
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5]),
+      Number(m[6]),
+      millisecond,
+      microsecond,
     );
   }
 }
@@ -106,7 +119,8 @@ export class Duration {
   ) {}
 
   get sign(): number {
-    const total = this.hours || this.minutes || this.seconds || this.milliseconds || this.microseconds;
+    const total =
+      this.hours || this.minutes || this.seconds || this.milliseconds || this.microseconds;
     return total === 0 ? 0 : total > 0 ? 1 : -1;
   }
 
@@ -120,7 +134,10 @@ export class Duration {
     let out = `${neg}PT`;
     if (this.hours) out += `${Math.abs(this.hours)}H`;
     if (this.minutes) out += `${Math.abs(this.minutes)}M`;
-    const secs = Math.abs(this.seconds) + Math.abs(this.milliseconds) / 1e3 + Math.abs(this.microseconds) / 1e6;
+    const secs =
+      Math.abs(this.seconds) +
+      Math.abs(this.milliseconds) / 1e3 +
+      Math.abs(this.microseconds) / 1e6;
     if (secs) out += `${secs}S`;
     return out;
   }
@@ -131,7 +148,9 @@ export class Duration {
 
   static fromString(value: string): Duration | null {
     const trimmed = value.trim();
-    const iso = /^(-)?PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$/i.exec(trimmed);
+    const iso = /^(-)?PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$/i.exec(
+      trimmed,
+    );
     if (iso) {
       const sign = iso[1] ? -1 : 1;
       const rawSeconds = Number(iso[4] ?? 0);
@@ -158,15 +177,27 @@ export class Duration {
         fraction ? sign * Number(fraction.slice(3, 6)) : 0,
       );
     }
-    const unitPattern = /(-?\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s|milliseconds?|ms|microseconds?|us)\b/gi;
+    const unitPattern =
+      /(-?\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s|milliseconds?|ms|microseconds?|us)\b/gi;
     let matched = false;
-    let hours = 0, minutes = 0, seconds = 0, milliseconds = 0, microseconds = 0;
+    let hours = 0,
+      minutes = 0,
+      seconds = 0,
+      milliseconds = 0,
+      microseconds = 0;
     for (const m of trimmed.matchAll(unitPattern)) {
       matched = true;
       const amount = Number(m[1]);
       const unit = m[2].toLowerCase();
       if (unit.startsWith("ho") || unit === "h" || unit.startsWith("hr")) hours += amount;
-      else if (unit.startsWith("mi") && !unit.startsWith("mic") && unit !== "milliseconds" && unit !== "millisecond" || unit === "m") minutes += amount;
+      else if (
+        (unit.startsWith("mi") &&
+          !unit.startsWith("mic") &&
+          unit !== "milliseconds" &&
+          unit !== "millisecond") ||
+        unit === "m"
+      )
+        minutes += amount;
       else if (unit.startsWith("milli") || unit === "ms") milliseconds += amount;
       else if (unit.startsWith("micro") || unit === "us") microseconds += amount;
       else if (unit.startsWith("se") || unit === "s") seconds += amount;

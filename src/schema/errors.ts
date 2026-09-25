@@ -16,9 +16,8 @@ export class EdgeDBError extends Error {
 }
 
 export class EdgeDBMessage extends EdgeDBError {
-  public static override readonly code: number = 0xF0000000;
+  public static override readonly code: number = 0xf0000000;
 }
-
 
 export class InternalServerError extends EdgeDBError {
   public static override readonly code: number = 0x01000000;
@@ -197,7 +196,7 @@ export class InvalidConstraintDefinitionError extends InvalidDefinitionError {
 }
 
 export class InvalidCastDefinitionError extends InvalidDefinitionError {
-  public static override readonly code: number = 0x0405010A;
+  public static override readonly code: number = 0x0405010a;
 }
 
 export class DuplicateDefinitionError extends SchemaDefinitionError {
@@ -241,11 +240,11 @@ export class DuplicateConstraintDefinitionError extends DuplicateDefinitionError
 }
 
 export class DuplicateCastDefinitionError extends DuplicateDefinitionError {
-  public static override readonly code: number = 0x0405020A;
+  public static override readonly code: number = 0x0405020a;
 }
 
 export class DuplicateMigrationError extends DuplicateDefinitionError {
-  public static override readonly code: number = 0x0405020B;
+  public static override readonly code: number = 0x0405020b;
 }
 
 export class SessionTimeoutError extends QueryError {
@@ -261,11 +260,11 @@ export class QueryTimeoutError extends SessionTimeoutError {
 }
 
 export class TransactionTimeoutError extends SessionTimeoutError {
-  public static override readonly code: number = 0x04060A00;
+  public static override readonly code: number = 0x04060a00;
 }
 
 export class IdleTransactionTimeoutError extends TransactionTimeoutError {
-  public static override readonly code: number = 0x04060A01;
+  public static override readonly code: number = 0x04060a01;
 }
 
 export class ExecutionError extends EdgeDBError {
@@ -373,114 +372,114 @@ export class UnsupportedBackendFeatureError extends BackendError {
 }
 
 export class LogMessage extends EdgeDBMessage {
-  public static override readonly code: number = 0xF0000000;
+  public static override readonly code: number = 0xf0000000;
 }
 
 export class WarningMessage extends LogMessage {
-  public static override readonly code: number = 0xF0010000;
+  public static override readonly code: number = 0xf0010000;
 }
 
 export class StatusMessage extends LogMessage {
-  public static override readonly code: number = 0xF0020000;
+  public static override readonly code: number = 0xf0020000;
 }
 
 export class MigrationStatusMessage extends StatusMessage {
-  public static override readonly code: number = 0xF0020001;
+  public static override readonly code: number = 0xf0020001;
 }
 
 export const all = [
-  'InternalServerError',
-  'UnsupportedFeatureError',
-  'ProtocolError',
-  'BinaryProtocolError',
-  'UnsupportedProtocolVersionError',
-  'TypeSpecNotFoundError',
-  'UnexpectedMessageError',
-  'InputDataError',
-  'ParameterTypeMismatchError',
-  'StateMismatchError',
-  'ResultCardinalityMismatchError',
-  'CapabilityError',
-  'UnsupportedCapabilityError',
-  'DisabledCapabilityError',
-  'UnsafeIsolationLevelError',
-  'QueryError',
-  'InvalidSyntaxError',
-  'EdgeQLSyntaxError',
-  'SchemaSyntaxError',
-  'GraphQLSyntaxError',
-  'InvalidTypeError',
-  'InvalidTargetError',
-  'InvalidLinkTargetError',
-  'InvalidPropertyTargetError',
-  'InvalidReferenceError',
-  'UnknownModuleError',
-  'UnknownLinkError',
-  'UnknownPropertyError',
-  'UnknownUserError',
-  'UnknownDatabaseError',
-  'UnknownParameterError',
-  'DeprecatedScopingError',
-  'SchemaError',
-  'SchemaDefinitionError',
-  'InvalidDefinitionError',
-  'InvalidModuleDefinitionError',
-  'InvalidLinkDefinitionError',
-  'InvalidPropertyDefinitionError',
-  'InvalidUserDefinitionError',
-  'InvalidDatabaseDefinitionError',
-  'InvalidOperatorDefinitionError',
-  'InvalidAliasDefinitionError',
-  'InvalidFunctionDefinitionError',
-  'InvalidConstraintDefinitionError',
-  'InvalidCastDefinitionError',
-  'DuplicateDefinitionError',
-  'DuplicateModuleDefinitionError',
-  'DuplicateLinkDefinitionError',
-  'DuplicatePropertyDefinitionError',
-  'DuplicateUserDefinitionError',
-  'DuplicateDatabaseDefinitionError',
-  'DuplicateOperatorDefinitionError',
-  'DuplicateViewDefinitionError',
-  'DuplicateFunctionDefinitionError',
-  'DuplicateConstraintDefinitionError',
-  'DuplicateCastDefinitionError',
-  'DuplicateMigrationError',
-  'SessionTimeoutError',
-  'IdleSessionTimeoutError',
-  'QueryTimeoutError',
-  'TransactionTimeoutError',
-  'IdleTransactionTimeoutError',
-  'ExecutionError',
-  'InvalidValueError',
-  'DivisionByZeroError',
-  'NumericOutOfRangeError',
-  'AccessPolicyError',
-  'QueryAssertionError',
-  'IntegrityError',
-  'ConstraintViolationError',
-  'CardinalityViolationError',
-  'MissingRequiredError',
-  'TransactionError',
-  'TransactionConflictError',
-  'TransactionSerializationError',
-  'TransactionDeadlockError',
-  'QueryCacheInvalidationError',
-  'WatchError',
-  'ConfigurationError',
-  'AccessError',
-  'AuthenticationError',
-  'AvailabilityError',
-  'BackendUnavailableError',
-  'ServerOfflineError',
-  'UnknownTenantError',
-  'ServerBlockedError',
-  'BackendError',
-  'UnsupportedBackendFeatureError',
-  'LogMessage',
-  'WarningMessage',
-  'StatusMessage',
-  'MigrationStatusMessage',
+  "InternalServerError",
+  "UnsupportedFeatureError",
+  "ProtocolError",
+  "BinaryProtocolError",
+  "UnsupportedProtocolVersionError",
+  "TypeSpecNotFoundError",
+  "UnexpectedMessageError",
+  "InputDataError",
+  "ParameterTypeMismatchError",
+  "StateMismatchError",
+  "ResultCardinalityMismatchError",
+  "CapabilityError",
+  "UnsupportedCapabilityError",
+  "DisabledCapabilityError",
+  "UnsafeIsolationLevelError",
+  "QueryError",
+  "InvalidSyntaxError",
+  "EdgeQLSyntaxError",
+  "SchemaSyntaxError",
+  "GraphQLSyntaxError",
+  "InvalidTypeError",
+  "InvalidTargetError",
+  "InvalidLinkTargetError",
+  "InvalidPropertyTargetError",
+  "InvalidReferenceError",
+  "UnknownModuleError",
+  "UnknownLinkError",
+  "UnknownPropertyError",
+  "UnknownUserError",
+  "UnknownDatabaseError",
+  "UnknownParameterError",
+  "DeprecatedScopingError",
+  "SchemaError",
+  "SchemaDefinitionError",
+  "InvalidDefinitionError",
+  "InvalidModuleDefinitionError",
+  "InvalidLinkDefinitionError",
+  "InvalidPropertyDefinitionError",
+  "InvalidUserDefinitionError",
+  "InvalidDatabaseDefinitionError",
+  "InvalidOperatorDefinitionError",
+  "InvalidAliasDefinitionError",
+  "InvalidFunctionDefinitionError",
+  "InvalidConstraintDefinitionError",
+  "InvalidCastDefinitionError",
+  "DuplicateDefinitionError",
+  "DuplicateModuleDefinitionError",
+  "DuplicateLinkDefinitionError",
+  "DuplicatePropertyDefinitionError",
+  "DuplicateUserDefinitionError",
+  "DuplicateDatabaseDefinitionError",
+  "DuplicateOperatorDefinitionError",
+  "DuplicateViewDefinitionError",
+  "DuplicateFunctionDefinitionError",
+  "DuplicateConstraintDefinitionError",
+  "DuplicateCastDefinitionError",
+  "DuplicateMigrationError",
+  "SessionTimeoutError",
+  "IdleSessionTimeoutError",
+  "QueryTimeoutError",
+  "TransactionTimeoutError",
+  "IdleTransactionTimeoutError",
+  "ExecutionError",
+  "InvalidValueError",
+  "DivisionByZeroError",
+  "NumericOutOfRangeError",
+  "AccessPolicyError",
+  "QueryAssertionError",
+  "IntegrityError",
+  "ConstraintViolationError",
+  "CardinalityViolationError",
+  "MissingRequiredError",
+  "TransactionError",
+  "TransactionConflictError",
+  "TransactionSerializationError",
+  "TransactionDeadlockError",
+  "QueryCacheInvalidationError",
+  "WatchError",
+  "ConfigurationError",
+  "AccessError",
+  "AuthenticationError",
+  "AvailabilityError",
+  "BackendUnavailableError",
+  "ServerOfflineError",
+  "UnknownTenantError",
+  "ServerBlockedError",
+  "BackendError",
+  "UnsupportedBackendFeatureError",
+  "LogMessage",
+  "WarningMessage",
+  "StatusMessage",
+  "MigrationStatusMessage",
 ] as const;
 
 export type EdgeDBErrorName = (typeof all)[number];

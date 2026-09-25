@@ -17,7 +17,5 @@ import type { SchemaSnapshot } from "./schema.js";
  * `source` is raw SDL (module-wrapped as the caller needs); options forward to
  * the SDL parser (`legacySyntaxCompat`, etc.).
  */
-export const loadSchema = (
-  source: string,
-  options: NewSDLAdapterOptions,
-): SchemaSnapshot => schemaSnapshotFromDeclarative(parseDeclarativeSchema(source, options));
+export const loadSchema = (source: string, options: NewSDLAdapterOptions): SchemaSnapshot =>
+  schemaSnapshotFromDeclarative(parseDeclarativeSchema(source, options));

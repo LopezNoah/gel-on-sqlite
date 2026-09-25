@@ -12,9 +12,14 @@ export interface ResolveSchemaModelOptions {
   schemaModelName?: string;
 }
 
-export const resolveSchemaModelForCompile = (options: ResolveSchemaModelOptions): GeneratedSchema | undefined => {
+export const resolveSchemaModelForCompile = (
+  options: ResolveSchemaModelOptions,
+): GeneratedSchema | undefined => {
   const schemaTypeNames = options.schema
-    ? options.schema.listTypes().map((typeDef) => `${typeDef.module ?? "default"}::${typeDef.name}`).sort((a, b) => a.localeCompare(b))
+    ? options.schema
+        .listTypes()
+        .map((typeDef) => `${typeDef.module ?? "default"}::${typeDef.name}`)
+        .sort((a, b) => a.localeCompare(b))
     : undefined;
 
   const matchesSchema = (generated: GeneratedSchema): boolean => {

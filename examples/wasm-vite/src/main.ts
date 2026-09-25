@@ -12,6 +12,12 @@ const SCHEMA = `module default {
 
 const STORAGE_KEY = "sqlite-ts-wasm-demo";
 
+const requireElement = <T extends Element>(selector: string): T => {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`Missing demo element: ${selector}`);
+  return element;
+};
+
 const decodeDatabase = (encoded: string): Uint8Array => {
   const binary = atob(encoded);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
@@ -39,10 +45,10 @@ if (!saved) {
   localStorage.setItem(STORAGE_KEY, encodeDatabase(db.export()));
 }
 
-const peopleElement = document.querySelector<HTMLOListElement>("#people")!;
-const countElement = document.querySelector<HTMLSpanElement>("#count")!;
-const statusElement = document.querySelector<HTMLSpanElement>("#status")!;
-const form = document.querySelector<HTMLFormElement>("#person-form")!;
+const peopleElement = requireElement<HTMLOListElement>("#people");
+const countElement = requireElement<HTMLSpanElement>("#count");
+const statusElement = requireElement<HTMLSpanElement>("#status");
+const form = requireElement<HTMLFormElement>("#person-form");
 
 const renderPeople = async (): Promise<void> => {
   const people = await client.query<{ id: string; name: string; age: number | null }>(
@@ -70,10 +76,10 @@ form.addEventListener("submit", async (event) => {
   statusElement.textContent = "Compiling query...";
 
   try {
-    await client.query(
-      "insert default::Person { name := <str>$name, age := <int64>$age };",
-      { name: String(data.get("name")), age: Number(data.get("age")) },
-    );
+    await client.query("insert default::Person { name := <str>$name, age := <int64>$age };", {
+      name: String(data.get("name")),
+      age: Number(data.get("age")),
+    });
     localStorage.setItem(STORAGE_KEY, encodeDatabase(db.export()));
     await renderPeople();
   } catch (error) {
@@ -81,7 +87,7 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-document.querySelector<HTMLButtonElement>("#reset")!.addEventListener("click", () => {
+requireElement<HTMLButtonElement>("#reset").addEventListener("click", () => {
   localStorage.removeItem(STORAGE_KEY);
   location.reload();
 });

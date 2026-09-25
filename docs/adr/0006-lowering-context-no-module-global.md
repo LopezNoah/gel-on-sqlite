@@ -9,7 +9,7 @@ The architecture review's candidate #4 (rated speculative) flagged `gel_ir_compi
 **Decisions (rejected):**
 
 - **Build the context per compile** (the review's sketched "after"). Rejected: the context is stateless, so per-compile construction would allocate a 23-property object on every compile for zero benefit. There is no per-compile state to isolate, so the "blocks isolated instantiation" concern does not actually bite.
-- **Make it a top-level `const`** (no laziness). Rejected: all 23 members are `const` arrow functions declared *below* the context (e.g. `compileValueSetSQL` at line ~10966), so they are in the temporal dead zone at module load — a top-level `const` literal referencing them throws. Converting all 23 to hoisted `function` declarations would touch a 13k-line file for a cosmetic gain. The laziness is necessary; encapsulating its memo cell is the proportionate fix.
+- **Make it a top-level `const`** (no laziness). Rejected: all 23 members are `const` arrow functions declared _below_ the context (e.g. `compileValueSetSQL` at line ~10966), so they are in the temporal dead zone at module load — a top-level `const` literal referencing them throws. Converting all 23 to hoisted `function` declarations would touch a 13k-line file for a cosmetic gain. The laziness is necessary; encapsulating its memo cell is the proportionate fix.
 
 **Consequences.** No module-level mutable binding remains for the lowering context; it is a frozen, lazily-memoized, cycle-breaking dispatch table. This is a cosmetic hardening, not a depth change — recorded so a future reader understands the laziness is deliberate (TDZ), the freeze is intentional, and per-compile construction was considered and rejected.
 

@@ -14,18 +14,30 @@ const schema = schemaFromSdl(
   fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"),
 );
 const ast = (q: string) => parseEdgeQL(q);
-const single = (sql = "SELECT 1"): GelIRSQLArtifact => ({ sql, params: [], loweringMode: "single_statement" });
-const fallback = (sql = ""): GelIRSQLArtifact => ({ sql, params: [], loweringMode: "fallback_multi_query" });
+const single = (sql = "SELECT 1"): GelIRSQLArtifact => ({
+  sql,
+  params: [],
+  loweringMode: "single_statement",
+});
+const fallback = (sql = ""): GelIRSQLArtifact => ({
+  sql,
+  params: [],
+  loweringMode: "fallback_multi_query",
+});
 
 describe("classifyExecutionStrategy", () => {
   it("anything that lowers to one statement is sql", () => {
     expect(classifyExecutionStrategy(ast("GROUP Issue BY .status"), single(), schema)).toBe("sql");
     expect(classifyExecutionStrategy(ast("SELECT Issue { name }"), single(), schema)).toBe("sql");
-    expect(classifyExecutionStrategy(ast("INSERT Status { name := 'x' }"), single(), schema)).toBe("sql");
+    expect(classifyExecutionStrategy(ast("INSERT Status { name := 'x' }"), single(), schema)).toBe(
+      "sql",
+    );
   });
 
   it("a GROUP that does not lower is rejected (engine throws E_UNSUPPORTED)", () => {
-    expect(classifyExecutionStrategy(ast("GROUP Issue BY .status"), fallback(), schema)).toBe("reject");
+    expect(classifyExecutionStrategy(ast("GROUP Issue BY .status"), fallback(), schema)).toBe(
+      "reject",
+    );
   });
 
   it("a select_free that does not reach single_statement mode is rejected", () => {
@@ -44,7 +56,9 @@ describe("classifyExecutionStrategy", () => {
   });
 
   it("a non-lowering FOR runs via the runtime evaluator", () => {
-    expect(classifyExecutionStrategy(ast("FOR x IN {1, 2} UNION (SELECT x)"), fallback(), schema)).toBe("runtime");
+    expect(
+      classifyExecutionStrategy(ast("FOR x IN {1, 2} UNION (SELECT x)"), fallback(), schema),
+    ).toBe("runtime");
   });
 
   it("a non-lowering mutation runs via the write path", () => {

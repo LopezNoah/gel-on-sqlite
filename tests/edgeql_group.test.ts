@@ -4,7 +4,7 @@ import {
   assertQueryResult,
   queryRows,
   unorderedBag,
-  unorderedSet
+  unorderedSet,
 } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLGroup", () => {
@@ -24,93 +24,93 @@ describe("TestEdgeQLGroup", () => {
       h,
       qry,
       unorderedBag([
+        {
+          el: "Water",
+          groups: unorderedBag([
             {
-              "el": "Water",
-              "groups": unorderedBag([
+              elements: [
                 {
-                  "elements": [
-                    {
-                      "cost": 2,
-                      "name": "Bog monster",
-                    },
-                  ],
-                  "even": 0,
-                },
-                {
-                  "elements": [
-                    {
-                      "cost": 3,
-                      "name": "Giant turtle",
-                    },
-                  ],
-                  "even": 1,
-                },
-              ]),
-            },
-            {
-              "el": "Fire",
-              "groups": [
-                {
-                  "elements": unorderedBag([
-                    {
-                      "cost": 1,
-                      "name": "Imp",
-                    },
-                    {
-                      "cost": 5,
-                      "name": "Dragon",
-                    },
-                  ]),
-                  "even": 1,
+                  cost: 2,
+                  name: "Bog monster",
                 },
               ],
+              even: 0,
             },
             {
-              "el": "Earth",
-              "groups": [
+              elements: [
                 {
-                  "elements": unorderedBag([
-                    {
-                      "cost": 1,
-                      "name": "Dwarf",
-                    },
-                    {
-                      "cost": 3,
-                      "name": "Golem",
-                    },
-                  ]),
-                  "even": 1,
+                  cost: 3,
+                  name: "Giant turtle",
                 },
               ],
+              even: 1,
             },
+          ]),
+        },
+        {
+          el: "Fire",
+          groups: [
             {
-              "el": "Air",
-              "groups": unorderedBag([
+              elements: unorderedBag([
                 {
-                  "elements": unorderedBag([
-                    {
-                      "cost": 2,
-                      "name": "Giant eagle",
-                    },
-                    {
-                      "cost": 4,
-                      "name": "Djinn",
-                    },
-                  ]),
-                  "even": 0,
+                  cost: 1,
+                  name: "Imp",
                 },
                 {
-                  "elements": [
-                    {
-                      "cost": 1,
-                      "name": "Sprite",
-                    },
-                  ],
-                  "even": 1,
+                  cost: 5,
+                  name: "Dragon",
                 },
               ]),
+              even: 1,
             },
-          ])
+          ],
+        },
+        {
+          el: "Earth",
+          groups: [
+            {
+              elements: unorderedBag([
+                {
+                  cost: 1,
+                  name: "Dwarf",
+                },
+                {
+                  cost: 3,
+                  name: "Golem",
+                },
+              ]),
+              even: 1,
+            },
+          ],
+        },
+        {
+          el: "Air",
+          groups: unorderedBag([
+            {
+              elements: unorderedBag([
+                {
+                  cost: 2,
+                  name: "Giant eagle",
+                },
+                {
+                  cost: 4,
+                  name: "Djinn",
+                },
+              ]),
+              even: 0,
+            },
+            {
+              elements: [
+                {
+                  cost: 1,
+                  name: "Sprite",
+                },
+              ],
+              even: 1,
+            },
+          ]),
+        },
+      ]),
     );
   }
 
@@ -121,62 +121,62 @@ describe("TestEdgeQLGroup", () => {
             GROUP cards::Card {name} BY .element
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
-              "key": {
-                "element": "Water",
-              },
+              name: "Bog monster",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-              ]),
-              "key": {
-                "element": "Fire",
-              },
+              name: "Giant turtle",
+            },
+          ]),
+          key: {
+            element: "Water",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
-              "key": {
-                "element": "Earth",
-              },
+              name: "Dragon",
+            },
+          ]),
+          key: {
+            element: "Fire",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Sprite",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
-              "key": {
-                "element": "Air",
-              },
+              name: "Golem",
             },
-          ])
+          ]),
+          key: {
+            element: "Earth",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Sprite",
+            },
+            {
+              name: "Giant eagle",
+            },
+            {
+              name: "Djinn",
+            },
+          ]),
+          key: {
+            element: "Air",
+          },
+        },
+      ]),
     );
   });
 
@@ -187,62 +187,62 @@ describe("TestEdgeQLGroup", () => {
             SELECT (GROUP cards::Card {name} BY .element)
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
-              "key": {
-                "element": "Water",
-              },
+              name: "Bog monster",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-              ]),
-              "key": {
-                "element": "Fire",
-              },
+              name: "Giant turtle",
+            },
+          ]),
+          key: {
+            element: "Water",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
-              "key": {
-                "element": "Earth",
-              },
+              name: "Dragon",
+            },
+          ]),
+          key: {
+            element: "Fire",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Sprite",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
-              "key": {
-                "element": "Air",
-              },
+              name: "Golem",
             },
-          ])
+          ]),
+          key: {
+            element: "Earth",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Sprite",
+            },
+            {
+              name: "Giant eagle",
+            },
+            {
+              name: "Djinn",
+            },
+          ]),
+          key: {
+            element: "Air",
+          },
+        },
+      ]),
     );
   });
 
@@ -254,46 +254,46 @@ describe("TestEdgeQLGroup", () => {
             FILTER .key.element != 'Air';
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
-              "key": {
-                "element": "Water",
-              },
+              name: "Bog monster",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-              ]),
-              "key": {
-                "element": "Fire",
-              },
+              name: "Giant turtle",
+            },
+          ]),
+          key: {
+            element: "Water",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
-              "key": {
-                "element": "Earth",
-              },
+              name: "Dragon",
             },
-          ])
+          ]),
+          key: {
+            element: "Fire",
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
+            },
+            {
+              name: "Golem",
+            },
+          ]),
+          key: {
+            element: "Earth",
+          },
+        },
+      ]),
     );
   });
 
@@ -305,44 +305,31 @@ describe("TestEdgeQLGroup", () => {
             GROUP snapshots {} BY .element;
             `,
       unorderedBag([
-            {
-              "elements": unorderedBag([
-                {},
-                {},
-              ]),
-              "key": {
-                "element": "Water",
-              },
-            },
-            {
-              "elements": unorderedBag([
-                {},
-                {},
-              ]),
-              "key": {
-                "element": "Fire",
-              },
-            },
-            {
-              "elements": unorderedBag([
-                {},
-                {},
-              ]),
-              "key": {
-                "element": "Earth",
-              },
-            },
-            {
-              "elements": unorderedBag([
-                {},
-                {},
-                {},
-              ]),
-              "key": {
-                "element": "Air",
-              },
-            },
-          ])
+        {
+          elements: unorderedBag([{}, {}]),
+          key: {
+            element: "Water",
+          },
+        },
+        {
+          elements: unorderedBag([{}, {}]),
+          key: {
+            element: "Fire",
+          },
+        },
+        {
+          elements: unorderedBag([{}, {}]),
+          key: {
+            element: "Earth",
+          },
+        },
+        {
+          elements: unorderedBag([{}, {}, {}]),
+          key: {
+            element: "Air",
+          },
+        },
+      ]),
     );
   });
 
@@ -361,7 +348,7 @@ describe("TestEdgeQLGroup", () => {
               USING x := count(.owners), nowners := x,
               BY CUBE (.element, nowners)
             )
-        `
+        `,
     );
   });
 
@@ -376,23 +363,23 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
-            {
-              "cnt": 2,
-              "element": "Water",
-            },
-            {
-              "cnt": 2,
-              "element": "Fire",
-            },
-            {
-              "cnt": 2,
-              "element": "Earth",
-            },
-            {
-              "cnt": 3,
-              "element": "Air",
-            },
-          ])
+        {
+          cnt: 2,
+          element: "Water",
+        },
+        {
+          cnt: 2,
+          element: "Fire",
+        },
+        {
+          cnt: 2,
+          element: "Earth",
+        },
+        {
+          cnt: 3,
+          element: "Air",
+        },
+      ]),
     );
   });
 
@@ -407,19 +394,19 @@ describe("TestEdgeQLGroup", () => {
             } FILTER .element != 'Water';
             `,
       unorderedBag([
-            {
-              "cnt": 2,
-              "element": "Fire",
-            },
-            {
-              "cnt": 2,
-              "element": "Earth",
-            },
-            {
-              "cnt": 3,
-              "element": "Air",
-            },
-          ])
+        {
+          cnt: 2,
+          element: "Fire",
+        },
+        {
+          cnt: 2,
+          element: "Earth",
+        },
+        {
+          cnt: 3,
+          element: "Air",
+        },
+      ]),
     );
   });
 
@@ -434,23 +421,23 @@ describe("TestEdgeQLGroup", () => {
             } ORDER BY .element;
             `,
       [
-            {
-              "cnt": 3,
-              "element": "Air",
-            },
-            {
-              "cnt": 2,
-              "element": "Earth",
-            },
-            {
-              "cnt": 2,
-              "element": "Fire",
-            },
-            {
-              "cnt": 2,
-              "element": "Water",
-            },
-          ]
+        {
+          cnt: 3,
+          element: "Air",
+        },
+        {
+          cnt: 2,
+          element: "Earth",
+        },
+        {
+          cnt: 2,
+          element: "Fire",
+        },
+        {
+          cnt: 2,
+          element: "Water",
+        },
+      ],
     );
   });
 
@@ -465,23 +452,23 @@ describe("TestEdgeQLGroup", () => {
             );
             `,
       unorderedBag([
-            {
-              "cnt": 2,
-              "element": "Water",
-            },
-            {
-              "cnt": 2,
-              "element": "Fire",
-            },
-            {
-              "cnt": 2,
-              "element": "Earth",
-            },
-            {
-              "cnt": 3,
-              "element": "Air",
-            },
-          ])
+        {
+          cnt: 2,
+          element: "Water",
+        },
+        {
+          cnt: 2,
+          element: "Fire",
+        },
+        {
+          cnt: 2,
+          element: "Earth",
+        },
+        {
+          cnt: 3,
+          element: "Air",
+        },
+      ]),
     );
   });
 
@@ -495,19 +482,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
-            {
-              "cnt": 2,
-            },
-            {
-              "cnt": 2,
-            },
-            {
-              "cnt": 2,
-            },
-            {
-              "cnt": 3,
-            },
-          ])
+        {
+          cnt: 2,
+        },
+        {
+          cnt: 2,
+        },
+        {
+          cnt: 2,
+        },
+        {
+          cnt: 3,
+        },
+      ]),
     );
   });
 
@@ -522,23 +509,23 @@ describe("TestEdgeQLGroup", () => {
             );
             `,
       unorderedBag([
-            {
-              "cnt": 2,
-              "element": "Water",
-            },
-            {
-              "cnt": 2,
-              "element": "Fire",
-            },
-            {
-              "cnt": 2,
-              "element": "Earth",
-            },
-            {
-              "cnt": 3,
-              "element": "Air",
-            },
-          ])
+        {
+          cnt: 2,
+          element: "Water",
+        },
+        {
+          cnt: 2,
+          element: "Fire",
+        },
+        {
+          cnt: 2,
+          element: "Earth",
+        },
+        {
+          cnt: 3,
+          element: "Air",
+        },
+      ]),
     );
   });
 
@@ -553,23 +540,23 @@ describe("TestEdgeQLGroup", () => {
             ));
             `,
       unorderedBag([
-            {
-              "cnt": 2,
-              "element": "Water",
-            },
-            {
-              "cnt": 2,
-              "element": "Fire",
-            },
-            {
-              "cnt": 2,
-              "element": "Earth",
-            },
-            {
-              "cnt": 3,
-              "element": "Air",
-            },
-          ])
+        {
+          cnt: 2,
+          element: "Water",
+        },
+        {
+          cnt: 2,
+          element: "Fire",
+        },
+        {
+          cnt: 2,
+          element: "Earth",
+        },
+        {
+          cnt: 3,
+          element: "Air",
+        },
+      ]),
     );
   });
 
@@ -584,23 +571,23 @@ describe("TestEdgeQLGroup", () => {
             ));
             `,
       unorderedBag([
-            {
-              "cst": 5,
-              "element": "Water",
-            },
-            {
-              "cst": 6,
-              "element": "Fire",
-            },
-            {
-              "cst": 4,
-              "element": "Earth",
-            },
-            {
-              "cst": 7,
-              "element": "Air",
-            },
-          ])
+        {
+          cst: 5,
+          element: "Water",
+        },
+        {
+          cst: 6,
+          element: "Fire",
+        },
+        {
+          cst: 4,
+          element: "Earth",
+        },
+        {
+          cst: 7,
+          element: "Air",
+        },
+      ]),
     );
   });
 
@@ -614,133 +601,133 @@ describe("TestEdgeQLGroup", () => {
             BY {.element, nowners};
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
-              "grouping": ["element"],
-              "key": {
-                "element": "Water",
-                "nowners": null,
-              },
+              name: "Bog monster",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dragon",
-                },
-                {
-                  "name": "Imp",
-                },
-              ]),
-              "grouping": ["element"],
-              "key": {
-                "element": "Fire",
-                "nowners": null,
-              },
+              name: "Giant turtle",
+            },
+          ]),
+          grouping: ["element"],
+          key: {
+            element: "Water",
+            nowners: null,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dragon",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
-              "grouping": ["element"],
-              "key": {
-                "element": "Earth",
-                "nowners": null,
-              },
+              name: "Imp",
+            },
+          ]),
+          grouping: ["element"],
+          key: {
+            element: "Fire",
+            nowners: null,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Djinn",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Sprite",
-                },
-              ]),
-              "grouping": ["element"],
-              "key": {
-                "element": "Air",
-                "nowners": null,
-              },
+              name: "Golem",
+            },
+          ]),
+          grouping: ["element"],
+          key: {
+            element: "Earth",
+            nowners: null,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Djinn",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Golem",
-                },
-              ]),
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 3,
-              },
+              name: "Giant eagle",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 4,
-              },
+              name: "Sprite",
+            },
+          ]),
+          grouping: ["element"],
+          key: {
+            element: "Air",
+            nowners: null,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Golem",
+            },
+          ]),
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 3,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Bog monster",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Djinn",
-                },
-                {
-                  "name": "Dragon",
-                },
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Sprite",
-                },
-              ]),
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 2,
-              },
+              name: "Giant turtle",
+            },
+          ]),
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 4,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Djinn",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-              ]),
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 1,
-              },
+              name: "Dragon",
             },
-          ])
+            {
+              name: "Dwarf",
+            },
+            {
+              name: "Giant eagle",
+            },
+            {
+              name: "Sprite",
+            },
+          ]),
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 2,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
+            },
+          ]),
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 1,
+          },
+        },
+      ]),
     );
   });
 
@@ -754,133 +741,133 @@ describe("TestEdgeQLGroup", () => {
             BY {.element, nowners};
             `,
       unorderedBag([
+        {
+          elements: [
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["element"],
-              "key": {
-                "element": "Water",
-                "nowners": null,
-              },
+              id: "str",
             },
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["element"],
-              "key": {
-                "element": "Fire",
-                "nowners": null,
-              },
+              id: "str",
+            },
+          ],
+          grouping: ["element"],
+          key: {
+            element: "Water",
+            nowners: null,
+          },
+        },
+        {
+          elements: [
+            {
+              id: "str",
             },
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["element"],
-              "key": {
-                "element": "Earth",
-                "nowners": null,
-              },
+              id: "str",
+            },
+          ],
+          grouping: ["element"],
+          key: {
+            element: "Fire",
+            nowners: null,
+          },
+        },
+        {
+          elements: [
+            {
+              id: "str",
             },
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["element"],
-              "key": {
-                "element": "Air",
-                "nowners": null,
-              },
+              id: "str",
+            },
+          ],
+          grouping: ["element"],
+          key: {
+            element: "Earth",
+            nowners: null,
+          },
+        },
+        {
+          elements: [
+            {
+              id: "str",
             },
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 3,
-              },
+              id: "str",
             },
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 4,
-              },
+              id: "str",
+            },
+          ],
+          grouping: ["element"],
+          key: {
+            element: "Air",
+            nowners: null,
+          },
+        },
+        {
+          elements: [
+            {
+              id: "str",
+            },
+          ],
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 3,
+          },
+        },
+        {
+          elements: [
+            {
+              id: "str",
             },
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 2,
-              },
+              id: "str",
+            },
+          ],
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 4,
+          },
+        },
+        {
+          elements: [
+            {
+              id: "str",
             },
             {
-              "elements": [
-                {
-                  "id": "str",
-                },
-              ],
-              "grouping": ["nowners"],
-              "key": {
-                "element": null,
-                "nowners": 1,
-              },
+              id: "str",
             },
-          ])
+            {
+              id: "str",
+            },
+            {
+              id: "str",
+            },
+            {
+              id: "str",
+            },
+          ],
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 2,
+          },
+        },
+        {
+          elements: [
+            {
+              id: "str",
+            },
+          ],
+          grouping: ["nowners"],
+          key: {
+            element: null,
+            nowners: 1,
+          },
+        },
+      ]),
     );
   });
 
@@ -899,67 +886,67 @@ describe("TestEdgeQLGroup", () => {
             } ORDER BY array_agg((SELECT _ := .grouping ORDER BY _))
             `,
       [
-            {
-              "grouping": [],
-              "num": 9,
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-          ]
+        {
+          grouping: [],
+          num: 9,
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -975,67 +962,67 @@ describe("TestEdgeQLGroup", () => {
             }) ORDER BY array_agg((SELECT _ := .grouping ORDER BY _))
             `,
       [
-            {
-              "grouping": [],
-              "num": 9,
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-          ]
+        {
+          grouping: [],
+          num: 9,
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1051,67 +1038,67 @@ describe("TestEdgeQLGroup", () => {
             } ORDER BY array_agg((SELECT _ := .grouping ORDER BY _))
             `,
       [
-            {
-              "grouping": [],
-              "num": 9,
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["element", "nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-            {
-              "grouping": ["nowners"],
-              "num": "int",
-            },
-          ]
+        {
+          grouping: [],
+          num: 9,
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["element", "nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+        {
+          grouping: ["nowners"],
+          num: "int",
+        },
+      ],
     );
   });
 
@@ -1132,31 +1119,31 @@ describe("TestEdgeQLGroup", () => {
             )
             `,
       [
-            {
-              "grouping": unorderedSet([]),
-            },
-            {
-              "grouping": unorderedSet(["cost"]),
-            },
-            {
-              "grouping": unorderedSet(["element"]),
-            },
-            {
-              "grouping": unorderedSet(["nowners"]),
-            },
-            {
-              "grouping": unorderedSet(["cost", "element"]),
-            },
-            {
-              "grouping": unorderedSet(["cost", "nowners"]),
-            },
-            {
-              "grouping": unorderedSet(["element", "nowners"]),
-            },
-            {
-              "grouping": unorderedSet(["cost", "element", "nowners"]),
-            },
-          ]
+        {
+          grouping: unorderedSet([]),
+        },
+        {
+          grouping: unorderedSet(["cost"]),
+        },
+        {
+          grouping: unorderedSet(["element"]),
+        },
+        {
+          grouping: unorderedSet(["nowners"]),
+        },
+        {
+          grouping: unorderedSet(["cost", "element"]),
+        },
+        {
+          grouping: unorderedSet(["cost", "nowners"]),
+        },
+        {
+          grouping: unorderedSet(["element", "nowners"]),
+        },
+        {
+          grouping: unorderedSet(["cost", "element", "nowners"]),
+        },
+      ],
     );
   });
 
@@ -1167,19 +1154,19 @@ describe("TestEdgeQLGroup", () => {
             group {a := 1, b := 2} by .a;;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": 2,
-                },
-              ]),
+              a: 1,
+              b: 2,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1192,22 +1179,22 @@ describe("TestEdgeQLGroup", () => {
             by d;
             `,
       unorderedBag([
+        {
+          key: {
+            d: 5,
+          },
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "d": 5,
+              a: 1,
+              b: [2, 3, 4],
+              c: {
+                d: 5,
               },
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": [2, 3, 4],
-                  "c": {
-                    "d": 5,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1221,71 +1208,71 @@ describe("TestEdgeQLGroup", () => {
             ) by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": 8,
-                },
-                {
-                  "name": "Alice",
-                  "b": 9,
-                },
-              ]),
+              name: "Alice",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": 8,
-                },
-                {
-                  "name": "Bob",
-                  "b": 9,
-                },
-              ]),
+              name: "Alice",
+              b: 9,
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Bob",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": 8,
-                },
-                {
-                  "name": "Carol",
-                  "b": 9,
-                },
-              ]),
+              name: "Bob",
+              b: 9,
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Carol",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": 8,
-                },
-                {
-                  "name": "Dave",
-                  "b": 9,
-                },
-              ]),
+              name: "Carol",
+              b: 9,
             },
-          ])
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Dave",
+              b: 8,
+            },
+            {
+              name: "Dave",
+              b: 9,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1299,55 +1286,55 @@ describe("TestEdgeQLGroup", () => {
             ) by .b;
             `,
       unorderedBag([
+        {
+          key: {
+            b: 8,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "b": 8,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": 8,
-                },
-                {
-                  "name": "Bob",
-                  "b": 8,
-                },
-                {
-                  "name": "Carol",
-                  "b": 8,
-                },
-                {
-                  "name": "Dave",
-                  "b": 8,
-                },
-              ]),
+              name: "Alice",
+              b: 8,
             },
             {
-              "key": {
-                "b": 9,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": 9,
-                },
-                {
-                  "name": "Bob",
-                  "b": 9,
-                },
-                {
-                  "name": "Carol",
-                  "b": 9,
-                },
-                {
-                  "name": "Dave",
-                  "b": 9,
-                },
-              ]),
+              name: "Bob",
+              b: 8,
             },
-          ])
+            {
+              name: "Carol",
+              b: 8,
+            },
+            {
+              name: "Dave",
+              b: 8,
+            },
+          ]),
+        },
+        {
+          key: {
+            b: 9,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
+            {
+              name: "Alice",
+              b: 9,
+            },
+            {
+              name: "Bob",
+              b: 9,
+            },
+            {
+              name: "Carol",
+              b: 9,
+            },
+            {
+              name: "Dave",
+              b: 9,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1359,55 +1346,55 @@ describe("TestEdgeQLGroup", () => {
             group cards::User { name, b := N } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Alice",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Bob",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Carol",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Dave",
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1421,31 +1408,31 @@ describe("TestEdgeQLGroup", () => {
             by total;
             `,
       unorderedBag([
+        {
+          key: {
+            total: 17,
+          },
+          grouping: unorderedSet(["total"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "total": 17,
-              },
-              "grouping": unorderedSet(["total"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Bob",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Carol",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Dave",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Alice",
+              b: unorderedSet([8, 9]),
             },
-          ])
+            {
+              name: "Bob",
+              b: unorderedSet([8, 9]),
+            },
+            {
+              name: "Carol",
+              b: unorderedSet([8, 9]),
+            },
+            {
+              name: "Dave",
+              b: unorderedSet([8, 9]),
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1459,67 +1446,67 @@ describe("TestEdgeQLGroup", () => {
             } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1535,43 +1522,43 @@ describe("TestEdgeQLGroup", () => {
             by d;
             `,
       unorderedBag([
+        {
+          key: {
+            d: 9,
+          },
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "d": 9,
+              name: "Alice",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+            {
+              name: "Bob",
+              b: {
+                c: 3,
+                d: 9,
+              },
+            },
+            {
+              name: "Carol",
+              b: {
+                c: 3,
+                d: 9,
+              },
+            },
+            {
+              name: "Dave",
+              b: {
+                c: 3,
+                d: 9,
+              },
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1585,23 +1572,23 @@ describe("TestEdgeQLGroup", () => {
             ) by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": 8,
-                },
-                {
-                  "a": 1,
-                  "b": 9,
-                },
-              ]),
+              a: 1,
+              b: 8,
             },
-          ])
+            {
+              a: 1,
+              b: 9,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1615,31 +1602,31 @@ describe("TestEdgeQLGroup", () => {
             ) by .b;
             `,
       unorderedBag([
+        {
+          key: {
+            b: 8,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "b": 8,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": 8,
-                },
-              ]),
+              a: 1,
+              b: 8,
             },
+          ]),
+        },
+        {
+          key: {
+            b: 9,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "b": 9,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": 9,
-                },
-              ]),
+              a: 1,
+              b: 9,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1651,19 +1638,19 @@ describe("TestEdgeQLGroup", () => {
             group { a := 1, b := N } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              a: 1,
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1677,22 +1664,22 @@ describe("TestEdgeQLGroup", () => {
             } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1708,22 +1695,22 @@ describe("TestEdgeQLGroup", () => {
             by d;
             `,
       unorderedBag([
+        {
+          key: {
+            d: 9,
+          },
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "d": 9,
+              a: 1,
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1740,60 +1727,60 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "z": true,
-                },
-              ]),
+              name: "Alice",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "z": true,
-                },
-              ]),
+              name: "Bob",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "z": true,
-                },
-              ]),
+              name: "Carol",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "z": true,
-                },
-              ]),
+              name: "Dave",
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
-    // Fixture corrected from upstream @test.xerror (never validated there):
-    // the query groups BY .b, so `grouping` is ["b"], not ["d"].
+  // Fixture corrected from upstream @test.xerror (never validated there):
+  // the query groups BY .b, so `grouping` is ["b"], not ["d"].
   it("test_edgeql_group_volatile_ptr_set_02 [xerror: Group by doesn't materialize volatile properly]", () => {
     assertQueryResult(
       h,
@@ -1807,47 +1794,47 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          name: "Alice",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "name": "Alice",
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "z": true,
-                },
-              ]),
+              name: "Alice",
+              z: true,
             },
+          ]),
+        },
+        {
+          name: "Bob",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "name": "Bob",
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "z": true,
-                },
-              ]),
+              name: "Bob",
+              z: true,
             },
+          ]),
+        },
+        {
+          name: "Carol",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "name": "Carol",
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "z": true,
-                },
-              ]),
+              name: "Carol",
+              z: true,
             },
+          ]),
+        },
+        {
+          name: "Dave",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "name": "Dave",
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "z": true,
-                },
-              ]),
+              name: "Dave",
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1864,55 +1851,55 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "z": true,
-                },
-              ]),
+              name: "Alice",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "z": true,
-                },
-              ]),
+              name: "Bob",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "z": true,
-                },
-              ]),
+              name: "Carol",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "z": true,
-                },
-              ]),
+              name: "Dave",
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -1939,67 +1926,67 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2032,41 +2019,41 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          name: "Alice",
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "name": "Alice",
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
+              name: "Alice",
+              b: {
+                c: 2,
+                z: true,
+              },
             },
-          ])
+            {
+              name: "Bob",
+              b: {
+                c: 2,
+                z: true,
+              },
+            },
+            {
+              name: "Carol",
+              b: {
+                c: 2,
+                z: true,
+              },
+            },
+            {
+              name: "Dave",
+              b: {
+                c: 2,
+                z: true,
+              },
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2095,67 +2082,67 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2172,19 +2159,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "z": true,
-                },
-              ]),
+              a: 1,
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2201,16 +2188,16 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "z": true,
-                },
-              ]),
+              a: 1,
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2227,19 +2214,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "z": true,
-                },
-              ]),
+              a: 1,
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2266,22 +2253,22 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2309,19 +2296,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
+              a: 1,
+              b: {
+                c: 2,
+                z: true,
+              },
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2351,19 +2338,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
+              a: 1,
+              b: {
+                c: 2,
+                z: true,
+              },
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2374,7 +2361,7 @@ describe("TestEdgeQLGroup", () => {
                 group Card { name }
                 using element := .cost
                 by cube(.element, element)
-            `
+            `,
       );
     }).toThrow(new RegExp("used directly in the BY clause"));
   });
@@ -2390,9 +2377,11 @@ describe("TestEdgeQLGroup", () => {
                         BY @text, .text
                     )
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("BY clause cannot refer to link property and object property with the same name"));
+    }).toThrow(
+      new RegExp("BY clause cannot refer to link property and object property with the same name"),
+    );
     expect(() => {
       h.script(
         `
@@ -2403,9 +2392,11 @@ describe("TestEdgeQLGroup", () => {
                         BY .text, @text
                     )
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("BY clause cannot refer to link property and object property with the same name"));
+    }).toThrow(
+      new RegExp("BY clause cannot refer to link property and object property with the same name"),
+    );
   });
 
   it("test_edgeql_group_for_01", () => {
@@ -2421,43 +2412,43 @@ describe("TestEdgeQLGroup", () => {
             });
             `,
       unorderedBag([
-            {
-              "cost_ratio": 0.42857142857142855,
-              "name": "Sprite",
-            },
-            {
-              "cost_ratio": 0.8571428571428571,
-              "name": "Giant eagle",
-            },
-            {
-              "cost_ratio": 1.7142857142857142,
-              "name": "Djinn",
-            },
-            {
-              "cost_ratio": 0.5,
-              "name": "Dwarf",
-            },
-            {
-              "cost_ratio": 1.5,
-              "name": "Golem",
-            },
-            {
-              "cost_ratio": 0.3333333333333333,
-              "name": "Imp",
-            },
-            {
-              "cost_ratio": 1.6666666666666667,
-              "name": "Dragon",
-            },
-            {
-              "cost_ratio": 0.8,
-              "name": "Bog monster",
-            },
-            {
-              "cost_ratio": 1.2,
-              "name": "Giant turtle",
-            },
-          ])
+        {
+          cost_ratio: 0.42857142857142855,
+          name: "Sprite",
+        },
+        {
+          cost_ratio: 0.8571428571428571,
+          name: "Giant eagle",
+        },
+        {
+          cost_ratio: 1.7142857142857142,
+          name: "Djinn",
+        },
+        {
+          cost_ratio: 0.5,
+          name: "Dwarf",
+        },
+        {
+          cost_ratio: 1.5,
+          name: "Golem",
+        },
+        {
+          cost_ratio: 0.3333333333333333,
+          name: "Imp",
+        },
+        {
+          cost_ratio: 1.6666666666666667,
+          name: "Dragon",
+        },
+        {
+          cost_ratio: 0.8,
+          name: "Bog monster",
+        },
+        {
+          cost_ratio: 1.2,
+          name: "Giant turtle",
+        },
+      ]),
     );
   });
 
@@ -2468,7 +2459,7 @@ describe("TestEdgeQLGroup", () => {
                 for g in (group User by .name)
                 union count(g.elements.<owner);
             `,
-      unorderedSet([2, 4])
+      unorderedSet([2, 4]),
     );
   });
 
@@ -2478,10 +2469,7 @@ describe("TestEdgeQLGroup", () => {
       `
                 select (group User by .name).elements
             `,
-      [
-            {},
-            {},
-          ]
+      [{}, {}],
     );
   });
 
@@ -2499,25 +2487,19 @@ describe("TestEdgeQLGroup", () => {
                 BY B
             `,
       unorderedBag([
-            {
-              "key": {
-                "B": ["Open", 3000],
-              },
-              "elements": [
-                {},
-              ],
-            },
-            {
-              "key": {
-                "B": null,
-              },
-              "elements": [
-                {},
-                {},
-                {},
-              ],
-            },
-          ])
+        {
+          key: {
+            B: ["Open", 3000],
+          },
+          elements: [{}],
+        },
+        {
+          key: {
+            B: null,
+          },
+          elements: [{}, {}, {}],
+        },
+      ]),
     );
   });
 
@@ -2539,87 +2521,87 @@ describe("TestEdgeQLGroup", () => {
             ) BY .agrouping
         `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Water",
-                    "nowners": null,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Fire",
-                    "nowners": null,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Earth",
-                    "nowners": null,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Air",
-                    "nowners": null,
-                  },
-                  "num": 3,
-                },
-              ]),
-              "grouping": ["agrouping"],
-              "key": {
-                "agrouping": ["element"],
+              agrouping: ["element"],
+              key: {
+                element: "Water",
+                nowners: null,
               },
+              num: 2,
             },
             {
-              "elements": unorderedBag([
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 3,
-                  },
-                  "num": 1,
-                },
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 4,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 2,
-                  },
-                  "num": 5,
-                },
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 1,
-                  },
-                  "num": 1,
-                },
-              ]),
-              "grouping": ["agrouping"],
-              "key": {
-                "agrouping": ["nowners"],
+              agrouping: ["element"],
+              key: {
+                element: "Fire",
+                nowners: null,
               },
+              num: 2,
             },
-          ])
+            {
+              agrouping: ["element"],
+              key: {
+                element: "Earth",
+                nowners: null,
+              },
+              num: 2,
+            },
+            {
+              agrouping: ["element"],
+              key: {
+                element: "Air",
+                nowners: null,
+              },
+              num: 3,
+            },
+          ]),
+          grouping: ["agrouping"],
+          key: {
+            agrouping: ["element"],
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 3,
+              },
+              num: 1,
+            },
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 4,
+              },
+              num: 2,
+            },
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 2,
+              },
+              num: 5,
+            },
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 1,
+              },
+              num: 1,
+            },
+          ]),
+          grouping: ["agrouping"],
+          key: {
+            agrouping: ["nowners"],
+          },
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -2638,87 +2620,87 @@ describe("TestEdgeQLGroup", () => {
             ) BY .agrouping
         )`,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Water",
-                    "nowners": null,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Fire",
-                    "nowners": null,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Earth",
-                    "nowners": null,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["element"],
-                  "key": {
-                    "element": "Air",
-                    "nowners": null,
-                  },
-                  "num": 3,
-                },
-              ]),
-              "grouping": ["agrouping"],
-              "key": {
-                "agrouping": ["element"],
+              agrouping: ["element"],
+              key: {
+                element: "Water",
+                nowners: null,
               },
+              num: 2,
             },
             {
-              "elements": unorderedBag([
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 3,
-                  },
-                  "num": 1,
-                },
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 4,
-                  },
-                  "num": 2,
-                },
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 2,
-                  },
-                  "num": 5,
-                },
-                {
-                  "agrouping": ["nowners"],
-                  "key": {
-                    "element": null,
-                    "nowners": 1,
-                  },
-                  "num": 1,
-                },
-              ]),
-              "grouping": ["agrouping"],
-              "key": {
-                "agrouping": ["nowners"],
+              agrouping: ["element"],
+              key: {
+                element: "Fire",
+                nowners: null,
               },
+              num: 2,
             },
-          ])
+            {
+              agrouping: ["element"],
+              key: {
+                element: "Earth",
+                nowners: null,
+              },
+              num: 2,
+            },
+            {
+              agrouping: ["element"],
+              key: {
+                element: "Air",
+                nowners: null,
+              },
+              num: 3,
+            },
+          ]),
+          grouping: ["agrouping"],
+          key: {
+            agrouping: ["element"],
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 3,
+              },
+              num: 1,
+            },
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 4,
+              },
+              num: 2,
+            },
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 2,
+              },
+              num: 5,
+            },
+            {
+              agrouping: ["nowners"],
+              key: {
+                element: null,
+                nowners: 1,
+              },
+              num: 1,
+            },
+          ]),
+          grouping: ["agrouping"],
+          key: {
+            agrouping: ["nowners"],
+          },
+        },
+      ]),
     );
   });
 
@@ -2739,84 +2721,84 @@ describe("TestEdgeQLGroup", () => {
             }
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "key": {
-                    "cost": 1,
-                    "element": null,
-                  },
-                  "n": 3,
-                },
-                {
-                  "key": {
-                    "cost": 2,
-                    "element": null,
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": 3,
-                    "element": null,
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": 4,
-                    "element": null,
-                  },
-                  "n": 1,
-                },
-                {
-                  "key": {
-                    "cost": 5,
-                    "element": null,
-                  },
-                  "n": 1,
-                },
-              ]),
-              "key": {
-                "grouping": ["cost"],
+              key: {
+                cost: 1,
+                element: null,
               },
+              n: 3,
             },
             {
-              "elements": unorderedBag([
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Water",
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Earth",
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Fire",
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Air",
-                  },
-                  "n": 3,
-                },
-              ]),
-              "key": {
-                "grouping": ["element"],
+              key: {
+                cost: 2,
+                element: null,
               },
+              n: 2,
             },
-          ])
+            {
+              key: {
+                cost: 3,
+                element: null,
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: 4,
+                element: null,
+              },
+              n: 1,
+            },
+            {
+              key: {
+                cost: 5,
+                element: null,
+              },
+              n: 1,
+            },
+          ]),
+          key: {
+            grouping: ["cost"],
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              key: {
+                cost: null,
+                element: "Water",
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: null,
+                element: "Earth",
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: null,
+                element: "Fire",
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: null,
+                element: "Air",
+              },
+              n: 3,
+            },
+          ]),
+          key: {
+            grouping: ["element"],
+          },
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -2834,84 +2816,84 @@ describe("TestEdgeQLGroup", () => {
             }
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "key": {
-                    "cost": 1,
-                    "element": null,
-                  },
-                  "n": 3,
-                },
-                {
-                  "key": {
-                    "cost": 2,
-                    "element": null,
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": 3,
-                    "element": null,
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": 4,
-                    "element": null,
-                  },
-                  "n": 1,
-                },
-                {
-                  "key": {
-                    "cost": 5,
-                    "element": null,
-                  },
-                  "n": 1,
-                },
-              ]),
-              "key": {
-                "grouping": ["cost"],
+              key: {
+                cost: 1,
+                element: null,
               },
+              n: 3,
             },
             {
-              "elements": unorderedBag([
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Water",
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Earth",
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Fire",
-                  },
-                  "n": 2,
-                },
-                {
-                  "key": {
-                    "cost": null,
-                    "element": "Air",
-                  },
-                  "n": 3,
-                },
-              ]),
-              "key": {
-                "grouping": ["element"],
+              key: {
+                cost: 2,
+                element: null,
               },
+              n: 2,
             },
-          ])
+            {
+              key: {
+                cost: 3,
+                element: null,
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: 4,
+                element: null,
+              },
+              n: 1,
+            },
+            {
+              key: {
+                cost: 5,
+                element: null,
+              },
+              n: 1,
+            },
+          ]),
+          key: {
+            grouping: ["cost"],
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              key: {
+                cost: null,
+                element: "Water",
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: null,
+                element: "Earth",
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: null,
+                element: "Fire",
+              },
+              n: 2,
+            },
+            {
+              key: {
+                cost: null,
+                element: "Air",
+              },
+              n: 3,
+            },
+          ]),
+          key: {
+            grouping: ["element"],
+          },
+        },
+      ]),
     );
   });
 
@@ -2967,14 +2949,14 @@ describe("TestEdgeQLGroup", () => {
       h.script(
         `
                 group cards::Card{name} using id := .id by id
-            `
+            `,
       );
     }).toThrow(new RegExp("may not name a grouping alias 'id'"));
     expect(() => {
       h.script(
         `
                 group cards::Card{name} by .id
-            `
+            `,
       );
     }).toThrow(new RegExp("may not group by a field named id"));
   });
@@ -2984,7 +2966,7 @@ describe("TestEdgeQLGroup", () => {
       h.script(
         `
                 group User by name
-            `
+            `,
       );
     }).toThrow(new RegExp("variable 'name' referenced in BY but not declared in USING"));
   });
@@ -2996,7 +2978,7 @@ describe("TestEdgeQLGroup", () => {
                 create multi property tup -> tuple<int64, int64> ;
             };
             insert tup { tup := {(1, 1), (1, 2), (1, 1), (2, 1)} };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3005,32 +2987,28 @@ describe("TestEdgeQLGroup", () => {
                 group X using z := X by z;
             `,
       unorderedBag([
-            {
-              "elements": [
-                [1, 2],
-              ],
-              "key": {
-                "z": [1, 2],
-              },
-            },
-            {
-              "elements": [
-                [2, 1],
-              ],
-              "key": {
-                "z": [2, 1],
-              },
-            },
-            {
-              "elements": unorderedBag([
-                [1, 1],
-                [1, 1],
-              ]),
-              "key": {
-                "z": [1, 1],
-              },
-            },
-          ])
+        {
+          elements: [[1, 2]],
+          key: {
+            z: [1, 2],
+          },
+        },
+        {
+          elements: [[2, 1]],
+          key: {
+            z: [2, 1],
+          },
+        },
+        {
+          elements: unorderedBag([
+            [1, 1],
+            [1, 1],
+          ]),
+          key: {
+            z: [1, 1],
+          },
+        },
+      ]),
     );
   });
 
@@ -3042,32 +3020,28 @@ describe("TestEdgeQLGroup", () => {
                 group X using z := X by z;
             `,
       unorderedBag([
-            {
-              "elements": [
-                [1, 2],
-              ],
-              "key": {
-                "z": [1, 2],
-              },
-            },
-            {
-              "elements": [
-                [2, 1],
-              ],
-              "key": {
-                "z": [2, 1],
-              },
-            },
-            {
-              "elements": unorderedBag([
-                [1, 1],
-                [1, 1],
-              ]),
-              "key": {
-                "z": [1, 1],
-              },
-            },
-          ])
+        {
+          elements: [[1, 2]],
+          key: {
+            z: [1, 2],
+          },
+        },
+        {
+          elements: [[2, 1]],
+          key: {
+            z: [2, 1],
+          },
+        },
+        {
+          elements: unorderedBag([
+            [1, 1],
+            [1, 1],
+          ]),
+          key: {
+            z: [1, 1],
+          },
+        },
+      ]),
     );
   });
 
@@ -3082,43 +3056,43 @@ describe("TestEdgeQLGroup", () => {
                 ).elements by .cost;
             `,
       unorderedBag([
+        {
+          elements: [
             {
-              "elements": [
-                {
-                  "cost": 1,
-                  "name": "Sprite",
-                },
-              ],
-              "grouping": ["cost"],
-              "key": {
-                "cost": 1,
-              },
+              cost: 1,
+              name: "Sprite",
             },
+          ],
+          grouping: ["cost"],
+          key: {
+            cost: 1,
+          },
+        },
+        {
+          elements: [
             {
-              "elements": [
-                {
-                  "cost": 2,
-                  "name": "Giant eagle",
-                },
-              ],
-              "grouping": ["cost"],
-              "key": {
-                "cost": 2,
-              },
+              cost: 2,
+              name: "Giant eagle",
             },
+          ],
+          grouping: ["cost"],
+          key: {
+            cost: 2,
+          },
+        },
+        {
+          elements: [
             {
-              "elements": [
-                {
-                  "cost": 4,
-                  "name": "Djinn",
-                },
-              ],
-              "grouping": ["cost"],
-              "key": {
-                "cost": 4,
-              },
+              cost: 4,
+              name: "Djinn",
             },
-          ])
+          ],
+          grouping: ["cost"],
+          key: {
+            cost: 4,
+          },
+        },
+      ]),
     );
   });
 
@@ -3132,54 +3106,54 @@ describe("TestEdgeQLGroup", () => {
                 };
             `,
       unorderedBag([
+        {
+          el: "Water",
+          cs: [
             {
-              "el": "Water",
-              "cs": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
+              id: "str",
             },
             {
-              "el": "Fire",
-              "cs": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
+              id: "str",
+            },
+          ],
+        },
+        {
+          el: "Fire",
+          cs: [
+            {
+              id: "str",
             },
             {
-              "el": "Earth",
-              "cs": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
+              id: "str",
+            },
+          ],
+        },
+        {
+          el: "Earth",
+          cs: [
+            {
+              id: "str",
             },
             {
-              "el": "Air",
-              "cs": [
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-                {
-                  "id": "str",
-                },
-              ],
+              id: "str",
             },
-          ])
+          ],
+        },
+        {
+          el: "Air",
+          cs: [
+            {
+              id: "str",
+            },
+            {
+              id: "str",
+            },
+            {
+              id: "str",
+            },
+          ],
+        },
+      ]),
     );
   });
 
@@ -3193,54 +3167,54 @@ describe("TestEdgeQLGroup", () => {
                 };
             `,
       unorderedBag([
+        {
+          cs: unorderedBag([
             {
-              "cs": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
-              "el": "Water",
+              name: "Bog monster",
             },
             {
-              "cs": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-              ]),
-              "el": "Fire",
+              name: "Giant turtle",
+            },
+          ]),
+          el: "Water",
+        },
+        {
+          cs: unorderedBag([
+            {
+              name: "Imp",
             },
             {
-              "cs": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
-              "el": "Earth",
+              name: "Dragon",
+            },
+          ]),
+          el: "Fire",
+        },
+        {
+          cs: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "cs": unorderedBag([
-                {
-                  "name": "Sprite",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
-              "el": "Air",
+              name: "Golem",
             },
-          ])
+          ]),
+          el: "Earth",
+        },
+        {
+          cs: unorderedBag([
+            {
+              name: "Sprite",
+            },
+            {
+              name: "Giant eagle",
+            },
+            {
+              name: "Djinn",
+            },
+          ]),
+          el: "Air",
+        },
+      ]),
     );
   });
 
@@ -3254,11 +3228,11 @@ describe("TestEdgeQLGroup", () => {
                 );
             `,
       unorderedBag([
-            unorderedSet(["Bog monster!", "Bog monster?", "Giant turtle!", "Giant turtle?"]),
-            unorderedSet(["Dragon!", "Dragon?", "Imp!", "Imp?"]),
-            unorderedSet(["Dwarf!", "Dwarf?", "Golem!", "Golem?"]),
-            unorderedSet(["Djinn!", "Djinn?", "Giant eagle!", "Giant eagle?", "Sprite!", "Sprite?"]),
-          ])
+        unorderedSet(["Bog monster!", "Bog monster?", "Giant turtle!", "Giant turtle?"]),
+        unorderedSet(["Dragon!", "Dragon?", "Imp!", "Imp?"]),
+        unorderedSet(["Dwarf!", "Dwarf?", "Golem!", "Golem?"]),
+        unorderedSet(["Djinn!", "Djinn?", "Giant eagle!", "Giant eagle?", "Sprite!", "Sprite?"]),
+      ]),
     );
   });
 
@@ -3270,7 +3244,7 @@ describe("TestEdgeQLGroup", () => {
                 for g in (group Card BY .element) union (
                     count((Award { multi z := g.elements.name }.z))
                 );          `,
-      unorderedBag([6, 6, 6, 9])
+      unorderedBag([6, 6, 6, 9]),
     );
   });
 
@@ -3282,12 +3256,7 @@ describe("TestEdgeQLGroup", () => {
                     array_agg(g.elements.tags)
                 );
             `,
-      unorderedBag([
-            ["red"],
-            [],
-            unorderedBag(["red", "green"]),
-            unorderedBag(["red", "black"]),
-          ])
+      unorderedBag([["red"], [], unorderedBag(["red", "green"]), unorderedBag(["red", "black"])]),
     );
   });
 
@@ -3300,25 +3269,25 @@ describe("TestEdgeQLGroup", () => {
                 by awd_size, .element) { grouping };
             `,
       [
-            {
-              "grouping": ["awd_size", "element"],
-            },
-            {
-              "grouping": ["awd_size", "element"],
-            },
-            {
-              "grouping": ["awd_size", "element"],
-            },
-            {
-              "grouping": ["awd_size", "element"],
-            },
-            {
-              "grouping": ["awd_size", "element"],
-            },
-            {
-              "grouping": ["awd_size", "element"],
-            },
-          ]
+        {
+          grouping: ["awd_size", "element"],
+        },
+        {
+          grouping: ["awd_size", "element"],
+        },
+        {
+          grouping: ["awd_size", "element"],
+        },
+        {
+          grouping: ["awd_size", "element"],
+        },
+        {
+          grouping: ["awd_size", "element"],
+        },
+        {
+          grouping: ["awd_size", "element"],
+        },
+      ],
     );
   });
 
@@ -3329,21 +3298,21 @@ describe("TestEdgeQLGroup", () => {
             group 0 using x := 0 by cube(x)
             `,
       unorderedBag([
-            {
-              "elements": [0],
-              "grouping": [],
-              "key": {
-                "x": null,
-              },
-            },
-            {
-              "elements": [0],
-              "grouping": ["x"],
-              "key": {
-                "x": 0,
-              },
-            },
-          ])
+        {
+          elements: [0],
+          grouping: [],
+          key: {
+            x: null,
+          },
+        },
+        {
+          elements: [0],
+          grouping: ["x"],
+          key: {
+            x: 0,
+          },
+        },
+      ]),
     );
   });
 
@@ -3360,50 +3329,50 @@ describe("TestEdgeQLGroup", () => {
                 };
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
+              name: "Bog monster",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-              ]),
+              name: "Giant turtle",
+            },
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
+              name: "Dragon",
+            },
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Sprite",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
+              name: "Golem",
             },
-          ])
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Sprite",
+            },
+            {
+              name: "Giant eagle",
+            },
+            {
+              name: "Djinn",
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3415,19 +3384,19 @@ describe("TestEdgeQLGroup", () => {
             group X { a, b } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": 2,
-                },
-              ]),
+              a: 1,
+              b: 2,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3439,22 +3408,22 @@ describe("TestEdgeQLGroup", () => {
             group X { a, b, c: {*} } using d := .c.d by d;
             `,
       unorderedBag([
+        {
+          key: {
+            d: 5,
+          },
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "d": 5,
+              a: 1,
+              b: [2, 3, 4],
+              c: {
+                d: 5,
               },
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": [2, 3, 4],
-                  "c": {
-                    "d": 5,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3466,51 +3435,51 @@ describe("TestEdgeQLGroup", () => {
             group cards::User { name } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                },
-              ]),
+              name: "Alice",
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                },
-              ]),
+              name: "Bob",
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                },
-              ]),
+              name: "Carol",
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Dave",
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3522,18 +3491,18 @@ describe("TestEdgeQLGroup", () => {
             group { a := 1 } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                },
-              ]),
+              a: 1,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3547,27 +3516,27 @@ describe("TestEdgeQLGroup", () => {
             by z;
             `,
       unorderedBag([
+        {
+          key: {
+            z: true,
+          },
+          grouping: unorderedSet(["z"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "z": true,
-              },
-              "grouping": unorderedSet(["z"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Alice",
             },
-          ])
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3581,18 +3550,18 @@ describe("TestEdgeQLGroup", () => {
             by z;
             `,
       unorderedBag([
+        {
+          key: {
+            z: true,
+          },
+          grouping: unorderedSet(["z"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "z": true,
-              },
-              "grouping": unorderedSet(["z"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                },
-              ]),
+              a: 1,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3611,55 +3580,55 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "z": true,
-                },
-              ]),
+              name: "Alice",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "z": true,
-                },
-              ]),
+              name: "Bob",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "z": true,
-                },
-              ]),
+              name: "Carol",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "z": true,
-                },
-              ]),
+              name: "Dave",
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3680,19 +3649,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "z": true,
-                },
-              ]),
+              a: 1,
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3707,71 +3676,71 @@ describe("TestEdgeQLGroup", () => {
             group X { name, b } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": 8,
-                },
-                {
-                  "name": "Alice",
-                  "b": 9,
-                },
-              ]),
+              name: "Alice",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": 8,
-                },
-                {
-                  "name": "Bob",
-                  "b": 9,
-                },
-              ]),
+              name: "Alice",
+              b: 9,
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Bob",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": 8,
-                },
-                {
-                  "name": "Carol",
-                  "b": 9,
-                },
-              ]),
+              name: "Bob",
+              b: 9,
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Carol",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": 8,
-                },
-                {
-                  "name": "Dave",
-                  "b": 9,
-                },
-              ]),
+              name: "Carol",
+              b: 9,
             },
-          ])
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Dave",
+              b: 8,
+            },
+            {
+              name: "Dave",
+              b: 9,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3786,63 +3755,63 @@ describe("TestEdgeQLGroup", () => {
             group X { name } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Alice",
-                },
-              ]),
+              name: "Alice",
             },
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Bob",
-                },
-              ]),
+              name: "Alice",
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Bob",
             },
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Carol",
-                },
-              ]),
+              name: "Bob",
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Carol",
             },
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                },
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Carol",
             },
-          ])
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Dave",
+            },
+            {
+              name: "Dave",
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3857,71 +3826,71 @@ describe("TestEdgeQLGroup", () => {
             group (select X { name, b }) by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": 8,
-                },
-                {
-                  "name": "Alice",
-                  "b": 9,
-                },
-              ]),
+              name: "Alice",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": 8,
-                },
-                {
-                  "name": "Bob",
-                  "b": 9,
-                },
-              ]),
+              name: "Alice",
+              b: 9,
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Bob",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": 8,
-                },
-                {
-                  "name": "Carol",
-                  "b": 9,
-                },
-              ]),
+              name: "Bob",
+              b: 9,
+            },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Carol",
+              b: 8,
             },
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": 8,
-                },
-                {
-                  "name": "Dave",
-                  "b": 9,
-                },
-              ]),
+              name: "Carol",
+              b: 9,
             },
-          ])
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
+            {
+              name: "Dave",
+              b: 8,
+            },
+            {
+              name: "Dave",
+              b: 9,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3936,47 +3905,47 @@ describe("TestEdgeQLGroup", () => {
             group X { name } by .b;
             `,
       unorderedBag([
+        {
+          key: {
+            b: 8,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "b": 8,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Alice",
             },
             {
-              "key": {
-                "b": 9,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Bob",
             },
-          ])
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ]),
+        },
+        {
+          key: {
+            b: 9,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
+            {
+              name: "Alice",
+            },
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -3991,55 +3960,55 @@ describe("TestEdgeQLGroup", () => {
             group X { name, b } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Alice",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Bob",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Carol",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Dave",
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4056,31 +4025,31 @@ describe("TestEdgeQLGroup", () => {
             by total;
             `,
       unorderedBag([
+        {
+          key: {
+            total: 17,
+          },
+          grouping: unorderedSet(["total"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "total": 17,
-              },
-              "grouping": unorderedSet(["total"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Bob",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Carol",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Dave",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Alice",
+              b: unorderedSet([8, 9]),
             },
-          ])
+            {
+              name: "Bob",
+              b: unorderedSet([8, 9]),
+            },
+            {
+              name: "Carol",
+              b: unorderedSet([8, 9]),
+            },
+            {
+              name: "Dave",
+              b: unorderedSet([8, 9]),
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4094,55 +4063,55 @@ describe("TestEdgeQLGroup", () => {
             group X { name, b } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Alice",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Bob",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Carol",
+              b: unorderedSet([8, 9]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Dave",
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4158,31 +4127,31 @@ describe("TestEdgeQLGroup", () => {
             by total;
             `,
       unorderedBag([
+        {
+          key: {
+            total: 17,
+          },
+          grouping: unorderedSet(["total"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "total": 17,
-              },
-              "grouping": unorderedSet(["total"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Bob",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Carol",
-                  "b": unorderedSet([8, 9]),
-                },
-                {
-                  "name": "Dave",
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              name: "Alice",
+              b: unorderedSet([8, 9]),
             },
-          ])
+            {
+              name: "Bob",
+              b: unorderedSet([8, 9]),
+            },
+            {
+              name: "Carol",
+              b: unorderedSet([8, 9]),
+            },
+            {
+              name: "Dave",
+              b: unorderedSet([8, 9]),
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4197,67 +4166,67 @@ describe("TestEdgeQLGroup", () => {
             group X { name, b: { c, d } } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4272,63 +4241,63 @@ describe("TestEdgeQLGroup", () => {
             group X { name, b: { c } } by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 3,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 3,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 3,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 3,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 3,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 3,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 3,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 3,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4343,67 +4312,67 @@ describe("TestEdgeQLGroup", () => {
             group (select X { name, b: { c, d } }) by .name;
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4420,43 +4389,43 @@ describe("TestEdgeQLGroup", () => {
             by d;
             `,
       unorderedBag([
+        {
+          key: {
+            d: 9,
+          },
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "d": 9,
+              name: "Alice",
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+            {
+              name: "Bob",
+              b: {
+                c: 3,
+                d: 9,
+              },
+            },
+            {
+              name: "Carol",
+              b: {
+                c: 3,
+                d: 9,
+              },
+            },
+            {
+              name: "Dave",
+              b: {
+                c: 3,
+                d: 9,
+              },
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4471,23 +4440,23 @@ describe("TestEdgeQLGroup", () => {
             group X { a, b } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": 8,
-                },
-                {
-                  "a": 1,
-                  "b": 9,
-                },
-              ]),
+              a: 1,
+              b: 8,
             },
-          ])
+            {
+              a: 1,
+              b: 9,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4502,21 +4471,21 @@ describe("TestEdgeQLGroup", () => {
             group X { a } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                },
-                {
-                  "a": 1,
-                },
-              ]),
+              a: 1,
             },
-          ])
+            {
+              a: 1,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4531,23 +4500,23 @@ describe("TestEdgeQLGroup", () => {
             group (select X { a, b }) by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": 8,
-                },
-                {
-                  "a": 1,
-                  "b": 9,
-                },
-              ]),
+              a: 1,
+              b: 8,
             },
-          ])
+            {
+              a: 1,
+              b: 9,
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4562,29 +4531,29 @@ describe("TestEdgeQLGroup", () => {
             group X { a } by .b;
             `,
       unorderedBag([
+        {
+          key: {
+            b: 8,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "b": 8,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                },
-              ]),
+              a: 1,
             },
+          ]),
+        },
+        {
+          key: {
+            b: 9,
+          },
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "b": 9,
-              },
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                },
-              ]),
+              a: 1,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4599,19 +4568,19 @@ describe("TestEdgeQLGroup", () => {
             group X { a, b } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              a: 1,
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4628,19 +4597,19 @@ describe("TestEdgeQLGroup", () => {
             by total;
             `,
       unorderedBag([
+        {
+          key: {
+            total: 17,
+          },
+          grouping: unorderedSet(["total"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "total": 17,
-              },
-              "grouping": unorderedSet(["total"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              a: 1,
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4654,19 +4623,19 @@ describe("TestEdgeQLGroup", () => {
             group X { a, b } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              a: 1,
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4682,19 +4651,19 @@ describe("TestEdgeQLGroup", () => {
             by total;
             `,
       unorderedBag([
+        {
+          key: {
+            total: 17,
+          },
+          grouping: unorderedSet(["total"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "total": 17,
-              },
-              "grouping": unorderedSet(["total"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": unorderedSet([8, 9]),
-                },
-              ]),
+              a: 1,
+              b: unorderedSet([8, 9]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4709,22 +4678,22 @@ describe("TestEdgeQLGroup", () => {
             group X { a, b: { c, d } } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4739,21 +4708,21 @@ describe("TestEdgeQLGroup", () => {
             group X { a, b: { c } } by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 3,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 3,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4768,22 +4737,22 @@ describe("TestEdgeQLGroup", () => {
             group (select X { a, b: { c, d } }) by .a;
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 3,
+                d: 9,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 3,
-                    "d": 9,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4800,21 +4769,21 @@ describe("TestEdgeQLGroup", () => {
             by d;
             `,
       unorderedBag([
+        {
+          key: {
+            d: 9,
+          },
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "d": 9,
+              a: 1,
+              b: {
+                c: 3,
               },
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 3,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4832,55 +4801,55 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "z": true,
-                },
-              ]),
+              name: "Alice",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "z": true,
-                },
-              ]),
+              name: "Bob",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "z": true,
-                },
-              ]),
+              name: "Carol",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "z": true,
-                },
-              ]),
+              name: "Dave",
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4898,51 +4867,51 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                },
-              ]),
+              name: "Alice",
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                },
-              ]),
+              name: "Bob",
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                },
-              ]),
+              name: "Carol",
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Dave",
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4960,55 +4929,55 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "z": true,
-                },
-              ]),
+              name: "Alice",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "z": true,
-                },
-              ]),
+              name: "Bob",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "z": true,
-                },
-              ]),
+              name: "Carol",
+              z: true,
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
-              },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "z": true,
-                },
-              ]),
+              name: "Dave",
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5027,26 +4996,26 @@ describe("TestEdgeQLGroup", () => {
             `,
       unorderedBag([
         {
-          "name": "Alice",
-          "grouping": unorderedSet(["b"]),
-          "elements": unorderedBag([{ "name": "Alice", "z": true }]),
+          name: "Alice",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([{ name: "Alice", z: true }]),
         },
         {
-          "name": "Bob",
-          "grouping": unorderedSet(["b"]),
-          "elements": unorderedBag([{ "name": "Bob", "z": true }]),
+          name: "Bob",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([{ name: "Bob", z: true }]),
         },
         {
-          "name": "Carol",
-          "grouping": unorderedSet(["b"]),
-          "elements": unorderedBag([{ "name": "Carol", "z": true }]),
+          name: "Carol",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([{ name: "Carol", z: true }]),
         },
         {
-          "name": "Dave",
-          "grouping": unorderedSet(["b"]),
-          "elements": unorderedBag([{ "name": "Dave", "z": true }]),
+          name: "Dave",
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([{ name: "Dave", z: true }]),
         },
-      ])
+      ]),
     );
   });
 
@@ -5073,67 +5042,67 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5157,63 +5126,63 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 2,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 2,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 2,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 2,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5240,67 +5209,67 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            name: "Alice",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Alice",
+              name: "Alice",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Bob",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Bob",
+              name: "Bob",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Carol",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Carol",
+              name: "Carol",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
+          ]),
+        },
+        {
+          key: {
+            name: "Dave",
+          },
+          grouping: unorderedSet(["name"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "name": "Dave",
+              name: "Dave",
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["name"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5330,37 +5299,37 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          name: "Alice",
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "name": "Alice",
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "name": "Alice",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-                {
-                  "name": "Bob",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-                {
-                  "name": "Carol",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-                {
-                  "name": "Dave",
-                  "b": {
-                    "c": 2,
-                  },
-                },
-              ]),
+              name: "Alice",
+              b: {
+                c: 2,
+              },
             },
-          ])
+            {
+              name: "Bob",
+              b: {
+                c: 2,
+              },
+            },
+            {
+              name: "Carol",
+              b: {
+                c: 2,
+              },
+            },
+            {
+              name: "Dave",
+              b: {
+                c: 2,
+              },
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5378,19 +5347,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "z": true,
-                },
-              ]),
+              a: 1,
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5408,18 +5377,18 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                },
-              ]),
+              a: 1,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5437,19 +5406,19 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
-              },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "z": true,
-                },
-              ]),
+              a: 1,
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5467,16 +5436,16 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          grouping: unorderedSet(["b"]),
+          elements: unorderedBag([
             {
-              "grouping": unorderedSet(["b"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "z": true,
-                },
-              ]),
+              a: 1,
+              z: true,
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5503,22 +5472,22 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5542,21 +5511,21 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 2,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 2,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5583,22 +5552,22 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          key: {
+            a: 1,
+          },
+          grouping: unorderedSet(["a"]),
+          elements: unorderedBag([
             {
-              "key": {
-                "a": 1,
+              a: 1,
+              b: {
+                c: 2,
+                z: true,
               },
-              "grouping": unorderedSet(["a"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 2,
-                    "z": true,
-                  },
-                },
-              ]),
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5624,18 +5593,18 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       unorderedBag([
+        {
+          grouping: unorderedSet(["d"]),
+          elements: unorderedBag([
             {
-              "grouping": unorderedSet(["d"]),
-              "elements": unorderedBag([
-                {
-                  "a": 1,
-                  "b": {
-                    "c": 2,
-                  },
-                },
-              ]),
+              a: 1,
+              b: {
+                c: 2,
+              },
             },
-          ])
+          ]),
+        },
+      ]),
     );
   });
 
@@ -5650,50 +5619,50 @@ describe("TestEdgeQLGroup", () => {
                 order by .key.element;
             `,
       [
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Sprite",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
+              name: "Sprite",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
+              name: "Giant eagle",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-              ]),
+              name: "Djinn",
+            },
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
+              name: "Golem",
             },
-          ]
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
+            },
+            {
+              name: "Dragon",
+            },
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Bog monster",
+            },
+            {
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5706,50 +5675,50 @@ describe("TestEdgeQLGroup", () => {
                 order by .key.element;
             `,
       [
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Sprite",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
+              name: "Sprite",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
+              name: "Giant eagle",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-              ]),
+              name: "Djinn",
+            },
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
+              name: "Golem",
             },
-          ]
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
+            },
+            {
+              name: "Dragon",
+            },
+          ]),
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Bog monster",
+            },
+            {
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -5766,74 +5735,74 @@ describe("TestEdgeQLGroup", () => {
                 BY l;
             `,
       unorderedBag([
+        {
+          elements: unorderedBag([
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant eagle",
-                },
-              ]),
-              "grouping": ["l"],
-              "key": {
-                "l": 11,
-              },
+              name: "Bog monster",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-              ]),
-              "grouping": ["l"],
-              "key": {
-                "l": 3,
-              },
+              name: "Giant eagle",
+            },
+          ]),
+          grouping: ["l"],
+          key: {
+            l: 11,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Imp",
+            },
+          ]),
+          grouping: ["l"],
+          key: {
+            l: 3,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dwarf",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
-              "grouping": ["l"],
-              "key": {
-                "l": 5,
-              },
+              name: "Golem",
             },
             {
-              "elements": unorderedBag([
-                {
-                  "name": "Dragon",
-                },
-                {
-                  "name": "Sprite",
-                },
-              ]),
-              "grouping": ["l"],
-              "key": {
-                "l": 6,
-              },
+              name: "Djinn",
+            },
+          ]),
+          grouping: ["l"],
+          key: {
+            l: 5,
+          },
+        },
+        {
+          elements: unorderedBag([
+            {
+              name: "Dragon",
             },
             {
-              "elements": [
-                {
-                  "name": "Giant turtle",
-                },
-              ],
-              "grouping": ["l"],
-              "key": {
-                "l": 12,
-              },
+              name: "Sprite",
             },
-          ])
+          ]),
+          grouping: ["l"],
+          key: {
+            l: 6,
+          },
+        },
+        {
+          elements: [
+            {
+              name: "Giant turtle",
+            },
+          ],
+          grouping: ["l"],
+          key: {
+            l: 12,
+          },
+        },
+      ]),
     );
   });
 
@@ -5846,7 +5815,7 @@ describe("TestEdgeQLGroup", () => {
                 create access policy two_elements allow insert, update write
                   using (count((group .deck by .element)) = 2);
             }
-        `
+        `,
     );
     expect(() => {
       h.query(
@@ -5856,7 +5825,7 @@ describe("TestEdgeQLGroup", () => {
                     name := 'Sully',
                     deck := (select Card filter .element = 'Water')
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("access policy violation on insert"));
     h.query(
@@ -5866,7 +5835,7 @@ describe("TestEdgeQLGroup", () => {
                 name := 'Sully',
                 deck := (select Card filter .element IN {'Water', 'Air'})
             };
-        `
+        `,
     );
     expect(() => {
       h.query(
@@ -5875,7 +5844,7 @@ describe("TestEdgeQLGroup", () => {
                 update User filter .name = 'Sully' set {
                     deck += (select Card filter .element = 'Earth')
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("access policy violation on update"));
     expect(() => {
@@ -5885,7 +5854,7 @@ describe("TestEdgeQLGroup", () => {
                 update User filter .name = 'Sully' set {
                     deck -= (select Card filter .element = 'Water')
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("access policy violation on update"));
   });
@@ -5917,17 +5886,13 @@ describe("TestEdgeQLGroup", () => {
                     )
                 };
                 insert T { vals := {1,1,2,3} };
-            `
+            `,
     );
-    assertQueryResult(
-      h,
-      `select T { vals }`,
-      [
-            {
-              "vals": unorderedBag([1, 1, 2, 3]),
-            },
-          ]
-    );
+    assertQueryResult(h, `select T { vals }`, [
+      {
+        vals: unorderedBag([1, 1, 2, 3]),
+      },
+    ]);
   });
 
   it("test_edgeql_group_rebind_filter_01", () => {
@@ -5943,25 +5908,25 @@ describe("TestEdgeQLGroup", () => {
                 } filter .count > 1;
             `,
       unorderedBag([
-            {
-              "count": 3,
-              "key": {
-                "cost": 1,
-              },
-            },
-            {
-              "count": 2,
-              "key": {
-                "cost": 2,
-              },
-            },
-            {
-              "count": 2,
-              "key": {
-                "cost": 3,
-              },
-            },
-          ])
+        {
+          count: 3,
+          key: {
+            cost: 1,
+          },
+        },
+        {
+          count: 2,
+          key: {
+            cost: 2,
+          },
+        },
+        {
+          count: 2,
+          key: {
+            cost: 3,
+          },
+        },
+      ]),
     );
   });
 
@@ -5978,25 +5943,25 @@ describe("TestEdgeQLGroup", () => {
                 } filter .count > 1 order by .key.cost
             `,
       [
-            {
-              "count": 3,
-              "key": {
-                "cost": 1,
-              },
-            },
-            {
-              "count": 2,
-              "key": {
-                "cost": 2,
-              },
-            },
-            {
-              "count": 2,
-              "key": {
-                "cost": 3,
-              },
-            },
-          ]
+        {
+          count: 3,
+          key: {
+            cost: 1,
+          },
+        },
+        {
+          count: 2,
+          key: {
+            cost: 2,
+          },
+        },
+        {
+          count: 2,
+          key: {
+            cost: 3,
+          },
+        },
+      ],
     );
   });
 
@@ -6013,25 +5978,25 @@ describe("TestEdgeQLGroup", () => {
                 } filter .count > 1;
             `,
       unorderedBag([
-            {
-              "count": 3,
-              "key": {
-                "cost": 1,
-              },
-            },
-            {
-              "count": 2,
-              "key": {
-                "cost": 2,
-              },
-            },
-            {
-              "count": 2,
-              "key": {
-                "cost": 3,
-              },
-            },
-          ])
+        {
+          count: 3,
+          key: {
+            cost: 1,
+          },
+        },
+        {
+          count: 2,
+          key: {
+            cost: 2,
+          },
+        },
+        {
+          count: 2,
+          key: {
+            cost: 3,
+          },
+        },
+      ]),
     );
   });
 
@@ -6072,16 +6037,16 @@ describe("TestEdgeQLGroup", () => {
             };
           `,
       unorderedBag([
-            {
-              "sum": -7,
-            },
-            {
-              "sum": 5,
-            },
-            {
-              "sum": -23,
-            },
-          ])
+        {
+          sum: -7,
+        },
+        {
+          sum: 5,
+        },
+        {
+          sum: -23,
+        },
+      ]),
     );
   });
 
@@ -6094,27 +6059,27 @@ describe("TestEdgeQLGroup", () => {
                 by groupIndex;
             `,
       unorderedBag([
-            {
-              "elements": unorderedBag([
-                [0, "a"],
-                [1, "b"],
-              ]),
-              "grouping": ["groupIndex"],
-              "key": {
-                "groupIndex": 0,
-              },
-            },
-            {
-              "elements": unorderedBag([
-                [2, "c"],
-                [3, "d"],
-              ]),
-              "grouping": ["groupIndex"],
-              "key": {
-                "groupIndex": 1,
-              },
-            },
-          ])
+        {
+          elements: unorderedBag([
+            [0, "a"],
+            [1, "b"],
+          ]),
+          grouping: ["groupIndex"],
+          key: {
+            groupIndex: 0,
+          },
+        },
+        {
+          elements: unorderedBag([
+            [2, "c"],
+            [3, "d"],
+          ]),
+          grouping: ["groupIndex"],
+          key: {
+            groupIndex: 1,
+          },
+        },
+      ]),
     );
   });
 
@@ -6127,27 +6092,27 @@ describe("TestEdgeQLGroup", () => {
                 by groupIndex;
             `,
       unorderedBag([
-            {
-              "elements": unorderedBag([
-                [0, "a"],
-                [1, "b"],
-              ]),
-              "grouping": ["groupIndex"],
-              "key": {
-                "groupIndex": 0,
-              },
-            },
-            {
-              "elements": unorderedBag([
-                [2, "c"],
-                [3, "d"],
-              ]),
-              "grouping": ["groupIndex"],
-              "key": {
-                "groupIndex": 1,
-              },
-            },
-          ])
+        {
+          elements: unorderedBag([
+            [0, "a"],
+            [1, "b"],
+          ]),
+          grouping: ["groupIndex"],
+          key: {
+            groupIndex: 0,
+          },
+        },
+        {
+          elements: unorderedBag([
+            [2, "c"],
+            [3, "d"],
+          ]),
+          grouping: ["groupIndex"],
+          key: {
+            groupIndex: 1,
+          },
+        },
+      ]),
     );
   });
 
@@ -6163,7 +6128,7 @@ describe("TestEdgeQLGroup", () => {
                 multi owners := g.elements.owners { name },
               }
             };
-            `
+            `,
     );
   });
 
@@ -6176,13 +6141,13 @@ describe("TestEdgeQLGroup", () => {
             };
             `,
       [
-            {
-              "a": {},
-            },
-            {
-              "a": {},
-            },
-          ]
+        {
+          a: {},
+        },
+        {
+          a: {},
+        },
+      ],
     );
   });
 
@@ -6200,37 +6165,37 @@ describe("TestEdgeQLGroup", () => {
             filter .name = 'Alice';
             `,
       [
+        {
+          cards_by_count: [
             {
-              "cards_by_count": [
+              key: {
+                count: 2,
+              },
+              elements: [
                 {
-                  "key": {
-                    "count": 2,
-                  },
-                  "elements": [
-                    {
-                      "name": "Imp",
-                    },
-                    {
-                      "name": "Dragon",
-                    },
-                  ],
+                  name: "Imp",
                 },
                 {
-                  "key": {
-                    "count": 3,
-                  },
-                  "elements": [
-                    {
-                      "name": "Bog monster",
-                    },
-                    {
-                      "name": "Giant turtle",
-                    },
-                  ],
+                  name: "Dragon",
                 },
               ],
             },
-          ]
+            {
+              key: {
+                count: 3,
+              },
+              elements: [
+                {
+                  name: "Bog monster",
+                },
+                {
+                  name: "Giant turtle",
+                },
+              ],
+            },
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6245,37 +6210,37 @@ describe("TestEdgeQLGroup", () => {
             filter .name = 'Alice';
             `,
       [
+        {
+          cards_by_count: [
             {
-              "cards_by_count": [
+              key: {
+                count: 2,
+              },
+              elements: [
                 {
-                  "key": {
-                    "count": 2,
-                  },
-                  "elements": [
-                    {
-                      "name": "Imp",
-                    },
-                    {
-                      "name": "Dragon",
-                    },
-                  ],
+                  name: "Imp",
                 },
                 {
-                  "key": {
-                    "count": 3,
-                  },
-                  "elements": [
-                    {
-                      "name": "Bog monster",
-                    },
-                    {
-                      "name": "Giant turtle",
-                    },
-                  ],
+                  name: "Dragon",
                 },
               ],
             },
-          ]
+            {
+              key: {
+                count: 3,
+              },
+              elements: [
+                {
+                  name: "Bog monster",
+                },
+                {
+                  name: "Giant turtle",
+                },
+              ],
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -6287,177 +6252,177 @@ describe("TestEdgeQLGroup", () => {
             select User { cards := (group .deck { name } by .element) };
             `,
       unorderedBag([
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
+              key: {
+                element: "Water",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
                 {
-                  "key": {
-                    "element": "Water",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Bog monster",
-                    },
-                    {
-                      "name": "Giant turtle",
-                    },
-                  ]),
+                  name: "Bog monster",
                 },
                 {
-                  "key": {
-                    "element": "Fire",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Imp",
-                    },
-                    {
-                      "name": "Dragon",
-                    },
-                  ]),
+                  name: "Giant turtle",
                 },
               ]),
             },
             {
-              "cards": unorderedBag([
+              key: {
+                element: "Fire",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
                 {
-                  "key": {
-                    "element": "Earth",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Dwarf",
-                    },
-                    {
-                      "name": "Golem",
-                    },
-                  ]),
+                  name: "Imp",
                 },
                 {
-                  "key": {
-                    "element": "Water",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Bog monster",
-                    },
-                    {
-                      "name": "Giant turtle",
-                    },
-                  ]),
+                  name: "Dragon",
+                },
+              ]),
+            },
+          ]),
+        },
+        {
+          cards: unorderedBag([
+            {
+              key: {
+                element: "Earth",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
+                {
+                  name: "Dwarf",
+                },
+                {
+                  name: "Golem",
                 },
               ]),
             },
             {
-              "cards": unorderedBag([
+              key: {
+                element: "Water",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
                 {
-                  "key": {
-                    "element": "Earth",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Dwarf",
-                    },
-                    {
-                      "name": "Golem",
-                    },
-                  ]),
+                  name: "Bog monster",
                 },
                 {
-                  "key": {
-                    "element": "Water",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Bog monster",
-                    },
-                    {
-                      "name": "Giant turtle",
-                    },
-                  ]),
+                  name: "Giant turtle",
+                },
+              ]),
+            },
+          ]),
+        },
+        {
+          cards: unorderedBag([
+            {
+              key: {
+                element: "Earth",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
+                {
+                  name: "Dwarf",
                 },
                 {
-                  "key": {
-                    "element": "Air",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Sprite",
-                    },
-                    {
-                      "name": "Giant eagle",
-                    },
-                    {
-                      "name": "Djinn",
-                    },
-                  ]),
+                  name: "Golem",
                 },
               ]),
             },
             {
-              "cards": unorderedBag([
+              key: {
+                element: "Water",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
                 {
-                  "key": {
-                    "element": "Earth",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Golem",
-                    },
-                  ]),
+                  name: "Bog monster",
                 },
                 {
-                  "key": {
-                    "element": "Water",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Bog monster",
-                    },
-                    {
-                      "name": "Giant turtle",
-                    },
-                  ]),
-                },
-                {
-                  "key": {
-                    "element": "Fire",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Dragon",
-                    },
-                  ]),
-                },
-                {
-                  "key": {
-                    "element": "Air",
-                  },
-                  "grouping": ["element"],
-                  "elements": unorderedBag([
-                    {
-                      "name": "Sprite",
-                    },
-                    {
-                      "name": "Giant eagle",
-                    },
-                    {
-                      "name": "Djinn",
-                    },
-                  ]),
+                  name: "Giant turtle",
                 },
               ]),
             },
-          ])
+            {
+              key: {
+                element: "Air",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
+                {
+                  name: "Sprite",
+                },
+                {
+                  name: "Giant eagle",
+                },
+                {
+                  name: "Djinn",
+                },
+              ]),
+            },
+          ]),
+        },
+        {
+          cards: unorderedBag([
+            {
+              key: {
+                element: "Earth",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
+                {
+                  name: "Golem",
+                },
+              ]),
+            },
+            {
+              key: {
+                element: "Water",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
+                {
+                  name: "Bog monster",
+                },
+                {
+                  name: "Giant turtle",
+                },
+              ]),
+            },
+            {
+              key: {
+                element: "Fire",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
+                {
+                  name: "Dragon",
+                },
+              ]),
+            },
+            {
+              key: {
+                element: "Air",
+              },
+              grouping: ["element"],
+              elements: unorderedBag([
+                {
+                  name: "Sprite",
+                },
+                {
+                  name: "Giant eagle",
+                },
+                {
+                  name: "Djinn",
+                },
+              ]),
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -6468,7 +6433,7 @@ describe("TestEdgeQLGroup", () => {
             WITH MODULE cards
             select (group Card by .element).key.element
             `,
-      unorderedSet(["Air", "Earth", "Fire", "Water"])
+      unorderedSet(["Air", "Earth", "Fire", "Water"]),
     );
   });
 
@@ -6479,7 +6444,7 @@ describe("TestEdgeQLGroup", () => {
             WITH MODULE cards
             select (group Card by .element).grouping
             `,
-      ["element", "element", "element", "element"]
+      ["element", "element", "element", "element"],
     );
   });
 
@@ -6499,19 +6464,19 @@ describe("TestEdgeQLGroup", () => {
             limit 5;
             `,
       unorderedBag([
-            {
-              "name": "Alice",
-            },
-            {
-              "name": "Bob",
-            },
-            {
-              "name": "Carol",
-            },
-            {
-              "name": "Dave",
-            },
-          ])
+        {
+          name: "Alice",
+        },
+        {
+          name: "Bob",
+        },
+        {
+          name: "Carol",
+        },
+        {
+          name: "Dave",
+        },
+      ]),
     );
   });
 
@@ -6532,19 +6497,19 @@ describe("TestEdgeQLGroup", () => {
             limit 100;
             `,
       [
-            {
-              "keyCard": {},
-            },
-            {
-              "keyCard": {},
-            },
-            {
-              "keyCard": {},
-            },
-            {
-              "keyCard": {},
-            },
-          ]
+        {
+          keyCard: {},
+        },
+        {
+          keyCard: {},
+        },
+        {
+          keyCard: {},
+        },
+        {
+          keyCard: {},
+        },
+      ],
     );
   });
 
@@ -6566,19 +6531,19 @@ describe("TestEdgeQLGroup", () => {
             order by .minCost;
             `,
       [
-            {
-              "minCost": 1,
-            },
-            {
-              "minCost": 1,
-            },
-            {
-              "minCost": 1,
-            },
-            {
-              "minCost": 2,
-            },
-          ]
+        {
+          minCost: 1,
+        },
+        {
+          minCost: 1,
+        },
+        {
+          minCost: 1,
+        },
+        {
+          minCost: 2,
+        },
+      ],
     );
   });
 
@@ -6593,9 +6558,7 @@ describe("TestEdgeQLGroup", () => {
               by .iowner
             ) { }.elements;
             `,
-      [
-            {},
-          ]
+      [{}],
     );
   });
 
@@ -6608,7 +6571,7 @@ describe("TestEdgeQLGroup", () => {
                     select Issue
                   ) by .owner
                 ) by .key
-            `
+            `,
       );
     }).toThrow();
   });
@@ -6623,16 +6586,11 @@ describe("TestEdgeQLGroup", () => {
               flattened := (select g1 {element:=(.key.element)}),
             group flattened by .element
             `,
-      [
-            {},
-            {},
-            {},
-            {},
-          ]
+      [{}, {}, {}, {}],
     );
   });
 
-  it("test_edgeql_group_issue_5828 [xerror: Issue #5828 Only fails with implicit_limit and typename injection. \"there is no range var...\"]", () => {
+  it('test_edgeql_group_issue_5828 [xerror: Issue #5828 Only fails with implicit_limit and typename injection. "there is no range var..."]', () => {
     assertQueryResult(
       h,
       `
@@ -6643,27 +6601,19 @@ describe("TestEdgeQLGroup", () => {
             by .name;
             `,
       [
-            {
-              "elements": [
-                {},
-              ],
-            },
-            {
-              "elements": [
-                {},
-              ],
-            },
-            {
-              "elements": [
-                {},
-              ],
-            },
-            {
-              "elements": [
-                {},
-              ],
-            },
-          ]
+        {
+          elements: [{}],
+        },
+        {
+          elements: [{}],
+        },
+        {
+          elements: [{}],
+        },
+        {
+          elements: [{}],
+        },
+      ],
     );
   });
 
@@ -6677,10 +6627,7 @@ describe("TestEdgeQLGroup", () => {
               xxx := .elements.name,
             };
             `,
-      [
-            {},
-            {},
-          ]
+      [{}, {}],
     );
   });
 
@@ -6693,37 +6640,37 @@ describe("TestEdgeQLGroup", () => {
             by owner;
             `,
       unorderedBag([
+        {
+          key: {
+            owner: {
+              id: "str",
+            },
+          },
+          elements: [
             {
-              "key": {
-                "owner": {
-                  "id": "str",
-                },
-              },
-              "elements": [
-                {
-                  "name": "Release EdgeDB",
-                },
-                {
-                  "name": "Regression.",
-                },
-              ],
+              name: "Release EdgeDB",
             },
             {
-              "key": {
-                "owner": {
-                  "id": "str",
-                },
-              },
-              "elements": [
-                {
-                  "name": "Improve EdgeDB repl output rendering.",
-                },
-                {
-                  "name": "Repl tweak.",
-                },
-              ],
+              name: "Regression.",
             },
-          ])
+          ],
+        },
+        {
+          key: {
+            owner: {
+              id: "str",
+            },
+          },
+          elements: [
+            {
+              name: "Improve EdgeDB repl output rendering.",
+            },
+            {
+              name: "Repl tweak.",
+            },
+          ],
+        },
+      ]),
     );
   });
 });

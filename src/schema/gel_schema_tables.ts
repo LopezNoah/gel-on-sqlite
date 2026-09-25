@@ -34,7 +34,7 @@ export const GEL_SCHEMA_DDL = [
   // Relationship tables
 
   // Inheritance: direct base relationships (ordered)
-   `CREATE TABLE IF NOT EXISTS gel_bases (
+  `CREATE TABLE IF NOT EXISTS gel_bases (
      subject_id TEXT NOT NULL,
      object_id  TEXT NOT NULL,
     idx        INTEGER NOT NULL,
@@ -42,7 +42,7 @@ export const GEL_SCHEMA_DDL = [
   )`,
 
   // Full ancestor chain (transitive closure, ordered)
-   `CREATE TABLE IF NOT EXISTS gel_ancestors (
+  `CREATE TABLE IF NOT EXISTS gel_ancestors (
      subject_id TEXT NOT NULL,
      object_id  TEXT NOT NULL,
     idx        INTEGER NOT NULL,
@@ -50,7 +50,7 @@ export const GEL_SCHEMA_DDL = [
   )`,
 
   // Annotations (subject → annotation with value)
-   `CREATE TABLE IF NOT EXISTS gel_annotations (
+  `CREATE TABLE IF NOT EXISTS gel_annotations (
      subject_id    TEXT NOT NULL,
      annotation_id TEXT NOT NULL,
     value         TEXT,
@@ -58,42 +58,42 @@ export const GEL_SCHEMA_DDL = [
   )`,
 
   // Ownership: which pointers belong to which types
-   `CREATE TABLE IF NOT EXISTS gel_pointers (
+  `CREATE TABLE IF NOT EXISTS gel_pointers (
      source_id  TEXT NOT NULL,
      pointer_id TEXT NOT NULL,
     PRIMARY KEY (source_id, pointer_id)
   )`,
 
   // Pointer source and target (for Link and Property)
-   `CREATE TABLE IF NOT EXISTS gel_pointer_endpoints (
+  `CREATE TABLE IF NOT EXISTS gel_pointer_endpoints (
      pointer_id TEXT PRIMARY KEY,
      source_id  TEXT NOT NULL,
      target_id  TEXT NOT NULL
   )`,
 
   // Constraints on a subject
-   `CREATE TABLE IF NOT EXISTS gel_subject_constraints (
+  `CREATE TABLE IF NOT EXISTS gel_subject_constraints (
      subject_id    TEXT NOT NULL,
      constraint_id TEXT NOT NULL,
     PRIMARY KEY (subject_id, constraint_id)
   )`,
 
   // Indexes on a subject
-   `CREATE TABLE IF NOT EXISTS gel_subject_indexes (
+  `CREATE TABLE IF NOT EXISTS gel_subject_indexes (
      subject_id TEXT NOT NULL,
      index_id   TEXT NOT NULL,
     PRIMARY KEY (subject_id, index_id)
   )`,
 
   // Link properties (which properties belong to which links)
-   `CREATE TABLE IF NOT EXISTS gel_link_properties (
+  `CREATE TABLE IF NOT EXISTS gel_link_properties (
      link_id     TEXT NOT NULL,
      property_id TEXT NOT NULL,
     PRIMARY KEY (link_id, property_id)
   )`,
 
   // Function parameter ordering
-   `CREATE TABLE IF NOT EXISTS gel_function_params (
+  `CREATE TABLE IF NOT EXISTS gel_function_params (
      function_id TEXT NOT NULL,
      param_id    TEXT NOT NULL,
     idx         INTEGER NOT NULL,
@@ -102,14 +102,14 @@ export const GEL_SCHEMA_DDL = [
   )`,
 
   // Migration chain
-   `CREATE TABLE IF NOT EXISTS gel_migration_parents (
+  `CREATE TABLE IF NOT EXISTS gel_migration_parents (
      migration_id TEXT NOT NULL,
      parent_id    TEXT NOT NULL,
     PRIMARY KEY (migration_id, parent_id)
   )`,
 
   // Union/intersection composition
-   `CREATE TABLE IF NOT EXISTS gel_type_union (
+  `CREATE TABLE IF NOT EXISTS gel_type_union (
      type_id   TEXT NOT NULL,
      member_id TEXT NOT NULL,
     PRIMARY KEY (type_id, member_id)

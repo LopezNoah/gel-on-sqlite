@@ -25,24 +25,33 @@ const validate = (q: string, deps: AstValidationDeps = noAliases, allowUserSpeci
 
 describe("validateStatementAst — INSERT checks", () => {
   it("rejects inserting a standard-library type", () => {
-    expect(() => validate("INSERT schema::Migration { name := 'x' }")).toThrow(/insert standard library type/);
+    expect(() => validate("INSERT schema::Migration { name := 'x' }")).toThrow(
+      /insert standard library type/,
+    );
   });
 
   it("rejects assigning the server-generated id without allow_user_specified_id", () => {
-    expect(() => validate("INSERT Status { id := <uuid>'a', name := 'x' }")).toThrow(/cannot assign to property 'id'/);
+    expect(() => validate("INSERT Status { id := <uuid>'a', name := 'x' }")).toThrow(
+      /cannot assign to property 'id'/,
+    );
   });
 
   it("permits an explicit id when allow_user_specified_id is on", () => {
-    expect(() => validate("INSERT Status { id := <uuid>'a', name := 'x' }", noAliases, true)).not.toThrow();
+    expect(() =>
+      validate("INSERT Status { id := <uuid>'a', name := 'x' }", noAliases, true),
+    ).not.toThrow();
   });
 
   it("rejects assigning the __type__ link", () => {
-    expect(() => validate("INSERT Status { __type__ := 'x', name := 'y' }")).toThrow(/cannot assign to link '__type__'/);
+    expect(() => validate("INSERT Status { __type__ := 'x', name := 'y' }")).toThrow(
+      /cannot assign to link '__type__'/,
+    );
   });
 
   it("rejects modification of a computed property", () => {
-    expect(() => validate("INSERT Publication { title := 'x', title1 := 'y' }"))
-      .toThrow(/modification of computed property 'title1'/);
+    expect(() => validate("INSERT Publication { title := 'x', title1 := 'y' }")).toThrow(
+      /modification of computed property 'title1'/,
+    );
   });
 
   it("accepts a well-formed INSERT", () => {
@@ -58,20 +67,24 @@ describe("validateStatementAst — injected alias seam", () => {
       runtimeTypedAliasMap: () => new Map(),
       runtimeExprAliasMap: () => new Map([["default::MyAlias", "SELECT 1"]]),
     };
-    expect(() => validate("INSERT MyAlias { x := 1 }", withAlias))
-      .toThrow(/cannot insert into expression alias/);
+    expect(() => validate("INSERT MyAlias { x := 1 }", withAlias)).toThrow(
+      /cannot insert into expression alias/,
+    );
   });
 
   it("does not treat the name as an alias when the registry is empty", () => {
     // Same query, empty registry — the alias check does not fire (it falls
     // through to other handling; not the alias diagnostic).
-    expect(() => validate("INSERT MyAlias { x := 1 }", noAliases))
-      .not.toThrow(/cannot insert into expression alias/);
+    expect(() => validate("INSERT MyAlias { x := 1 }", noAliases)).not.toThrow(
+      /cannot insert into expression alias/,
+    );
   });
 });
 
 describe("validateStatementAst — function-call signatures", () => {
   it("rejects sum() of a statically-known string", () => {
-    expect(() => validate("SELECT sum('x')")).toThrow(/function "sum\(arg0: std::str\)" does not exist/);
+    expect(() => validate("SELECT sum('x')")).toThrow(
+      /function "sum\(arg0: std::str\)" does not exist/,
+    );
   });
 });

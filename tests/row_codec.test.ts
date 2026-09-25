@@ -31,37 +31,59 @@ describe("normalizeGelSQLValue", () => {
 
 describe("materializeGelSQLRows", () => {
   it("decodes a scalar set (single `value` column)", () => {
-    expect(materializeGelSQLRows([{ value: "[1,2]" }, { value: 3 }], { keepInternalId: false }))
-      .toEqual([[1, 2], 3]);
+    expect(
+      materializeGelSQLRows([{ value: "[1,2]" }, { value: 3 }], { keepInternalId: false }),
+    ).toEqual([[1, 2], 3]);
   });
 
   it("keeps JSON-looking text verbatim for std::str results, unwrapping only quoted JSON strings", () => {
-    expect(materializeGelSQLRows([{ value: "[1]" }], { keepInternalId: false, scalarResultIsStr: true }))
-      .toEqual(["[1]"]);
-    expect(materializeGelSQLRows([{ value: '"hi"' }], { keepInternalId: false, scalarResultIsStr: true }))
-      .toEqual(["hi"]);
+    expect(
+      materializeGelSQLRows([{ value: "[1]" }], { keepInternalId: false, scalarResultIsStr: true }),
+    ).toEqual(["[1]"]);
+    expect(
+      materializeGelSQLRows([{ value: '"hi"' }], {
+        keepInternalId: false,
+        scalarResultIsStr: true,
+      }),
+    ).toEqual(["hi"]);
   });
 
   it("decodes native SQLite booleans for std::bool scalar results", () => {
-    expect(materializeGelSQLRows([{ value: 1 }, { value: 0 }], { keepInternalId: false, scalarResultIsBool: true }))
-      .toEqual([true, false]);
+    expect(
+      materializeGelSQLRows([{ value: 1 }, { value: 0 }], {
+        keepInternalId: false,
+        scalarResultIsBool: true,
+      }),
+    ).toEqual([true, false]);
   });
 
   it("decodes an object set, dropping internal columns unless keepInternalId", () => {
-    const row = { id: "u1", name: "Bob", tags: '["a","b"]', __source_type: "default::User", __tid__: "x" };
-    expect(materializeGelSQLRows([row], { keepInternalId: false })).toEqual([{ name: "Bob", tags: ["a", "b"] }]);
-    expect(materializeGelSQLRows([row], { keepInternalId: true })).toEqual([{ id: "u1", name: "Bob", tags: ["a", "b"] }]);
+    const row = {
+      id: "u1",
+      name: "Bob",
+      tags: '["a","b"]',
+      __source_type: "default::User",
+      __tid__: "x",
+    };
+    expect(materializeGelSQLRows([row], { keepInternalId: false })).toEqual([
+      { name: "Bob", tags: ["a", "b"] },
+    ]);
+    expect(materializeGelSQLRows([row], { keepInternalId: true })).toEqual([
+      { id: "u1", name: "Bob", tags: ["a", "b"] },
+    ]);
   });
 
   it("keeps an object row whose shape columns are all null (they are still shape columns)", () => {
-    expect(materializeGelSQLRows([{ name: null, age: null }], { keepInternalId: false }))
-      .toEqual([{ name: null, age: null }]);
+    expect(materializeGelSQLRows([{ name: null, age: null }], { keepInternalId: false })).toEqual([
+      { name: null, age: null },
+    ]);
   });
 
   it("materializes a column-less row (only internal columns, all null) to null", () => {
     // hasShapeColumn stays false (id is dropped, __source_type is internal),
     // and every original value is null → the empty-object-link case.
-    expect(materializeGelSQLRows([{ id: null, __source_type: null }], { keepInternalId: false }))
-      .toEqual([null]);
+    expect(
+      materializeGelSQLRows([{ id: null, __source_type: null }], { keepInternalId: false }),
+    ).toEqual([null]);
   });
 });

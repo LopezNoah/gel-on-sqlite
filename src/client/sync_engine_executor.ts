@@ -34,7 +34,9 @@ export const connectSyncEngine = (
   const schema =
     deserializeSchemaFromInstdata(persistenceDb) ?? deserializeSchemaFromGelTables(persistenceDb);
   if (!schema) {
-    throw new Error("database has no serialized sqlite-ts schema; provision it (run migrations) first");
+    throw new Error(
+      "database has no serialized sqlite-ts schema; provision it (run migrations) first",
+    );
   }
   return buildExecutor(async (query, args) => {
     const envelope = executeQuery(

@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
-import {
-  assertQueryResult,
-  unorderedBag,
-  unorderedSet
-} from "./python_query_test_helpers.js";
+import { assertQueryResult, unorderedBag, unorderedSet } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLExprAliases", () => {
   let h: QueryHarness;
@@ -12,7 +8,7 @@ describe("TestEdgeQLExprAliases", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "cards",
-      setup: "cards_setup"
+      setup: "cards_setup",
     });
   });
 
@@ -28,40 +24,40 @@ describe("TestEdgeQLExprAliases", () => {
                 } ORDER BY AirCard.name;
             `,
       [
+        {
+          name: "Djinn",
+          owners: [
             {
-              "name": "Djinn",
-              "owners": [
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Carol",
             },
             {
-              "name": "Giant eagle",
-              "owners": [
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
+            },
+          ],
+        },
+        {
+          name: "Giant eagle",
+          owners: [
+            {
+              name: "Carol",
             },
             {
-              "name": "Sprite",
-              "owners": [
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
             },
-          ]
+          ],
+        },
+        {
+          name: "Sprite",
+          owners: [
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -76,7 +72,7 @@ describe("TestEdgeQLExprAliases", () => {
                     ('Dave', 'casual'),
                 }
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -85,16 +81,16 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY expert_map;
             `,
       [
-            ["Alice", "pro"],
-            ["Bob", "noob"],
-            ["Carol", "noob"],
-            ["Dave", "casual"],
-          ]
+        ["Alice", "pro"],
+        ["Bob", "noob"],
+        ["Carol", "noob"],
+        ["Dave", "casual"],
+      ],
     );
     h.script(
       `
             DROP ALIAS expert_map;
-        `
+        `,
     );
   });
 
@@ -109,7 +105,7 @@ describe("TestEdgeQLExprAliases", () => {
                     (name := 'Dave', score := 78, games := 10),
                 }
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -117,27 +113,27 @@ describe("TestEdgeQLExprAliases", () => {
                 SELECT scores ORDER BY scores.name;
             `,
       [
-            {
-              "name": "Alice",
-              "score": 100,
-              "games": 10,
-            },
-            {
-              "name": "Bob",
-              "score": 11,
-              "games": 2,
-            },
-            {
-              "name": "Carol",
-              "score": 31,
-              "games": 5,
-            },
-            {
-              "name": "Dave",
-              "score": 78,
-              "games": 10,
-            },
-          ]
+        {
+          name: "Alice",
+          score: 100,
+          games: 10,
+        },
+        {
+          name: "Bob",
+          score: 11,
+          games: 2,
+        },
+        {
+          name: "Carol",
+          score: 31,
+          games: 5,
+        },
+        {
+          name: "Dave",
+          score: 78,
+          games: 10,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -146,11 +142,11 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .0;
             `,
       [
-            ["Alice", 100, 10],
-            ["Bob", 11, 2],
-            ["Carol", 31, 5],
-            ["Dave", 78, 10],
-          ]
+        ["Alice", 100, 10],
+        ["Bob", 11, 2],
+        ["Carol", 31, 5],
+        ["Dave", 78, 10],
+      ],
     );
     assertQueryResult(
       h,
@@ -159,32 +155,32 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name;
             `,
       [
-            {
-              "name": "Alice",
-              "points": 100,
-              "plays": 10,
-            },
-            {
-              "name": "Bob",
-              "points": 11,
-              "plays": 2,
-            },
-            {
-              "name": "Carol",
-              "points": 31,
-              "plays": 5,
-            },
-            {
-              "name": "Dave",
-              "points": 78,
-              "plays": 10,
-            },
-          ]
+        {
+          name: "Alice",
+          points: 100,
+          plays: 10,
+        },
+        {
+          name: "Bob",
+          points: 11,
+          plays: 2,
+        },
+        {
+          name: "Carol",
+          points: 31,
+          plays: 5,
+        },
+        {
+          name: "Dave",
+          points: 78,
+          plays: 10,
+        },
+      ],
     );
     h.script(
       `
             DROP ALIAS scores;
-        `
+        `,
     );
   });
 
@@ -192,14 +188,14 @@ describe("TestEdgeQLExprAliases", () => {
     h.script(
       `
             CREATE ALIAS levels := {'pro', 'casual', 'noob'};
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT levels;
             `,
-      unorderedSet(["casual", "noob", "pro"])
+      unorderedSet(["casual", "noob", "pro"]),
     );
   });
 
@@ -219,7 +215,7 @@ describe("TestEdgeQLExprAliases", () => {
                     )
                 } FILTER Card.name LIKE 'D%'
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -232,44 +228,42 @@ describe("TestEdgeQLExprAliases", () => {
                 } ORDER BY DCard.name;
             `,
       [
+        {
+          name: "Djinn",
+          owners: [
             {
-              "name": "Djinn",
-              "owners": [
-                {
-                  "name_upper": "CAROL",
-                },
-                {
-                  "name_upper": "DAVE",
-                },
-              ],
+              name_upper: "CAROL",
             },
             {
-              "name": "Dragon",
-              "owners": [
-                {
-                  "name_upper": "ALICE",
-                },
-                {
-                  "name_upper": "DAVE",
-                },
-              ],
+              name_upper: "DAVE",
+            },
+          ],
+        },
+        {
+          name: "Dragon",
+          owners: [
+            {
+              name_upper: "ALICE",
             },
             {
-              "name": "Dwarf",
-              "owners": [
-                {
-                  "name_upper": "BOB",
-                },
-                {
-                  "name_upper": "CAROL",
-                },
-              ],
+              name_upper: "DAVE",
             },
-          ]
+          ],
+        },
+        {
+          name: "Dwarf",
+          owners: [
+            {
+              name_upper: "BOB",
+            },
+            {
+              name_upper: "CAROL",
+            },
+          ],
+        },
+      ],
     );
-    h.script(
-      `DROP ALIAS DCard;`
-    );
+    h.script(`DROP ALIAS DCard;`);
     h.script(
       `
             CREATE ALIAS DCard := (
@@ -281,7 +275,7 @@ describe("TestEdgeQLExprAliases", () => {
                     )
                 } FILTER Card.name LIKE 'D%'
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -303,17 +297,17 @@ describe("TestEdgeQLExprAliases", () => {
                     }
             `,
       [
-            {
-              "target": {
-                "name": "default::__DCard__owners",
-                "pointers": [
-                  {
-                    "name": "name_upper",
-                  },
-                ],
+        {
+          target: {
+            name: "default::__DCard__owners",
+            pointers: [
+              {
+                name: "name_upper",
               },
-            },
-          ]
+            ],
+          },
+        },
+      ],
     );
   });
 
@@ -326,10 +320,10 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY FireCard.name;
             `,
       [
-            {
-              "name": "Dragon",
-            },
-          ]
+        {
+          name: "Dragon",
+        },
+      ],
     );
   });
 
@@ -342,13 +336,13 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY AirCard.name;
             `,
       [
-            {
-              "name": "Giant eagle",
-            },
-            {
-              "name": "Sprite",
-            },
-          ]
+        {
+          name: "Giant eagle",
+        },
+        {
+          name: "Sprite",
+        },
+      ],
     );
   });
 
@@ -364,17 +358,17 @@ describe("TestEdgeQLExprAliases", () => {
                 FILTER .name = 'Djinn';
             `,
       [
+        {
+          owners: [
             {
-              "owners": [
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Carol",
             },
-          ]
+            {
+              name: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -389,23 +383,23 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Alice",
-              "deck_cost": 11,
-            },
-            {
-              "name": "Bob",
-              "deck_cost": 9,
-            },
-            {
-              "name": "Carol",
-              "deck_cost": 16,
-            },
-            {
-              "name": "Dave",
-              "deck_cost": 20,
-            },
-          ]
+        {
+          name: "Alice",
+          deck_cost: 11,
+        },
+        {
+          name: "Bob",
+          deck_cost: 9,
+        },
+        {
+          name: "Carol",
+          deck_cost: 16,
+        },
+        {
+          name: "Dave",
+          deck_cost: 20,
+        },
+      ],
     );
   });
 
@@ -422,21 +416,21 @@ describe("TestEdgeQLExprAliases", () => {
                 FILTER .name = 'Alice';
             `,
       [
+        {
+          my_name: "Alice",
+          my_friends: [
             {
-              "my_name": "Alice",
-              "my_friends": [
-                {
-                  "@nickname": "Swampy",
-                },
-                {
-                  "@nickname": "Firefighter",
-                },
-                {
-                  "@nickname": "Grumpy",
-                },
-              ],
+              "@nickname": "Swampy",
             },
-          ]
+            {
+              "@nickname": "Firefighter",
+            },
+            {
+              "@nickname": "Grumpy",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -460,32 +454,32 @@ describe("TestEdgeQLExprAliases", () => {
                 } FILTER .name = 'Giant turtle';
             `,
       [
+        {
+          name: "Giant turtle",
+          owned: [
             {
-              "name": "Giant turtle",
-              "owned": [
-                {
-                  "fr0": 3,
-                  "fr1": 3,
-                  "name": "Alice",
-                },
-                {
-                  "fr0": 0,
-                  "fr1": 0,
-                  "name": "Bob",
-                },
-                {
-                  "fr0": 0,
-                  "fr1": 0,
-                  "name": "Carol",
-                },
-                {
-                  "fr0": 1,
-                  "fr1": 1,
-                  "name": "Dave",
-                },
-              ],
+              fr0: 3,
+              fr1: 3,
+              name: "Alice",
             },
-          ]
+            {
+              fr0: 0,
+              fr1: 0,
+              name: "Bob",
+            },
+            {
+              fr0: 0,
+              fr1: 0,
+              name: "Carol",
+            },
+            {
+              fr0: 1,
+              fr1: 1,
+              name: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -507,23 +501,23 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name
             `,
       [
+        {
+          name: "Djinn",
+          ava_owners: [
             {
-              "name": "Djinn",
-              "ava_owners": [
-                {
-                  "typename": "default::Bot",
-                },
-              ],
+              typename: "default::Bot",
             },
+          ],
+        },
+        {
+          name: "Dragon",
+          ava_owners: [
             {
-              "name": "Dragon",
-              "ava_owners": [
-                {
-                  "typename": "default::User",
-                },
-              ],
+              typename: "default::User",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -545,23 +539,23 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name;
             `,
       [
+        {
+          name: "Djinn",
+          ava_owners: [
             {
-              "name": "Djinn",
-              "ava_owners": [
-                {
-                  "typename": unorderedSet(["default::Bot"]),
-                },
-              ],
+              typename: unorderedSet(["default::Bot"]),
             },
+          ],
+        },
+        {
+          name: "Dragon",
+          ava_owners: [
             {
-              "name": "Dragon",
-              "ava_owners": [
-                {
-                  "typename": unorderedSet(["default::User"]),
-                },
-              ],
+              typename: unorderedSet(["default::User"]),
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -576,31 +570,31 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY _.name;
             `,
       [
-            {
-              "name": "Bog monster",
-            },
-            {
-              "name": "Bog monster",
-            },
-            {
-              "name": "Dragon",
-            },
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Golem",
-            },
-            {
-              "name": "Imp",
-            },
-          ]
+        {
+          name: "Bog monster",
+        },
+        {
+          name: "Bog monster",
+        },
+        {
+          name: "Dragon",
+        },
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Golem",
+        },
+        {
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -617,25 +611,25 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY _.name;
             `,
       [
-            {
-              "name": "Bog monster",
-            },
-            {
-              "name": "Dragon",
-            },
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Golem",
-            },
-            {
-              "name": "Imp",
-            },
-          ]
+        {
+          name: "Bog monster",
+        },
+        {
+          name: "Dragon",
+        },
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Golem",
+        },
+        {
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -651,31 +645,31 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY _.name;
             `,
       [
-            {
-              "name": "Bog monster",
-            },
-            {
-              "name": "Bog monster",
-            },
-            {
-              "name": "Dragon",
-            },
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Golem",
-            },
-            {
-              "name": "Imp",
-            },
-          ]
+        {
+          name: "Bog monster",
+        },
+        {
+          name: "Bog monster",
+        },
+        {
+          name: "Dragon",
+        },
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Golem",
+        },
+        {
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -691,31 +685,31 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY _.name;
             `,
       [
-            {
-              "name": "Bog monster",
-            },
-            {
-              "name": "Bog monster",
-            },
-            {
-              "name": "Dragon",
-            },
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Golem",
-            },
-            {
-              "name": "Imp",
-            },
-          ]
+        {
+          name: "Bog monster",
+        },
+        {
+          name: "Bog monster",
+        },
+        {
+          name: "Dragon",
+        },
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Golem",
+        },
+        {
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -727,17 +721,7 @@ describe("TestEdgeQLExprAliases", () => {
                     _ := 'yes' IF Card.cost > 4 ELSE 'no'
                 ORDER BY _;
             `,
-      [
-            "no",
-            "no",
-            "no",
-            "no",
-            "no",
-            "no",
-            "no",
-            "no",
-            "yes",
-          ]
+      ["no", "no", "no", "no", "no", "no", "no", "no", "yes"],
     );
   });
 
@@ -754,17 +738,17 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY _;
             `,
       [
-            "Bog monster",
-            "Djinn",
-            "Dragon",
-            "Giant eagle",
-            "Giant turtle",
-            "Golem",
-            "Sprite",
-            "ok",
-            "ok",
-            "ok",
-          ]
+        "Bog monster",
+        "Djinn",
+        "Dragon",
+        "Giant eagle",
+        "Giant turtle",
+        "Golem",
+        "Sprite",
+        "ok",
+        "ok",
+        "ok",
+      ],
     );
     assertQueryResult(
       h,
@@ -779,29 +763,29 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY _;
             `,
       [
-            "Air",
-            "Air",
-            "Air",
-            "Bog monster",
-            "Djinn",
-            "Dragon",
-            "Earth",
-            "Earth",
-            "Earth",
-            "Earth",
-            "Fire",
-            "Fire",
-            "Giant eagle",
-            "Giant turtle",
-            "Golem",
-            "Sprite",
-            "Water",
-            "Water",
-            "Water",
-            "Water",
-            "Water",
-            "Water",
-          ]
+        "Air",
+        "Air",
+        "Air",
+        "Bog monster",
+        "Djinn",
+        "Dragon",
+        "Earth",
+        "Earth",
+        "Earth",
+        "Earth",
+        "Fire",
+        "Fire",
+        "Giant eagle",
+        "Giant turtle",
+        "Golem",
+        "Sprite",
+        "Water",
+        "Water",
+        "Water",
+        "Water",
+        "Water",
+        "Water",
+      ],
     );
   });
 
@@ -814,17 +798,7 @@ describe("TestEdgeQLExprAliases", () => {
                 SELECT _ := User.deck.element
                 ORDER BY _;
             `,
-      [
-            "Air",
-            "Air",
-            "Air",
-            "Earth",
-            "Earth",
-            "Fire",
-            "Fire",
-            "Water",
-            "Water",
-          ]
+      ["Air", "Air", "Air", "Earth", "Earth", "Fire", "Fire", "Water", "Water"],
     );
     assertQueryResult(
       h,
@@ -832,17 +806,7 @@ describe("TestEdgeQLExprAliases", () => {
                 SELECT _ := <str>User.deck.cost
                 ORDER BY _;
             `,
-      [
-            "1",
-            "1",
-            "1",
-            "2",
-            "2",
-            "3",
-            "3",
-            "4",
-            "5",
-          ]
+      ["1", "1", "1", "2", "2", "3", "3", "4", "5"],
     );
     assertQueryResult(
       h,
@@ -850,7 +814,7 @@ describe("TestEdgeQLExprAliases", () => {
                 SELECT _ := {User.name[0] = 'A', EXISTS User.friends}
                 ORDER BY _;
             `,
-      [false, false, false, true, true]
+      [false, false, false, true, true],
     );
     assertQueryResult(
       h,
@@ -865,52 +829,52 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY _;
             `,
       [
-            "1",
-            "1",
-            "1",
-            "1",
-            "1",
-            "1",
-            "1",
-            "1",
-            "1",
-            "2",
-            "2",
-            "2",
-            "2",
-            "2",
-            "2",
-            "3",
-            "3",
-            "3",
-            "3",
-            "3",
-            "3",
-            "4",
-            "4",
-            "4",
-            "5",
-            "5",
-            "5",
-            "Air",
-            "Air",
-            "Air",
-            "Air",
-            "Air",
-            "Air",
-            "Earth",
-            "Earth",
-            "Earth",
-            "Earth",
-            "Fire",
-            "Fire",
-            "Fire",
-            "Fire",
-            "Water",
-            "Water",
-            "Water",
-            "Water",
-          ]
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "2",
+        "2",
+        "2",
+        "2",
+        "2",
+        "2",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "4",
+        "4",
+        "4",
+        "5",
+        "5",
+        "5",
+        "Air",
+        "Air",
+        "Air",
+        "Air",
+        "Air",
+        "Air",
+        "Earth",
+        "Earth",
+        "Earth",
+        "Earth",
+        "Fire",
+        "Fire",
+        "Fire",
+        "Fire",
+        "Water",
+        "Water",
+        "Water",
+        "Water",
+      ],
     );
   });
 
@@ -925,7 +889,7 @@ describe("TestEdgeQLExprAliases", () => {
                     100 IF User.name[0] = 'C' ELSE
                     0;
             `,
-      unorderedSet([0, 1, 10, 100])
+      unorderedSet([0, 1, 10, 100]),
     );
     assertQueryResult(
       h,
@@ -943,11 +907,11 @@ describe("TestEdgeQLExprAliases", () => {
                 ) ORDER BY .0;
             `,
       [
-            ["Alice", 110],
-            ["Bob", 0],
-            ["Carol", 0],
-            ["Dave", 10],
-          ]
+        ["Alice", 110],
+        ["Bob", 0],
+        ["Carol", 0],
+        ["Dave", 10],
+      ],
     );
   });
 
@@ -963,16 +927,16 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .0;
             `,
       [
-            ["Bog monster", "no"],
-            ["Djinn", "no"],
-            ["Dragon", "yes"],
-            ["Dwarf", "no"],
-            ["Giant eagle", "no"],
-            ["Giant turtle", "no"],
-            ["Golem", "no"],
-            ["Imp", "no"],
-            ["Sprite", "no"],
-          ]
+        ["Bog monster", "no"],
+        ["Djinn", "no"],
+        ["Dragon", "yes"],
+        ["Dwarf", "no"],
+        ["Giant eagle", "no"],
+        ["Giant turtle", "no"],
+        ["Golem", "no"],
+        ["Imp", "no"],
+        ["Sprite", "no"],
+      ],
     );
     assertQueryResult(
       h,
@@ -985,16 +949,16 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .0;
             `,
       [
-            ["Bog monster", "no"],
-            ["Djinn", "no"],
-            ["Dragon", "yes"],
-            ["Dwarf", "no"],
-            ["Giant eagle", "no"],
-            ["Giant turtle", "no"],
-            ["Golem", "no"],
-            ["Imp", "no"],
-            ["Sprite", "no"],
-          ]
+        ["Bog monster", "no"],
+        ["Djinn", "no"],
+        ["Dragon", "yes"],
+        ["Dwarf", "no"],
+        ["Giant eagle", "no"],
+        ["Giant turtle", "no"],
+        ["Golem", "no"],
+        ["Imp", "no"],
+        ["Sprite", "no"],
+      ],
     );
   });
 
@@ -1010,25 +974,25 @@ describe("TestEdgeQLExprAliases", () => {
                 } ORDER BY .name;
             `,
       [
-            {
-              "name": "1st",
-              "winner": {
-                "name": "Alice",
-              },
-            },
-            {
-              "name": "2nd",
-              "winner": {
-                "name": "Alice",
-              },
-            },
-            {
-              "name": "3rd",
-              "winner": {
-                "name": "Bob",
-              },
-            },
-          ]
+        {
+          name: "1st",
+          winner: {
+            name: "Alice",
+          },
+        },
+        {
+          name: "2nd",
+          winner: {
+            name: "Alice",
+          },
+        },
+        {
+          name: "3rd",
+          winner: {
+            name: "Bob",
+          },
+        },
+      ],
     );
   });
 
@@ -1048,29 +1012,29 @@ describe("TestEdgeQLExprAliases", () => {
                 };
             `,
       [
+        {
+          foo: [
             {
-              "foo": [
-                {
-                  "name": "1st",
-                  "winner": {
-                    "name": "Alice",
-                  },
-                },
-                {
-                  "name": "2nd",
-                  "winner": {
-                    "name": "Alice",
-                  },
-                },
-                {
-                  "name": "3rd",
-                  "winner": {
-                    "name": "Bob",
-                  },
-                },
-              ],
+              name: "1st",
+              winner: {
+                name: "Alice",
+              },
             },
-          ]
+            {
+              name: "2nd",
+              winner: {
+                name: "Alice",
+              },
+            },
+            {
+              name: "3rd",
+              winner: {
+                name: "Bob",
+              },
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -1087,17 +1051,17 @@ describe("TestEdgeQLExprAliases", () => {
                     .winner.name_upper = 'ALICE';
             `,
       [
-            {
-              "winner": {
-                "name_upper": "ALICE",
-              },
-            },
-            {
-              "winner": {
-                "name_upper": "ALICE",
-              },
-            },
-          ]
+        {
+          winner: {
+            name_upper: "ALICE",
+          },
+        },
+        {
+          winner: {
+            name_upper: "ALICE",
+          },
+        },
+      ],
     );
   });
 
@@ -1125,7 +1089,7 @@ describe("TestEdgeQLExprAliases", () => {
                 }
                 FILTER .name = '1st';
             `,
-      res
+      res,
     );
   });
 
@@ -1146,7 +1110,7 @@ describe("TestEdgeQLExprAliases", () => {
                 }
                 FILTER .name = 'Alice';
             `,
-      res
+      res,
     );
   });
 
@@ -1160,7 +1124,7 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name
                 LIMIT 1
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1170,10 +1134,10 @@ describe("TestEdgeQLExprAliases", () => {
                 }
             `,
       [
-            {
-              "name_upper": "ALICE",
-            },
-          ]
+        {
+          name_upper: "ALICE",
+        },
+      ],
     );
   });
 
@@ -1189,12 +1153,12 @@ describe("TestEdgeQLExprAliases", () => {
                     LIMIT 1,
                 }
             );
-        `
+        `,
     );
     h.script(
       `
             SET MODULE std;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1205,12 +1169,10 @@ describe("TestEdgeQLExprAliases", () => {
                 FILTER .name = 'Alice';
             `,
       [
-            {
-              "deck": [
-                {},
-              ],
-            },
-          ]
+        {
+          deck: [{}],
+        },
+      ],
     );
   });
 
@@ -1226,15 +1188,15 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name;
             `,
       [
-            {
-              "name": "Dwarf",
-              "owned_by_alice": true,
-            },
-            {
-              "name": "Giant turtle",
-              "owned_by_alice": true,
-            },
-          ]
+        {
+          name: "Dwarf",
+          owned_by_alice: true,
+        },
+        {
+          name: "Giant turtle",
+          owned_by_alice: true,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1246,13 +1208,13 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name;
             `,
       [
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Imp",
-            },
-          ]
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -1266,11 +1228,11 @@ describe("TestEdgeQLExprAliases", () => {
                 };
             `,
       [
-            {
-              "name": "Djinn",
-              "el_cost": ["Air", 4],
-            },
-          ]
+        {
+          name: "Djinn",
+          el_cost: ["Air", 4],
+        },
+      ],
     );
   });
 
@@ -1280,9 +1242,7 @@ describe("TestEdgeQLExprAliases", () => {
       `
                 SELECT SpecialCardAlias.el_cost;
             `,
-      [
-            ["Air", 4],
-          ]
+      [["Air", 4]],
     );
   });
 
@@ -1296,9 +1256,7 @@ describe("TestEdgeQLExprAliases", () => {
                     }
                 SELECT X.el_cost;
             `,
-      [
-            ["Air", 4],
-          ]
+      [["Air", 4]],
     );
   });
 
@@ -1312,9 +1270,7 @@ describe("TestEdgeQLExprAliases", () => {
                     }
                 ).el_cost;
             `,
-      [
-            ["Air"],
-          ]
+      [["Air"]],
     );
   });
 
@@ -1328,9 +1284,7 @@ describe("TestEdgeQLExprAliases", () => {
                     }
                 ).el_cost;
             `,
-      [
-            ["Air"],
-          ]
+      [["Air"]],
     );
   });
 
@@ -1343,7 +1297,7 @@ describe("TestEdgeQLExprAliases", () => {
                     (EarthOrFireCard.name)
                 ))
             `,
-      [16]
+      [16],
     );
   });
 
@@ -1356,7 +1310,7 @@ describe("TestEdgeQLExprAliases", () => {
                     (SELECT EarthOrFireCard.name)
                 ))
             `,
-      [16]
+      [16],
     );
   });
 
@@ -1369,7 +1323,7 @@ describe("TestEdgeQLExprAliases", () => {
                     (EarthOrFireCard.name)
                 ))
             `,
-      [16]
+      [16],
     );
   });
 
@@ -1382,7 +1336,7 @@ describe("TestEdgeQLExprAliases", () => {
                     (SELECT EarthOrFireCard.name)
                 ))
             `,
-      [16]
+      [16],
     );
   });
 
@@ -1398,15 +1352,15 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name
             `,
       [
-            {
-              "name": "default::AirCard",
-            },
-          ]
+        {
+          name: "default::AirCard",
+        },
+      ],
     );
     h.script(
       `
             CREATE ALIAS tuple_alias := ('foo', 10);
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1424,18 +1378,18 @@ describe("TestEdgeQLExprAliases", () => {
                 ORDER BY .name
             `,
       [
+        {
+          name: "default::tuple_alias",
+          element_types: [
             {
-              "name": "default::tuple_alias",
-              "element_types": [
-                {
-                  "name": "std::str",
-                },
-                {
-                  "name": "std::int64",
-                },
-              ],
+              name: "std::str",
             },
-          ]
+            {
+              name: "std::int64",
+            },
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1445,13 +1399,13 @@ describe("TestEdgeQLExprAliases", () => {
                 and .source.name = 'default::AwardAlias'
             `,
       [
-            {
-              "name": "winner",
-              "target": {
-                "from_alias": true,
-              },
-            },
-          ]
+        {
+          name: "winner",
+          target: {
+            from_alias: true,
+          },
+        },
+      ],
     );
   });
 
@@ -1460,7 +1414,7 @@ describe("TestEdgeQLExprAliases", () => {
       h.script(
         `
                 SELECT User.<owners[Is Card];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot follow backlink 'owners'"));
   });
@@ -1470,7 +1424,7 @@ describe("TestEdgeQLExprAliases", () => {
       h.script(
         `
                 SELECT User.<owners;
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot follow backlink 'owners'"));
   });
@@ -1480,9 +1434,11 @@ describe("TestEdgeQLExprAliases", () => {
       h.script(
         `
                 SELECT __AwardAlias2__winner
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot refer to alias link helper type 'default::__AwardAlias2__winner'"));
+    }).toThrow(
+      new RegExp("cannot refer to alias link helper type 'default::__AwardAlias2__winner'"),
+    );
   });
 
   it("test_edgeql_aliases_detached_01", () => {
@@ -1491,7 +1447,7 @@ describe("TestEdgeQLExprAliases", () => {
       `
                 select count((detached FireCard, detached FireCard))
             `,
-      [4]
+      [4],
     );
   });
 
@@ -1505,7 +1461,7 @@ describe("TestEdgeQLExprAliases", () => {
                 create alias z := (
                    a := 'hello', b := [(select X limit 1)]
                 );
-            `
+            `,
     );
   });
 
@@ -1513,7 +1469,7 @@ describe("TestEdgeQLExprAliases", () => {
     h.script(
       `
             create alias best_card := 'Dragon';
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1522,15 +1478,15 @@ describe("TestEdgeQLExprAliases", () => {
             filter .name ilike "%best_card%";
             `,
       [
-            {
-              "name": "default::best_card",
-            },
-          ]
+        {
+          name: "default::best_card",
+        },
+      ],
     );
     h.script(
       `
             drop alias best_card;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1538,13 +1494,13 @@ describe("TestEdgeQLExprAliases", () => {
             with module schema select Type { name }
             filter .name ilike "%best_card%";
             `,
-      []
+      [],
     );
     h.script(
       `
             create module my_mod;
             create alias my_mod::best_card := 'Dragon';
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1553,15 +1509,15 @@ describe("TestEdgeQLExprAliases", () => {
             filter .name ilike "%best_card%";
             `,
       [
-            {
-              "name": "my_mod::best_card",
-            },
-          ]
+        {
+          name: "my_mod::best_card",
+        },
+      ],
     );
     h.script(
       `
             drop alias my_mod::best_card;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1569,7 +1525,7 @@ describe("TestEdgeQLExprAliases", () => {
             with module schema select Type { name }
             filter .name ilike "%best_card%";
             `,
-      []
+      [],
     );
   });
 
@@ -1579,7 +1535,7 @@ describe("TestEdgeQLExprAliases", () => {
             create alias best_card := (
                 select Card filter .name = 'Dragon' limit 1
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1588,15 +1544,15 @@ describe("TestEdgeQLExprAliases", () => {
             filter .name ilike "%best_card%";
             `,
       [
-            {
-              "name": "default::best_card",
-            },
-          ]
+        {
+          name: "default::best_card",
+        },
+      ],
     );
     h.script(
       `
             drop alias best_card;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1604,7 +1560,7 @@ describe("TestEdgeQLExprAliases", () => {
             with module schema select Type { name }
             filter .name ilike "%best_card%";
             `,
-      []
+      [],
     );
     h.script(
       `
@@ -1612,7 +1568,7 @@ describe("TestEdgeQLExprAliases", () => {
             create alias my_mod::best_card := (
                 select Card filter .name = 'Dragon' limit 1
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1621,15 +1577,15 @@ describe("TestEdgeQLExprAliases", () => {
             filter .name ilike "%best_card%";
             `,
       [
-            {
-              "name": "my_mod::best_card",
-            },
-          ]
+        {
+          name: "my_mod::best_card",
+        },
+      ],
     );
     h.script(
       `
             drop alias my_mod::best_card;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1637,7 +1593,7 @@ describe("TestEdgeQLExprAliases", () => {
             with module schema select Type { name }
             filter .name ilike "%best_card%";
             `,
-      []
+      [],
     );
   });
 
@@ -1648,7 +1604,7 @@ describe("TestEdgeQLExprAliases", () => {
                 select Card {name}
                 filter .name = 'Dragon' limit 1
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1658,18 +1614,18 @@ describe("TestEdgeQLExprAliases", () => {
             order by .name;
             `,
       [
-            {
-              "name": "default::__best_card__Card",
-            },
-            {
-              "name": "default::best_card",
-            },
-          ]
+        {
+          name: "default::__best_card__Card",
+        },
+        {
+          name: "default::best_card",
+        },
+      ],
     );
     h.script(
       `
             drop alias best_card;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1677,7 +1633,7 @@ describe("TestEdgeQLExprAliases", () => {
             with module schema select Type { name }
             filter .name ilike "%best_card%";
             `,
-      []
+      [],
     );
     h.script(
       `
@@ -1686,7 +1642,7 @@ describe("TestEdgeQLExprAliases", () => {
                 select Card {name}
                 filter .name = 'Dragon' limit 1
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1696,18 +1652,18 @@ describe("TestEdgeQLExprAliases", () => {
             order by .name;
             `,
       [
-            {
-              "name": "my_mod::__best_card__Card",
-            },
-            {
-              "name": "my_mod::best_card",
-            },
-          ]
+        {
+          name: "my_mod::__best_card__Card",
+        },
+        {
+          name: "my_mod::best_card",
+        },
+      ],
     );
     h.script(
       `
             drop alias my_mod::best_card;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1715,7 +1671,7 @@ describe("TestEdgeQLExprAliases", () => {
             with module schema select Type { name }
             filter .name ilike "%best_card%";
             `,
-      []
+      [],
     );
   });
 
@@ -1726,11 +1682,11 @@ describe("TestEdgeQLExprAliases", () => {
                 select AliasArrayOfArrayOfScalar;
             `,
       [
-            [
-              [1, 2, 3],
-              [4, 5, 6],
-            ],
-          ]
+        [
+          [1, 2, 3],
+          [4, 5, 6],
+        ],
+      ],
     );
   });
 
@@ -1747,15 +1703,15 @@ describe("TestEdgeQLExprAliases", () => {
                 ))
             `,
       [
-            [
-              unorderedBag([]),
-              unorderedBag(["Imp", "Dwarf", "Sprite"]),
-              unorderedBag(["Bog monster", "Giant eagle"]),
-              unorderedBag(["Giant turtle", "Golem"]),
-              unorderedBag(["Djinn"]),
-              unorderedBag(["Dragon"]),
-            ],
-          ]
+        [
+          unorderedBag([]),
+          unorderedBag(["Imp", "Dwarf", "Sprite"]),
+          unorderedBag(["Bog monster", "Giant eagle"]),
+          unorderedBag(["Giant turtle", "Golem"]),
+          unorderedBag(["Djinn"]),
+          unorderedBag(["Dragon"]),
+        ],
+      ],
     );
   });
 });

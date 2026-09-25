@@ -1,6 +1,5 @@
 import type { DDLStatement, Statement } from "../edgeql/ast.js";
 import { parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
-import { tokenize, type Token } from "../edgeql/tokenizer.js";
 import { AppError, tryResult } from "../errors.js";
 
 // Exact module names that are owned by the system / stdlib and may not be
@@ -45,9 +44,12 @@ const isProtectedModule = (modulePath: string): boolean => {
 
 const verbForAction = (action: DDLStatement["action"]): string => {
   switch (action) {
-    case "create": return "create";
-    case "drop": return "delete";
-    case "alter": return "alter";
+    case "create":
+      return "create";
+    case "drop":
+      return "delete";
+    case "alter":
+      return "alter";
   }
 };
 
@@ -127,10 +129,7 @@ const isSetOfTypeText = (typeText: string | undefined): boolean => {
 // Field names that cannot be set via `SET <name> := …` inside a
 // CREATE FUNCTION / ALTER FUNCTION body. These are internal compiler flags
 // that user-DDL doesn't have access to (test_edgeql_userddl_21, 25, 26, 27).
-const FORBIDDEN_FUNCTION_SET_FIELDS = new Set<string>([
-  "fallback",
-  "force_return_cast",
-]);
+const FORBIDDEN_FUNCTION_SET_FIELDS = new Set<string>(["fallback", "force_return_cast"]);
 
 // `cfg::*` types are the configuration-object hierarchy. Extending them is
 // rejected upstream (test_edgeql_userddl_28).
@@ -240,10 +239,7 @@ const validateFunctionDecl = (ast: DDLStatement): void => {
 
   for (const param of decl.params) {
     if (isGenericFunctionType(param.type)) {
-      throwFuncErr(
-        "E_UNSUPPORTED",
-        `generic types are not supported in user-defined functions`,
-      );
+      throwFuncErr("E_UNSUPPORTED", `generic types are not supported in user-defined functions`);
     }
     if (param.setOf || isSetOfTypeText(param.type)) {
       throwFuncErr(
@@ -253,10 +249,7 @@ const validateFunctionDecl = (ast: DDLStatement): void => {
     }
   }
   if (isGenericFunctionType(decl.returnType)) {
-    throwFuncErr(
-      "E_UNSUPPORTED",
-      `generic types are not supported in user-defined functions`,
-    );
+    throwFuncErr("E_UNSUPPORTED", `generic types are not supported in user-defined functions`);
   }
   if (decl.body.language === "sql") {
     if (decl.body.fromFunction !== undefined) {
@@ -265,10 +258,7 @@ const validateFunctionDecl = (ast: DDLStatement): void => {
         `USING SQL FUNCTION is not supported in user-defined functions`,
       );
     }
-    throwFuncErr(
-      "E_UNSUPPORTED",
-      `USING SQL is not supported in user-defined functions`,
-    );
+    throwFuncErr("E_UNSUPPORTED", `USING SQL is not supported in user-defined functions`);
   }
 };
 
@@ -332,9 +322,7 @@ export const validateScriptUserDDL = (
   // creates `ext::_test` under testmode, then resets).
   let internalTestMode = false;
   for (const ast of statements) {
-    if (ast.kind === "configure"
-      && ast.target.toLowerCase() === "__internal_testmode"
-    ) {
+    if (ast.kind === "configure" && ast.target.toLowerCase() === "__internal_testmode") {
       if (ast.operation === "set") internalTestMode = true;
       else if (ast.operation === "reset") internalTestMode = false;
       continue;
@@ -350,5 +338,3 @@ export const validateScriptUserDDL = (
 export const validateUserDDLStatement = (ast: Statement, strict: boolean = false): void => {
   if (ast.kind === "ddl") validateUserDDL(ast, strict);
 };
-
-

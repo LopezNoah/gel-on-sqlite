@@ -43,7 +43,10 @@ export interface InsertDefaultDeps {
 }
 
 const isScalarValue = (value: unknown): value is ScalarValue =>
-  value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "number" ||
+  typeof value === "boolean";
 
 // Fill `values` in place for every field whose default the planner left pending.
 export const applyPendingInsertDefaults = (
@@ -55,8 +58,10 @@ export const applyPendingInsertDefaults = (
     if (!field.hasDefault) {
       continue;
     }
-    if (Object.prototype.hasOwnProperty.call(values, field.name)
-      && !deps.isPendingRewriteValue(values[field.name])) {
+    if (
+      Object.prototype.hasOwnProperty.call(values, field.name) &&
+      !deps.isPendingRewriteValue(values[field.name])
+    ) {
       continue;
     }
 
@@ -72,11 +77,15 @@ export const applyPendingInsertDefaults = (
           if (Array.isArray(node)) return node.map(substituteSourceRefs);
           if (node === null || typeof node !== "object") return node;
           const n = node as Record<string, unknown> & { kind?: string };
-          if (n.kind === "field_access"
-              && typeof n.field === "string"
-              && n.expr && typeof n.expr === "object"
-              && ((n.expr as { kind?: string }).kind === "global_ref" || (n.expr as { kind?: string }).kind === "binding_ref")
-              && (n.expr as { name?: string }).name === "__source__") {
+          if (
+            n.kind === "field_access" &&
+            typeof n.field === "string" &&
+            n.expr &&
+            typeof n.expr === "object" &&
+            ((n.expr as { kind?: string }).kind === "global_ref" ||
+              (n.expr as { kind?: string }).kind === "binding_ref") &&
+            (n.expr as { name?: string }).name === "__source__"
+          ) {
             const sourceValue = values[n.field];
             if (!deps.isResolvedSourceValue(sourceValue)) {
               throw new AppError("E_UNSUPPORTED", `__source__.${n.field} is not statically known`);
@@ -89,12 +98,22 @@ export const applyPendingInsertDefaults = (
         };
         // captureAll: a default we can't evaluate just stays pending (the
         // column is omitted, matching "no computable default").
-        const attempt = tryResult(() => {
-          const parsed = parseEdgeQL(`SELECT (${text})`);
-          const stmt = substituteSourceRefs(Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
-          return deps.evalSelect(stmt);
-        }, { captureAll: true });
-        if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
+        const attempt = tryResult(
+          () => {
+            const parsed = parseEdgeQL(`SELECT (${text})`);
+            const stmt = substituteSourceRefs(
+              Array.isArray(parsed) ? parsed[0] : parsed,
+            ) as Statement;
+            return deps.evalSelect(stmt);
+          },
+          { captureAll: true },
+        );
+        if (
+          attempt.ok &&
+          attempt.value !== undefined &&
+          attempt.value.length === 1 &&
+          isScalarValue(attempt.value[0])
+        ) {
           values[field.name] = attempt.value[0] as ScalarValue;
         }
       } else if (text) {
@@ -110,12 +129,20 @@ export const applyPendingInsertDefaults = (
         if (snapshotDefaultCache?.has(field.name)) {
           values[field.name] = snapshotDefaultCache.get(field.name) as ScalarValue;
         } else {
-          const attempt = tryResult(() => {
-            const parsed = parseEdgeQL(`SELECT (${text})`);
-            const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
-            return deps.evalSelect(stmt);
-          }, { captureAll: true });
-          if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
+          const attempt = tryResult(
+            () => {
+              const parsed = parseEdgeQL(`SELECT (${text})`);
+              const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+              return deps.evalSelect(stmt);
+            },
+            { captureAll: true },
+          );
+          if (
+            attempt.ok &&
+            attempt.value !== undefined &&
+            attempt.value.length === 1 &&
+            isScalarValue(attempt.value[0])
+          ) {
             values[field.name] = attempt.value[0] as ScalarValue;
             snapshotDefaultCache?.set(field.name, attempt.value[0] as ScalarValue);
           }
@@ -129,7 +156,10 @@ export const applyPendingInsertDefaults = (
       continue;
     }
 
-    const evaluated = deps.evalFunctionCall(defaultExpr.name, defaultExpr.args as RuntimeFunctionArg[]);
+    const evaluated = deps.evalFunctionCall(
+      defaultExpr.name,
+      defaultExpr.args as RuntimeFunctionArg[],
+    );
     if (isScalarValue(evaluated)) {
       values[field.name] = evaluated;
       continue;

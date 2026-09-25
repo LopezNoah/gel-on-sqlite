@@ -33,18 +33,30 @@ export interface QlastPathDeps {
   resolveBinding: (ctx: IRCompileContext, name: string) => IRSet | undefined;
   setFromTypeRoot: (typeref: TypeRef) => IRSet;
   resolveTypeRef: (ctx: IRCompileContext, name: string) => TypeRef;
-  resolvePointerRef: (ctx: IRCompileContext, source: TypeRef, field: string) => PointerRef | undefined;
+  resolvePointerRef: (
+    ctx: IRCompileContext,
+    source: TypeRef,
+    field: string,
+  ) => PointerRef | undefined;
   resolveBacklinkPointerRef: (
     ctx: IRCompileContext,
     target: TypeRef,
     linkName: string,
     sourceTypeName?: string,
   ) => PointerRef | undefined;
-  extendPathSetDirectional: (source: IRSet, ptrref: PointerRef, direction: "outbound" | "inbound") => IRSet;
+  extendPathSetDirectional: (
+    source: IRSet,
+    ptrref: PointerRef,
+    direction: "outbound" | "inbound",
+  ) => IRSet;
   extendPathSet: (source: IRSet, ptrref: PointerRef) => IRSet;
   synthesizeTypePointerSet: (source: IRSet) => IRSet;
   synthesizeTypeNamePointerSet: (typeSet: IRSet) => IRSet;
-  validateTypeIntersectionOperand: (ctx: IRCompileContext, baseRef: TypeRef, targetRef: TypeRef) => void;
+  validateTypeIntersectionOperand: (
+    ctx: IRCompileContext,
+    baseRef: TypeRef,
+    targetRef: TypeRef,
+  ) => void;
   validateTypeIntersectionPointer: (
     ctx: IRCompileContext,
     baseTypeId: string,
@@ -52,8 +64,15 @@ export interface QlastPathDeps {
     ptrName: string,
   ) => void;
   narrowTypeIntersectionSet: (ctx: IRCompileContext, source: IRSet, typeName: string) => IRSet;
-  lookupEnumScalar: (ctx: IRCompileContext, name: string) => { qualifiedName: string; members: string[] } | undefined;
-  resolvePathToEnumLiteral: (ctx: IRCompileContext, head: string, tail: string | undefined) => IRSet | undefined;
+  lookupEnumScalar: (
+    ctx: IRCompileContext,
+    name: string,
+  ) => { qualifiedName: string; members: string[] } | undefined;
+  resolvePathToEnumLiteral: (
+    ctx: IRCompileContext,
+    head: string,
+    tail: string | undefined,
+  ) => IRSet | undefined;
   literalToSet: (value: string | number | boolean | null) => IRSet;
   failSemantic: (message: string) => never;
   scalarTypeRef: (scalar: string) => TypeRef;
@@ -61,7 +80,12 @@ export interface QlastPathDeps {
     ctx: IRCompileContext,
     qualifiedName: string,
   ) =>
-    | { resolvedLinks: ReadonlyArray<{ name: string; properties?: ReadonlyArray<{ name: string; type: string; required?: boolean }> }> }
+    | {
+        resolvedLinks: ReadonlyArray<{
+          name: string;
+          properties?: ReadonlyArray<{ name: string; type: string; required?: boolean }>;
+        }>;
+      }
     | undefined;
 }
 
@@ -95,14 +119,15 @@ const compileLinkPropertyStep = (
   ctx: IRCompileContext,
   deps: QlastPathDeps,
 ): IRSet => {
-  if (linkSet.expr.kind !== "pointer") throw deferred(`link property '@${propName}' on a non-pointer source`);
+  if (linkSet.expr.kind !== "pointer")
+    throw deferred(`link property '@${propName}' on a non-pointer source`);
   const linkPointer = linkSet.expr as Pointer;
   if (linkPointer.ptrref.isLinkProperty) throw deferred(`nested link property '@${propName}'`);
-  if (linkPointer.ptrref.unionComponents?.length) throw deferred(`polymorphic link property '@${propName}'`);
+  if (linkPointer.ptrref.unionComponents?.length)
+    throw deferred(`polymorphic link property '@${propName}'`);
 
-  const linkOwnerTypeRef = linkPointer.direction === "inbound"
-    ? linkPointer.ptrref.outSource
-    : linkPointer.source.typeref;
+  const linkOwnerTypeRef =
+    linkPointer.direction === "inbound" ? linkPointer.ptrref.outSource : linkPointer.source.typeref;
   const linkDef = deps
     .getResolvedSchemaType(ctx, linkOwnerTypeRef.id)
     ?.resolvedLinks.find((candidate) => candidate.name === linkPointer.ptrref.shortName);
@@ -134,7 +159,11 @@ const compileLinkPropertyStep = (
  * `Set` for an EdgeQL path expression from a grammar-faithful qlast `Path`.
  * Throws `QLAST_DEFERRED` for cases not yet ported (caller falls back).
  */
-export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: QlastPathDeps): IRSet => {
+export const compilePathQlast = (
+  expr: QlPath,
+  ctx: IRCompileContext,
+  deps: QlastPathDeps,
+): IRSet => {
   const steps = expr.steps;
 
   // Enum path: `EnumType.MEMBER` — the first ObjectRef names an enum scalar and
@@ -152,12 +181,16 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
       if (enumInfo && !isBacklink) {
         const ptrSteps = steps.slice(1).filter((step) => kindOf(step) === "Ptr") as QlPtr[];
         if (ptrSteps.length === 0) {
-          deps.failSemantic(`enum path expression lacks an enum member name, as in '${ref.name}.${enumInfo.members[0]}'`);
+          deps.failSemantic(
+            `enum path expression lacks an enum member name, as in '${ref.name}.${enumInfo.members[0]}'`,
+          );
         }
         if (ptrSteps.length > 1) {
           deps.failSemantic(`invalid property reference on an expression of primitive type`);
         }
-        return deps.resolvePathToEnumLiteral(ctx, ref.name, ptrSteps[0].name) ?? deps.literalToSet(null);
+        return (
+          deps.resolvePathToEnumLiteral(ctx, ref.name, ptrSteps[0].name) ?? deps.literalToSet(null)
+        );
       }
     }
   }
@@ -192,7 +225,9 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
         // are not in the schema; the legacy compiler resolves those specially.
         // Defer such binding-rooted paths rather than mis-resolve them.
         if (bound.expr.kind === "select_expr" || (bound.shape?.length ?? 0) > 0) {
-          throw deferred(`binding '${ref.name}' carries a query shape — legacy handles shape-computed access`);
+          throw deferred(
+            `binding '${ref.name}' carries a query shape — legacy handles shape-computed access`,
+          );
         }
         pathTip = bound;
       } else {
@@ -220,9 +255,9 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
       }
       // `.name` on a synthesized `__type__` pointer.
       if (
-        ptr.name === "name"
-        && pathTip.expr.kind === "pointer"
-        && (pathTip.expr as Pointer).ptrref.shortName === "__type__"
+        ptr.name === "name" &&
+        pathTip.expr.kind === "pointer" &&
+        (pathTip.expr as Pointer).ptrref.shortName === "__type__"
       ) {
         pathTip = deps.synthesizeTypeNamePointerSet(pathTip);
         continue;
@@ -232,12 +267,14 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
       // comes from the FOLLOWING `[IS T]` step (the bridge emits Ptr + a
       // TypeIntersection); resolve via the backlink resolver and traverse
       // inbound — matching the live backlink_path / for_expr compilation.
-      const direction = ptr.direction === "<" || ptr.direction === "inbound" ? "inbound" : "outbound";
+      const direction =
+        ptr.direction === "<" || ptr.direction === "inbound" ? "inbound" : "outbound";
       if (direction === "inbound") {
         const next = steps[i + 1];
-        const sourceType = next && kindOf(next) === "TypeIntersection"
-          ? typeExprName((next as QlTypeIntersection).type)
-          : undefined;
+        const sourceType =
+          next && kindOf(next) === "TypeIntersection"
+            ? typeExprName((next as QlTypeIntersection).type)
+            : undefined;
         // Only the TYPED backlink off an OBJECT source matches the live simple
         // backlink branch (for_expr handler). Untyped backlinks carry BaseObject
         // semantics, and scalar/enum sources raise a dedicated error — both have
@@ -245,7 +282,12 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
         if (!sourceType || pathTip.typeref.isScalar) {
           throw deferred(`backlink '<${ptr.name}' (untyped or scalar source) — legacy handles`);
         }
-        const backlinkRef = deps.resolveBacklinkPointerRef(ctx, pathTip.typeref, ptr.name, sourceType);
+        const backlinkRef = deps.resolveBacklinkPointerRef(
+          ctx,
+          pathTip.typeref,
+          ptr.name,
+          sourceType,
+        );
         if (!backlinkRef) throw deferred(`unresolved backlink '<${ptr.name}'`);
         pathTip = deps.extendPathSetDirectional(pathTip, backlinkRef, "inbound");
         continue;
@@ -259,7 +301,11 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
       let ptrref = deps.resolvePointerRef(ctx, pathTip.typeref, ptr.name);
       // A `[IS Super]` narrowing keeps the original rows; a pointer the narrowed
       // view lacks resolves against the underlying root type.
-      if (!ptrref && pathTip.expr.kind === "type_root" && (pathTip.expr as TypeRoot).typeref.id !== pathTip.typeref.id) {
+      if (
+        !ptrref &&
+        pathTip.expr.kind === "type_root" &&
+        (pathTip.expr as TypeRoot).typeref.id !== pathTip.typeref.id
+      ) {
         ptrref = deps.resolvePointerRef(ctx, (pathTip.expr as TypeRoot).typeref, ptr.name);
       }
       if (!ptrref) {
@@ -277,7 +323,8 @@ export const compilePathQlast = (expr: QlPath, ctx: IRCompileContext, deps: Qlas
 
     if (kind === "TypeIntersection") {
       const typeName = typeExprName((step as QlTypeIntersection).type);
-      pathTip = deps.narrowTypeIntersectionSet(ctx, pathTip!, typeName);
+      if (!pathTip) throw deferred("type intersection has no source path");
+      pathTip = deps.narrowTypeIntersectionSet(ctx, pathTip, typeName);
       continue;
     }
 

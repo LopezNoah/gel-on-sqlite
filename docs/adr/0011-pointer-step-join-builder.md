@@ -14,6 +14,7 @@ inline   inbound:   JOIN <target> nx ON nx.<fk> = prev.id
 It depends only on `quoteIdent` (a leaf in `codegen/sql.ts`), so there is no lowering cycle and no need for the `SqlLoweringContext` deps table — it is a pure string builder with a real unit-test surface (`tests/pointer_join.test.ts`, 5 tests pinning the four shapes plus the "non-inbound ⇒ outbound" defaulting the call sites rely on).
 
 **Nine call sites now route through it:**
+
 - Six byte-identical full loops — `tryCompileScalarPointerPathSelectSQL`, `tryCompileLinkPropertyPathSelectSQL` (non-terminal step), the reversed-links json_each path, `buildCorrelatedScalarPointerPath`, the chain-join FROM builder, and the FOR-level join builder — each had its 24-line `if (linkTable) {inbound/outbound} else {inbound/outbound}` replaced by one `pointerStepJoinSql({…})` call.
 - Three first-step-correlation idioms (`oej`, `lj`, `_lj`) seed the FROM with the first junction-and-target join and correlate to the previous alias via a `WHERE`, then append subsequent steps. These were restructured from `if (inbound) { if (!fromSql) … else … }` to `if (!fromSql) { seed } else { pointerStepJoinSql(…) }` — behaviour-identical (the four direction×position combinations produce the same SQL), with only the non-first wiring now routed and the genuinely-different first-step seed left inline.
 

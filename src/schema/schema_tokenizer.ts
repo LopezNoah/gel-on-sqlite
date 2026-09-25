@@ -19,12 +19,12 @@ export type TokenType =
   | "lte"
   | "gt"
   | "gte"
-  | "equal"       // =
+  | "equal" // =
   | "exclamation" // !
-  | "not_equals"  // !=
-  | "assign"      // :=
-  | "arrow"       // ->
-  | "colon2"      // ::
+  | "not_equals" // !=
+  | "assign" // :=
+  | "arrow" // ->
+  | "colon2" // ::
   | "symbol"
   | "eof";
 
@@ -284,13 +284,13 @@ export class Tokenizer {
           tokens.push(this.makeToken("gt", ">", start, line, column));
           break;
         case "!":
-            this.advance();
-            tokens.push(this.makeToken("exclamation", "!", start, line, column));
-            break;
+          this.advance();
+          tokens.push(this.makeToken("exclamation", "!", start, line, column));
+          break;
         case "=":
-            this.advance();
-            tokens.push(this.makeToken("equal", "=", start, line, column));
-            break;
+          this.advance();
+          tokens.push(this.makeToken("equal", "=", start, line, column));
+          break;
         default:
           this.advance();
           tokens.push(this.makeToken("symbol", ch, start, line, column));
@@ -314,7 +314,7 @@ export class Tokenizer {
     value: string,
     start: number,
     line: number,
-    column: number
+    column: number,
   ): Token {
     return { type, value, start, end: this.pos, line, column };
   }
@@ -352,7 +352,7 @@ export class Tokenizer {
       }
 
       // line comment
-      if (ch === "#" ) {
+      if (ch === "#") {
         while (!this.isAtEnd() && this.peek() !== "\n") this.advance();
         continue;
       }
@@ -678,7 +678,7 @@ export class Parser {
   constructor(
     private readonly tokens: Token[],
     private readonly sourceText: string,
-    options: ParseOptions = {}
+    options: ParseOptions = {},
   ) {
     this.options = normalizeParseOptions(options);
   }
@@ -840,7 +840,9 @@ export class Parser {
 
     if (
       this.checkKeyword("abstract") &&
-      (this.checkKeyword("inheritable", 1) || this.checkKeyword("annotation", 1) || this.checkKeyword("annotation", 2))
+      (this.checkKeyword("inheritable", 1) ||
+        this.checkKeyword("annotation", 1) ||
+        this.checkKeyword("annotation", 2))
     ) {
       return this.parseAbstractAnnotation();
     }
@@ -849,7 +851,10 @@ export class Parser {
       return this.parseConstraintDeclaration();
     }
 
-    if (this.checkKeyword("type") || (this.checkKeyword("abstract") && this.checkKeyword("type", 1))) {
+    if (
+      this.checkKeyword("type") ||
+      (this.checkKeyword("abstract") && this.checkKeyword("type", 1))
+    ) {
       return this.parseTypeDeclaration();
     }
 
@@ -1061,10 +1066,10 @@ export class Parser {
       }
 
       if (
-        angleDepth === 0
-        && parenDepth === 0
-        && bracketDepth === 0
-        && (next.type === "semicolon" || next.type === "lbrace")
+        angleDepth === 0 &&
+        parenDepth === 0 &&
+        bracketDepth === 0 &&
+        (next.type === "semicolon" || next.type === "lbrace")
       ) {
         break;
       }
@@ -1130,10 +1135,10 @@ export class Parser {
       }
 
       if (
-        angleDepth === 0
-        && parenDepth === 0
-        && bracketDepth === 0
-        && (token.type === "semicolon" || token.type === "lbrace")
+        angleDepth === 0 &&
+        parenDepth === 0 &&
+        bracketDepth === 0 &&
+        (token.type === "semicolon" || token.type === "lbrace")
       ) {
         return;
       }
@@ -1614,10 +1619,7 @@ export class Parser {
   }
 
   private parseConstraintArg(): ConstraintArgNode {
-    if (
-      (this.check("identifier") || this.check("keyword")) &&
-      this.peekType(1) === "colon"
-    ) {
+    if ((this.check("identifier") || this.check("keyword")) && this.peekType(1) === "colon") {
       const name = this.current().value;
       this.pos++;
       this.expect("colon", "Expected ':' after argument name");
@@ -2031,7 +2033,11 @@ export class Parser {
     if (this.checkKeyword("required", i) || this.checkKeyword("optional", i)) i++;
     if (this.checkKeyword("single", i) || this.checkKeyword("multi", i)) i++;
 
-    if (this.checkKeyword("property", i) || this.checkKeyword("link", i) || this.peekType(i) !== "identifier") {
+    if (
+      this.checkKeyword("property", i) ||
+      this.checkKeyword("link", i) ||
+      this.peekType(i) !== "identifier"
+    ) {
       return false;
     }
 
@@ -2104,9 +2110,9 @@ export class Parser {
       i += 1;
     }
 
-    return this.checkKeyword("on", i)
-      || this.checkKeyword("index", i)
-      || this.isNestedPointerDeclAt(i);
+    return (
+      this.checkKeyword("on", i) || this.checkKeyword("index", i) || this.isNestedPointerDeclAt(i)
+    );
   }
 
   private isNestedPointerDeclAt(offset: number): boolean {
@@ -2253,7 +2259,10 @@ export class Parser {
 
   private expectNameValueInsensitive(value: string, message: string): Token {
     const token = this.current();
-    if ((token.type !== "identifier" && token.type !== "keyword") || token.value.toLowerCase() !== value.toLowerCase()) {
+    if (
+      (token.type !== "identifier" && token.type !== "keyword") ||
+      token.value.toLowerCase() !== value.toLowerCase()
+    ) {
       throw this.error(message, token);
     }
     this.pos += 1;
@@ -2321,14 +2330,18 @@ export class Parser {
 
   private checkName(value: string, offset = 0): boolean {
     const token = this.tokens[this.pos + offset];
-    return !!token && (token.type === "identifier" || token.type === "keyword") && token.value === value;
+    return (
+      !!token && (token.type === "identifier" || token.type === "keyword") && token.value === value
+    );
   }
 
   private checkNameInsensitive(value: string, offset = 0): boolean {
     const token = this.tokens[this.pos + offset];
-    return !!token
-      && (token.type === "identifier" || token.type === "keyword")
-      && token.value.toLowerCase() === value.toLowerCase();
+    return (
+      !!token &&
+      (token.type === "identifier" || token.type === "keyword") &&
+      token.value.toLowerCase() === value.toLowerCase()
+    );
   }
 
   private matchKeyword(value: string): boolean {
@@ -2375,7 +2388,7 @@ export class Parser {
 
   private error(message: string, token: Token): SyntaxError {
     return new SyntaxError(
-      `${message}. Found '${token.value || token.type}' at ${token.line}:${token.column}`
+      `${message}. Found '${token.value || token.type}' at ${token.line}:${token.column}`,
     );
   }
 
@@ -2395,7 +2408,10 @@ export function parseDocument(input: string, options: ParseOptions = {}): Docume
   return new Parser(tokens, input, options).parseDocument();
 }
 
-export function parseTypeDeclaration(input: string, options: ParseOptions = {}): TypeDeclarationNode {
+export function parseTypeDeclaration(
+  input: string,
+  options: ParseOptions = {},
+): TypeDeclarationNode {
   const tokens = tokenize(input);
   const parser = new Parser(tokens, input, options);
   const node = parser.parseTypeDeclaration();

@@ -5,32 +5,32 @@ Regenerated from a fresh `npm test` run (Vitest, full suite) on 2026-06-25.
 **Current failing tests: 751 across 16 files** (down from 819 at the previous snapshot).
 
 Each file below starts with a summary table grouping its failing tests by query
-*behavior* (not the thrown error), followed by the failing tests in each group. For
+_behavior_ (not the thrown error), followed by the failing tests in each group. For
 every group there is a **representative** example showing the EdgeQL, the relevant
-ESDL, and the **expected SQL** the engine *should* generate — derived from the schema +
+ESDL, and the **expected SQL** the engine _should_ generate — derived from the schema +
 EdgeQL + Gel semantics and the engine's physical layout, not from running the (broken)
 query. See the layout conventions note below.
 
 ## Failure counts per file
 
-| Count | File |
-|---:|---|
-| 141 | tests/edgeql_functions.test.ts |
-| 128 | tests/edgeql_expressions.test.ts |
-| 83 | tests/edgeql_select.test.ts |
-| 77 | tests/edgeql_scope.test.ts |
-| 74 | tests/edgeql_functions_inline.test.ts |
-| 63 | tests/edgeql_select_interpreter.test.ts |
-| 39 | tests/edgeql_insert.test.ts |
-| 35 | tests/edgeql_linkprops.test.ts |
-| 29 | tests/edgeql_calls.test.ts |
-| 23 | tests/edgeql_advtypes.test.ts |
-| 19 | tests/edgeql_for.test.ts |
-| 18 | tests/edgeql_expr_aliases.test.ts |
-| 15 | tests/edgeql_linkatoms.test.ts |
-| 4 | tests/edgeql_filter.test.ts |
-| 2 | tests/edgeql_userddl.test.ts |
-| 1 | tests/dump01.test.ts |
+| Count | File                                    |
+| ----: | --------------------------------------- |
+|   141 | tests/edgeql_functions.test.ts          |
+|   128 | tests/edgeql_expressions.test.ts        |
+|    83 | tests/edgeql_select.test.ts             |
+|    77 | tests/edgeql_scope.test.ts              |
+|    74 | tests/edgeql_functions_inline.test.ts   |
+|    63 | tests/edgeql_select_interpreter.test.ts |
+|    39 | tests/edgeql_insert.test.ts             |
+|    35 | tests/edgeql_linkprops.test.ts          |
+|    29 | tests/edgeql_calls.test.ts              |
+|    23 | tests/edgeql_advtypes.test.ts           |
+|    19 | tests/edgeql_for.test.ts                |
+|    18 | tests/edgeql_expr_aliases.test.ts       |
+|    15 | tests/edgeql_linkatoms.test.ts          |
+|     4 | tests/edgeql_filter.test.ts             |
+|     2 | tests/edgeql_userddl.test.ts            |
+|     1 | tests/dump01.test.ts                    |
 
 ## Physical layout conventions used in the expected SQL
 
@@ -43,27 +43,24 @@ query. See the layout conventions note below.
 - Set literal `{1,2,3}` → `(SELECT ? AS "value" UNION ALL SELECT ? UNION ALL SELECT ?)`; empty set → 0-row source.
 - Aliases shown in canonical `a0/a1/a2…` form (renamed by first appearance), matching `bin/inspect.ts sql`.
 
-
-
-
 ---
 
 ## tests/edgeql_functions.test.ts (141)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 44 | date/time/duration/calendar funcs | `to_datetime` / `cal::to_local_*` / `duration_truncate` / `range_unpack` over temporal types — string parsing, tz handling, calendar arithmetic |
-| 15 | array access/mutation (get/fill/replace/set/insert/join) | `array_get` / `array_fill` / `array_replace` / `array_set` / `array_insert` / `array_join` — element-typed and tuple/array-element variants |
-| 14 | aggregates (count/sum/min/max/all/any) | `count` / `sum` / `min` / `max` / `all` / `any` over sets, objects, and non-numeric scalars |
-| 11 | cast/bytes/encoding conversion | `<bytes>` ↔ str/json/int/uuid round-trips, `to_bytes`/`to_intN`/`to_uuid`, `enc::base64_*` |
-| 11 | math/numeric/trig funcs | `math::sin/cos/tan/cot/acos/asin/atan/atan2/exp/ln/lg/log/var/stddev` numeric precision + range checks |
-| 9 | array_agg / array_unpack over objects/tuples/FOR | `array_agg` of objects, FOR-arrays, tuples, empty set; `array_unpack` element-`IN` |
-| 8 | enumerate() | `enumerate()` over objects, tuples, nested sets, aggregates, multi-properties |
-| 8 | string predicates / numeric rounding | `len` / `contains` / `find` / `str_lower/upper/title` / `str_pad_*` / `str_trim*` / `round` over multi-sets and edge cases |
-| 7 | cast/conversion to_str (format strings) | `to_str(x, fmt)` Postgres-style datetime/numeric format templates |
-| 6 | complex object/union signatures | UDF calls with `File | URL` union args, type-name-as-function (`str()`/`int32()`), `sys::approximate_count` |
-| 5 | regex funcs | `re_match` / `re_match_all` / `re_test` — capture groups, multi-match arrays |
-| 3 | generate_series / sequence / bitwise | `_gen_series`, `sequence_reset`, `bit_count` |
+| Count | Query group                                              | Pattern                                                                                                                                         |
+| ----: | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+|    44 | date/time/duration/calendar funcs                        | `to_datetime` / `cal::to_local_*` / `duration_truncate` / `range_unpack` over temporal types — string parsing, tz handling, calendar arithmetic |
+|    15 | array access/mutation (get/fill/replace/set/insert/join) | `array_get` / `array_fill` / `array_replace` / `array_set` / `array_insert` / `array_join` — element-typed and tuple/array-element variants     |
+|    14 | aggregates (count/sum/min/max/all/any)                   | `count` / `sum` / `min` / `max` / `all` / `any` over sets, objects, and non-numeric scalars                                                     |
+|    11 | cast/bytes/encoding conversion                           | `<bytes>` ↔ str/json/int/uuid round-trips, `to_bytes`/`to_intN`/`to_uuid`, `enc::base64_*`                                                      |
+|    11 | math/numeric/trig funcs                                  | `math::sin/cos/tan/cot/acos/asin/atan/atan2/exp/ln/lg/log/var/stddev` numeric precision + range checks                                          |
+|     9 | array_agg / array_unpack over objects/tuples/FOR         | `array_agg` of objects, FOR-arrays, tuples, empty set; `array_unpack` element-`IN`                                                              |
+|     8 | enumerate()                                              | `enumerate()` over objects, tuples, nested sets, aggregates, multi-properties                                                                   |
+|     8 | string predicates / numeric rounding                     | `len` / `contains` / `find` / `str_lower/upper/title` / `str_pad_*` / `str_trim*` / `round` over multi-sets and edge cases                      |
+|     7 | cast/conversion to_str (format strings)                  | `to_str(x, fmt)` Postgres-style datetime/numeric format templates                                                                               |
+|     6 | complex object/union signatures                          | UDF calls with `File                                                                                                                            | URL` union args, type-name-as-function (`str()`/`int32()`), `sys::approximate_count` |
+|     5 | regex funcs                                              | `re_match` / `re_match_all` / `re_test` — capture groups, multi-match arrays                                                                    |
+|     3 | generate_series / sequence / bitwise                     | `_gen_series`, `sequence_reset`, `bit_count`                                                                                                    |
 
 ### date/time/duration/calendar funcs (44)
 
@@ -115,6 +112,7 @@ query. See the layout conventions note below.
 **Representative:** `test_edgeql_functions_unix_to_datetime_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT <str>to_datetime(1590595184);
 -- expected result: "2020-05-27T15:59:44+00:00"
@@ -123,6 +121,7 @@ SELECT <str>to_datetime(1590595184);
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- to_datetime(<unix epoch seconds>) must build a UTC ISO-8601 timestamp,
 -- then <str> renders it with a "+00:00" offset (note: NOT a trailing "Z").
@@ -159,6 +158,7 @@ SELECT (
 **Representative:** `test_edgeql_functions_array_join_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT array_join(['one', 'two', 'three'], {', ', '@!'});
 -- expected (multi separator → multi result): {'one, two, three', 'one@!two@!three'}
@@ -167,6 +167,7 @@ SELECT array_join(['one', 'two', 'three'], {', ', '@!'});
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- array_join(arr, sep): registry template walks the array via json_each and
 -- group_concat's the elements. With a MULTI separator the call multiplies out
@@ -203,6 +204,7 @@ FROM (SELECT ? AS "sep" UNION ALL SELECT ? AS "sep");
 **Representative:** `test_edgeql_functions_min_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT min({'10', '20', '-3', '4'});   -- str ordering → '-3'
 SELECT min({10, 2.5, -3.1, 4});        -- numeric → -3.1
@@ -212,6 +214,7 @@ SELECT min(<int64>{});                  -- empty set → {}
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- min/max over a scalar set is the SQLite aggregate over the element source.
 -- The element source carries the value under "value":
@@ -244,6 +247,7 @@ SELECT (
 **Representative:** `test_edgeql_functions_int_bytes_conversion_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT to_int16(b'\x01', Endian.Big)         -- error: not enough bytes for int16
 SELECT to_int16(to_bytes(<int32>123, Endian.Big), Endian.Big)  -- error: 4 bytes for int16
@@ -252,6 +256,7 @@ SELECT to_int16(to_bytes(<int32>123, Endian.Big), Endian.Big)  -- error: 4 bytes
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- to_intN(bytes, endian) lowers through the _gel_to_intN SQLite UDF, passing the
 -- enum's value as the endian selector. The bytes literal b'\x01' is a BLOB:
@@ -281,6 +286,7 @@ SELECT _gel_to_int16(CAST(? AS BLOB), 'Big') AS "value";
 **Representative:** `test_edgeql_functions_math_sin_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT math::sin(-math::pi() * 2);   -- expected ≈ 0.0 (exact reference value)
 SELECT math::cos(-math::pi());       -- expected -1.0
@@ -289,6 +295,7 @@ SELECT math::cos(-math::pi());       -- expected -1.0
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- Trig funcs lower to the _gel_* SQLite UDFs; pi() is the SQLite pi() builtin:
 SELECT _gel_sin((-(pi()) * 2)) AS "value";
@@ -314,6 +321,7 @@ SELECT _gel_sin((-(pi()) * 2)) AS "value";
 **Representative:** `test_edgeql_functions_array_agg_13`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT
     Issue {
@@ -325,6 +333,7 @@ ORDER BY Issue.number;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text {
     required number: issue_num_t;
@@ -334,6 +343,7 @@ type User extending Dictionary { ... }   # has scalar `name`
 ```
 
 **Expected SQL:**
+
 ```sql
 -- array_agg over an object shape builds a json_group_array of json_object rows,
 -- correlated to the outer Issue via the watchers junction table:
@@ -370,6 +380,7 @@ ORDER BY a0."number";
 **Representative:** `test_edgeql_functions_enumerate_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT enumerate((SELECT User.name ORDER BY User.name));  -- {(0,'Elvis'),(1,'Yury')}
 SELECT enumerate({(1, 2), (3, 4)});                       -- {(0,(1,2)),(1,(3,4))}
@@ -379,6 +390,7 @@ WITH A := {'a', 'b'} SELECT (A, enumerate(A));
 **Relevant ESDL:** (`enumerate_03` is scalar; `enumerate_05` uses `User { name }` — see schema above)
 
 **Expected SQL:**
+
 ```sql
 -- enumerate(set) pairs each element with its 0-based index via a window function,
 -- emitting a 2-tuple [idx, value]; ORDER BY inside fixes the index assignment:
@@ -409,6 +421,7 @@ FROM (
 **Representative:** `test_edgeql_functions_str_case_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT str_lower({'HeLlO', 'WoRlD!', 'ПриВет', 'мИр'});
 SELECT str_title({'HeLlO', 'WoRlD!'});
@@ -417,6 +430,7 @@ SELECT str_title({'HeLlO', 'WoRlD!'});
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- str_lower/upper lower to SQLite lower()/upper() over each element of the set
 -- source. With a MULTI argument the call distributes element-wise:
@@ -442,6 +456,7 @@ FROM (SELECT ? AS "value" UNION ALL SELECT ? AS "value"
 **Representative:** `test_edgeql_functions_to_str_05`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT to_str(123456789, '999,999,999');   -- expected "123,456,789"
 SELECT to_str(123456789, 'FM999,999,999,999');  -- expected "123,456,789"
@@ -451,6 +466,7 @@ SELECT to_str(123456789, 'S999,999,999,999');    -- expected "+123,456,789"
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- to_str(numeric, fmt) and to_str(datetime, fmt) require a Postgres-style
 -- to_char() format-string engine. The single-arg form lowers to CAST(... AS TEXT)
@@ -474,6 +490,7 @@ SELECT _gel_to_char(123456789, '999,999,999') AS "value";
 **Representative:** `test_edgeql_functions_complex_types_02`
 
 **EdgeQL:**
+
 ```edgeql
 create function foo(x: str) -> optional File | URL using (
     select {File, URL} filter .name = x limit 1
@@ -484,12 +501,14 @@ select foo({"edgedb.com", "screenshot.png"}).name;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type File extending Named;                       # has `name`
 type URL extending Named { required address: str; }   # has `name`, `address`
 ```
 
 **Expected SQL:**
+
 ```sql
 -- A UDF returning a polymorphic union (File | URL) inlines to a UNION ALL over
 -- the concrete branches, each tagged with its __source_type discriminator, then
@@ -521,6 +540,7 @@ SELECT (
 **Representative:** `test_edgeql_functions_re_match_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT re_match('(?i)AB', 'AbabaB');   -- expected ['Ab'] (array<str> of groups/whole match)
 SELECT re_match('ac', 'AbabaB');        -- expected {} (no match → empty set)
@@ -530,6 +550,7 @@ SELECT EXISTS re_match('ac', 'AbabaB'); -- false
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- re_match lowers through the _gel_re_match_first UDF; the result is an
 -- array<str> (capture groups, or the whole match when no groups). A non-match
@@ -550,6 +571,7 @@ SELECT _gel_re_match_first(?, ?) AS "value";
 **Representative:** `test_edgeql_functions__genseries_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT _gen_series(1, 10)       -- {1,2,3,4,5,6,7,8,9,10}
 SELECT _gen_series(1, 10, 2)    -- {1,3,5,7,9}
@@ -559,6 +581,7 @@ SELECT _gen_series(1n, 10n)     -- bigint series
 **Relevant ESDL:** (none)
 
 **Expected SQL:**
+
 ```sql
 -- _gen_series(start, stop[, step]) is a set-returning function → a row source.
 -- It should lower to a recursive CTE producing one "value" row per element:
@@ -575,31 +598,29 @@ SELECT "value" FROM (
 
 **Why it fails today:** `_gen_series` is not lowered to a row-producing source (inspect emits a placeholder `SELECT NULL AS "id"` — the set-returning recursive-CTE form is missing), so it yields no rows. `sequence_reset(INTROSPECT my_seq_01[, n])` needs sequence-object support, and `bit_count(<intN>val)` (`bitwise_15`) needs the `_gel_bit_count` UDF to honor the int width across int16/32/64.
 
-
-
 ---
 
 ## tests/edgeql_expressions.test.ts (128)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 23 | Cross-type validity matrices | Generated `<a> op <b>` over scalar type pairs; valid combos compute / `IS <type>`, invalid throw `cannot be applied to operands` |
-| 21 | Range & multirange constructors / bounds / casts / JSON | `range(...)`, `multirange(...)`, empty ranges, `range_get_*`, cross-type casts, `<json>` round-trip |
-| 9 | Error-only diagnostics (parse / type / overflow) | `toThrow(...)` for malformed literals, scalar index, bad casts, stack overflow, id assignment |
-| 9 | Tuple equality / indirection / named tuples | `(...) = (...)`, named-tuple field/positional access, nested-tuple indirection through `[0]`, decimal eq |
-| 9 | Array construction / index / concat / nested | nested `array<array<...>>`, `++`, array-of-tuple, empty-element collapse, element-wise collection cast |
-| 7 | `assert*` family | `assert`, `assert_single`, `assert_exists`, `assert_distinct` with messages, params, shapes |
-| 7 | IF...ELSE conditional | set-valued branches/conditions, chained `IF`, parameterized condition, implicit-cast common type |
-| 7 | Cardinality singleton violations | `ORDER BY`/`LIMIT`/`OFFSET`/`DISTINCT`/`UNION`/`EXISTS` over a multi path must throw singleton error |
-| 6 | WITH aliases & alias projections | `WITH a := {...}`, alias as shape computed, union of aliased object sets |
-| 5 | String escapes / line continuation / interpolation | `\`-newline collapse, invalid escape errors, `\(expr)` interpolation, raw-bytes literals |
-| 5 | Membership `IN` / `NOT IN` | element-wise `_ IN {set}`, with WITH-bound set / subquery / empty set |
-| 4 | Casts (scalar & collection) | tuple→array error, computed-shape division common type, float/decimal UNION error, cast-to-function error |
-| 4 | Path interpretation / partial-path errors | `SELECT .1`, `Issue.number changes the interpretation of Issue` |
-| 4 | DISTINCT / set-op over tuples & objects | `DISTINCT {(), ()}`, incompatible set-constructor types, schema-object UNION |
-| 4 | Params / variables | positional/named params, `OPTIONAL`/`REQUIRED`, `?? default`, `<array<T>>$x` |
-| 3 | Introspection / TYPEOF | `INTROSPECT TYPEOF`, `INTROSPECT TYPEOF BaseObject`, introspect-collection error |
-| 1 | Empty-set propagation | `<int64>{} + 1` collapses whole expr to `[]` |
+| Count | Query group                                             | Pattern                                                                                                                          |
+| ----: | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+|    23 | Cross-type validity matrices                            | Generated `<a> op <b>` over scalar type pairs; valid combos compute / `IS <type>`, invalid throw `cannot be applied to operands` |
+|    21 | Range & multirange constructors / bounds / casts / JSON | `range(...)`, `multirange(...)`, empty ranges, `range_get_*`, cross-type casts, `<json>` round-trip                              |
+|     9 | Error-only diagnostics (parse / type / overflow)        | `toThrow(...)` for malformed literals, scalar index, bad casts, stack overflow, id assignment                                    |
+|     9 | Tuple equality / indirection / named tuples             | `(...) = (...)`, named-tuple field/positional access, nested-tuple indirection through `[0]`, decimal eq                         |
+|     9 | Array construction / index / concat / nested            | nested `array<array<...>>`, `++`, array-of-tuple, empty-element collapse, element-wise collection cast                           |
+|     7 | `assert*` family                                        | `assert`, `assert_single`, `assert_exists`, `assert_distinct` with messages, params, shapes                                      |
+|     7 | IF...ELSE conditional                                   | set-valued branches/conditions, chained `IF`, parameterized condition, implicit-cast common type                                 |
+|     7 | Cardinality singleton violations                        | `ORDER BY`/`LIMIT`/`OFFSET`/`DISTINCT`/`UNION`/`EXISTS` over a multi path must throw singleton error                             |
+|     6 | WITH aliases & alias projections                        | `WITH a := {...}`, alias as shape computed, union of aliased object sets                                                         |
+|     5 | String escapes / line continuation / interpolation      | `\`-newline collapse, invalid escape errors, `\(expr)` interpolation, raw-bytes literals                                         |
+|     5 | Membership `IN` / `NOT IN`                              | element-wise `_ IN {set}`, with WITH-bound set / subquery / empty set                                                            |
+|     4 | Casts (scalar & collection)                             | tuple→array error, computed-shape division common type, float/decimal UNION error, cast-to-function error                        |
+|     4 | Path interpretation / partial-path errors               | `SELECT .1`, `Issue.number changes the interpretation of Issue`                                                                  |
+|     4 | DISTINCT / set-op over tuples & objects                 | `DISTINCT {(), ()}`, incompatible set-constructor types, schema-object UNION                                                     |
+|     4 | Params / variables                                      | positional/named params, `OPTIONAL`/`REQUIRED`, `?? default`, `<array<T>>$x`                                                     |
+|     3 | Introspection / TYPEOF                                  | `INTROSPECT TYPEOF`, `INTROSPECT TYPEOF BaseObject`, introspect-collection error                                                 |
+|     1 | Empty-set propagation                                   | `<int64>{} + 1` collapses whole expr to `[]`                                                                                     |
 
 ### Cross-type validity matrices (23)
 
@@ -632,6 +653,7 @@ These are generated by looping over the `VALUES` scalar matrix at the top of the
 **Representative:** `test_edgeql_expr_valid_arithmetic_08`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT <bigint>1 + <float64>1;              -- throws: numeric + float invalid
 SELECT (<bigint>1 + <int64>1) IS bigint;    -- [true]: numeric + int preserves numeric
@@ -639,6 +661,7 @@ SELECT (<decimal>1.0 / <int64>1) IS decimal;-- [true]
 ```
 
 **Expected SQL:** (the invalid arm must never reach SQL — it errors at compile time. The valid `IS` arm resolves the type check at compile time:)
+
 ```sql
 -- SELECT (<bigint>1 + <int64>1) IS bigint;
 SELECT json('true') AS "value"
@@ -676,6 +699,7 @@ The residual range/multirange tail: empty-range construction (`range(<T>{}, empt
 **Representative:** `test_edgeql_expr_range_50`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT (
   range(<int64>{}, empty := true),
@@ -690,6 +714,7 @@ SELECT (
 ```
 
 **Expected SQL:** a 4-element tuple of ranges; each range built via the `_gel_range` runtime fn, then JSON-encoded as a tuple:
+
 ```sql
 SELECT (SELECT json_array(t0, t1, t2, t3) FROM (SELECT
     _gel_range(NULL, NULL, NULL, NULL, 1, 1) AS t0,  -- empty := true
@@ -698,6 +723,7 @@ SELECT (SELECT json_array(t0, t1, t2, t3) FROM (SELECT
     _gel_range(1, NULL, NULL, NULL, 1)       AS t3   -- unbounded upper
 )) AS "value"
 ```
+
 (Confirmed idioms: `range(2,10)` → `_gel_range(2, 10, NULL, NULL, 1)`; `<json>range(...)` wraps the same in `json_quote`; `multirange([...])` → `_gel_multirange(json_array(_gel_range(...)))`; `range_is_empty(...)` → `_gel_range_is_empty(...)`; `range_get_upper(...)` → `_gel_range_get_upper(...)`.)
 
 **Why it fails today:** `range(<T>{}, empty := true)` and the unbounded-bound combinations aren't all constructed/encoded correctly; several subcases throw at parse time on `empty :=` / unbounded args, mis-order multirange normalization, or fail to round-trip range↔JSON with discrete inclusive-upper normalization.
@@ -719,6 +745,7 @@ All assert `toThrow(<regex>)` for queries that must be rejected: out-of-range/ma
 **Representative:** `test_edgeql_expr_array_04`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT [];   -- throws: expression returns value of indeterminate type
 ```
@@ -744,11 +771,13 @@ Tuple `=`/`!=` (with implicit numeric promotion, positional comparison of named 
 **Representative:** `test_edgeql_expr_tuple_06`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT (1, 'foo') = (a := 1, b := 'foo');   -- [true] (named compared positionally)
 ```
 
 **Expected SQL:** each tuple is JSON-encoded element-wise, then compared as JSON values:
+
 ```sql
 SELECT (SELECT CASE WHEN l IS NULL OR r IS NULL THEN NULL
                     WHEN l = r THEN json('true') ELSE json('false') END
@@ -781,12 +810,14 @@ Nested `array<array<...>>` construction/index/slice/concat, array-of-named-tuple
 **Representative:** `test_edgeql_expr_array_concat_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT [(1, 'a')] ++ [(2.0, $$\$$), (3.0, r'\n')];
 -- → [[[1,"a"],[2,"\\"],[3,"\\n"]]]   (element 0 promoted int->float)
 ```
 
 **Expected SQL:** concat two json arrays of tuple-encoded elements:
+
 ```sql
 SELECT (SELECT json_group_array(value)
         FROM (SELECT value FROM json_each(json_array(json_array(1, 'a')))
@@ -794,6 +825,7 @@ SELECT (SELECT json_group_array(value)
               SELECT value FROM json_each(json_array(json_array(2.0, '\'),
                                                      json_array(3.0, '\n'))))) AS "value"
 ```
+
 (Confirmed idiom: `[1,2] ++ [3]` → `json_group_array` over `json_each(...) UNION ALL json_each(...)`.)
 
 **Why it fails today:** mixing element types across the two array literals (int vs float in element 0) isn't unified to a common element type before concat, and array-of-tuple element encoding / nested-array depth isn't preserved through `++`.
@@ -813,6 +845,7 @@ SELECT (SELECT json_group_array(value)
 **Representative:** `test_edgeql_assert_exists_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT assert_exists(
   (SELECT User { name } FILTER .name IN {"User 1", "User 2"})
@@ -822,11 +855,13 @@ SELECT assert_exists(
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary;   # Dictionary -> required name: str
 ```
 
 **Expected SQL:** `assert_exists` is a pass-through over the row source plus a non-empty guard; the shape `{ name }` projects the scalar column:
+
 ```sql
 SELECT json_object('name', a0."name") AS "value"
 FROM (SELECT 'default::User' AS "__source_type", "id" AS "id", "name" AS "name"
@@ -854,12 +889,14 @@ Set-valued THEN/ELSE branches and set-valued conditions produce a cross-product 
 **Representative:** `test_edgeql_expr_if_else_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT 'yes' IF True ELSE {'no', 'or', 'maybe'};            -- ["yes"]
 SELECT 'yes' IF {True, False} ELSE {'no', 'or', 'maybe'};   -- ["yes","no","or","maybe"]
 ```
 
 **Expected SQL:** the THEN source is emitted where the condition is true, UNION ALL the ELSE source where false:
+
 ```sql
 WITH cond_raw AS (SELECT json('true') AS "r"),
      cond_q AS (SELECT (CASE WHEN "r" IN (1,'true') THEN 1
@@ -889,6 +926,7 @@ Clauses requiring a singleton (`ORDER BY`, `LIMIT`, `OFFSET`, and the `DISTINCT`
 **Representative:** `test_edgeql_expr_cardinality_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Issue LIMIT LogEntry.spent_time;
 -- throws: possibly more than one element returned by an expression
@@ -896,6 +934,7 @@ SELECT Issue LIMIT LogEntry.spent_time;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type LogEntry extending Owned, Text { required spent_time: int64; }
 type Issue extending Named, Owned, Text { multi time_spent_log: LogEntry; ... }
@@ -919,12 +958,14 @@ type Issue extending Named, Owned, Text { multi time_spent_log: LogEntry; ... }
 **Representative:** `test_edgeql_expr_alias_01`
 
 **EdgeQL:**
+
 ```edgeql
 WITH a := {1, 2}, b := {2, 3}
 SELECT a FILTER a = b;   -- [2]
 ```
 
 **Expected SQL:** both bindings are set sources; the filter is an existential equality between them:
+
 ```sql
 SELECT a0."value" AS "value"
 FROM (SELECT 1 AS "value" UNION ALL SELECT 2 AS "value") a0
@@ -948,11 +989,13 @@ Backslash-newline line-continuation collapses to nothing in normal strings (raw 
 **Representative:** `test_edgeql_expr_str_interpolation_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT "1 + 1 = \(1 + 1)";   -- ["1 + 1 = 2"]
 ```
 
 **Expected SQL:** interpolation desugars to string concat with the inner expression cast to `str`:
+
 ```sql
 SELECT ('1 + 1 = ' || CAST((1 + 1) AS TEXT)) AS "value"
 ```
@@ -972,11 +1015,13 @@ Element-wise `_ IN {set}` / `_ NOT IN {set}` filters, including over a `WITH`-bo
 **Representative:** `test_edgeql_expr_op_14`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT _ := {9, 1, 13} FILTER _ IN {11, 12, 13};   -- {13}
 ```
 
 **Expected SQL:** the candidate set is the row source; the `IN` filter is an existential over the set literal:
+
 ```sql
 SELECT "value" AS "value"
 FROM (SELECT 9 AS "value" UNION ALL SELECT 1 AS "value" UNION ALL SELECT 13 AS "value") a0
@@ -999,6 +1044,7 @@ Tuple→array cast must error, computed-shape float/int division common type, `U
 **Representative:** `test_edgeql_cast_to_function_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT <to_str>1;   -- throws: "does not exist" (to_str is a function, not a type)
 ```
@@ -1019,12 +1065,14 @@ A partial path `.1` with no enclosing shape, and DML/shape forms where a second 
 **Representative:** `test_edgeql_expr_paths_06`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Issue.owner { foo := Issue.number };
 -- throws: 'Issue.number' changes the interpretation of 'Issue'
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text {
   overloaded required link owner { property since: datetime; }
@@ -1048,12 +1096,14 @@ type Issue extending Named, Owned, Text {
 **Representative:** `test_edgeql_expr_setop_12`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT DISTINCT {(), ()};                 -- [[]]
 SELECT DISTINCT {(1,(2,3)), (1,(2,3))};   -- [[1,[2,3]]]
 ```
 
 **Expected SQL:** the tuples are JSON-encoded then de-duplicated:
+
 ```sql
 SELECT DISTINCT "value" AS "value"
 FROM (SELECT json_array() AS "value" UNION ALL SELECT json_array() AS "value")
@@ -1073,6 +1123,7 @@ Positional `$0` and named `$x` params; `REQUIRED` (missing → error) vs `OPTION
 **Representative:** `test_edgeql_expr_variables_04`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT <int64>$x;                  -- throws "argument $x is required"
 SELECT <OPTIONAL int64>$x ?? -1;   -- [-1]  (param unbound -> empty -> coalesce)
@@ -1080,6 +1131,7 @@ SELECT <REQUIRED int64>$x ?? -1;   -- [7]   (param bound to 7)
 ```
 
 **Expected SQL:** the param is a bind placeholder; `OPTIONAL` makes the source possibly-empty and `??` supplies the default:
+
 ```sql
 -- SELECT <OPTIONAL int64>$x ?? -1;
 SELECT COALESCE((SELECT ? AS "value"), -1) AS "value"
@@ -1099,12 +1151,14 @@ SELECT COALESCE((SELECT ? AS "value"), -1) AS "value"
 **Representative:** `test_edgeql_introspect_without_shape`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT (INTROSPECT TYPEOF BaseObject);
 -- → 1 row; res[0].__tname__ === "schema::ObjectType"
 ```
 
 **Expected SQL:** introspection resolves to a row from the schema metadata (the `schema::ObjectType` describing `BaseObject`):
+
 ```sql
 SELECT json_object('id', a0."id", '__tname__', 'schema::ObjectType') AS "value"
 FROM (SELECT "id" FROM "schema__objecttype" WHERE "name" = 'std::BaseObject') a0
@@ -1121,6 +1175,7 @@ An empty set as an operand collapses the whole expression to the empty set; bare
 **Representative:** `test_edgeql_expr_emptyset_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT <int64>{} + 1;   -- []
 SELECT 1 + <int64>{};   -- []
@@ -1128,6 +1183,7 @@ SELECT {};              -- throws "expression returns value of indeterminate typ
 ```
 
 **Expected SQL:** the empty-set side is a 0-row source, so the `+` join produces no rows:
+
 ```sql
 SELECT (a0."value" + 1) AS "value"
 FROM (SELECT NULL AS "value" WHERE 0) a0
@@ -1139,27 +1195,26 @@ FROM (SELECT NULL AS "value" WHERE 0) a0
 
 Total: 23+21+11+9+9+9+7+7+7+6+5+5+4+4+4+4+3+1 = 139 tests across 18 groups.
 
-
 ---
 
 ## tests/edgeql_select.test.ts (83)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 11 | select setops (UNION/EXCEPT/INTERSECT) | Set algebra over object/scalar sets, including in FILTER / `?=` / `except`-`intersect` |
-| 9 | select polymorphic (`[IS T]` / `Object[IS A\|B]`) | Type-narrowing projection over a heterogeneous base set, incl. universal `Object` |
-| 8 | select expr objects (objects in arrays/tuples) | `array_agg(Obj)` / `[Obj]` / `(Obj, …)` then index/unpack/path back into objects |
-| 6 | select subqueries (correlated EXISTS) | `FILTER EXISTS (SELECT … FILTER … = OuterRef)` with backlink correlation |
-| 5 | select alias indirection | WITH-bound type variant whose computed shape is path-accessed downstream |
-| 5 | select cross (cartesian) | Cross product of object/scalar sets via `++`, tuples, nested aggregates |
-| 5 | introspection / schema (`schema::`, `__type__`, `introspect`) | Reflection over `schema::ObjectType`/`Function` or `__type__`/`introspect` shapes |
-| 4 | collection shape (objects inside arrays/tuples) | Object placed in `[...]`/`(...)` collection then shaped/round-tripped |
-| 3 | select computable (multi/computed-link-id) | Computed pointer (`multi m`, `.todo.id`, `[[1]]`) in a shape |
-| 3 | select tvariant (type variant) | Shape-local computed link reusing/extending an outer path |
-| 3 | select tid position (`*` / `**` splat ordering) | Splat `*`/`**` must emit `__tid__` as first pointer key |
-| 3 | free object (DISTINCT / nested) | `SELECT { x := … }` free-object set, distinctness + nested path access |
-| 2 | select slice (string/array/json) | `[a:b]` slicing with negative/optional/empty bounds across str/array/json |
-| 16 | singletons (one-off behaviors) | Each a distinct failing behavior (see list) |
+| Count | Query group                                                   | Pattern                                                                                |
+| ----: | ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+|    11 | select setops (UNION/EXCEPT/INTERSECT)                        | Set algebra over object/scalar sets, including in FILTER / `?=` / `except`-`intersect` |
+|     9 | select polymorphic (`[IS T]` / `Object[IS A\|B]`)             | Type-narrowing projection over a heterogeneous base set, incl. universal `Object`      |
+|     8 | select expr objects (objects in arrays/tuples)                | `array_agg(Obj)` / `[Obj]` / `(Obj, …)` then index/unpack/path back into objects       |
+|     6 | select subqueries (correlated EXISTS)                         | `FILTER EXISTS (SELECT … FILTER … = OuterRef)` with backlink correlation               |
+|     5 | select alias indirection                                      | WITH-bound type variant whose computed shape is path-accessed downstream               |
+|     5 | select cross (cartesian)                                      | Cross product of object/scalar sets via `++`, tuples, nested aggregates                |
+|     5 | introspection / schema (`schema::`, `__type__`, `introspect`) | Reflection over `schema::ObjectType`/`Function` or `__type__`/`introspect` shapes      |
+|     4 | collection shape (objects inside arrays/tuples)               | Object placed in `[...]`/`(...)` collection then shaped/round-tripped                  |
+|     3 | select computable (multi/computed-link-id)                    | Computed pointer (`multi m`, `.todo.id`, `[[1]]`) in a shape                           |
+|     3 | select tvariant (type variant)                                | Shape-local computed link reusing/extending an outer path                              |
+|     3 | select tid position (`*` / `**` splat ordering)               | Splat `*`/`**` must emit `__tid__` as first pointer key                                |
+|     3 | free object (DISTINCT / nested)                               | `SELECT { x := … }` free-object set, distinctness + nested path access                 |
+|     2 | select slice (string/array/json)                              | `[a:b]` slicing with negative/optional/empty bounds across str/array/json              |
+|    16 | singletons (one-off behaviors)                                | Each a distinct failing behavior (see list)                                            |
 
 ### select setops (UNION/EXCEPT/INTERSECT) (11)
 
@@ -1180,6 +1235,7 @@ Set operations (UNION / EXCEPT / INTERSECT, plus `?=` / `OR` set-membership) use
 **Representative:** `test_edgeql_select_setops_10`
 
 **EdgeQL:**
+
 ```edgeql
 # using UNION in a FILTER
 SELECT _ := User{name}
@@ -1196,6 +1252,7 @@ ORDER BY _.name;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary { multi todo: Issue { rank: int64 } }
 abstract type Owned { required owner: User { note: str } }
@@ -1206,6 +1263,7 @@ type Issue extending Named, Owned, Text {
 ```
 
 **Expected SQL:**
+
 ```sql
 -- The FILTER subject is a UNION ALL of two object sources (backlink Issues
 -- of this User, plus the global Issue #1). The predicate ".number = '1'" is an
@@ -1248,12 +1306,14 @@ ORDER BY a0."name";
 **Representative:** `test_edgeql_select_polymorphic_07`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Object[IS Status | Priority].name;
 # equivalent to: SELECT Object[IS Status].name ?? Object[IS Priority].name;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Dictionary extending Named { overloaded required name: str }
 type Status extending Dictionary;
@@ -1262,6 +1322,7 @@ type Priority extending Dictionary;
 ```
 
 **Expected SQL:**
+
 ```sql
 -- Object expands to a UNION ALL of every concrete object table; the
 -- [IS Status|Priority] intersection keeps only rows whose discriminator is
@@ -1299,12 +1360,14 @@ SELECT "value" FROM (
 **Representative:** `test_edgeql_select_expr_objects_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT _ := array_unpack(array_agg(Issue)).owner.name
 ORDER BY _;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Owned { required owner: User { note: str } }
 type Issue extending Named, Owned, Text { ... }
@@ -1312,6 +1375,7 @@ type Issue extending Named, Owned, Text { ... }
 ```
 
 **Expected SQL:**
+
 ```sql
 -- array_agg(Issue) must aggregate object *identities* (ids), array_unpack
 -- restores them to a set of Issue rows, then .owner.name hops the owner
@@ -1343,6 +1407,7 @@ ORDER BY a0."value";
 **Representative:** `test_edgeql_select_subqueries_07`
 
 **EdgeQL:**
+
 ```edgeql
 # find all issues such that there's at least one more
 # issue watched by the same user as this one
@@ -1363,6 +1428,7 @@ ORDER BY
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text { optional multi watchers: User; }
 # watchers stored in junction default__issue__watchers (source=Issue, target=User)
@@ -1370,6 +1436,7 @@ type Issue extending Named, Owned, Text { optional multi watchers: User; }
 ```
 
 **Expected SQL:**
+
 ```sql
 -- Outer Issue a0. First conjunct: a0 has any watcher. Second: there is a User
 -- who (a) watches a0 and (b) watches some OTHER Issue (User.<watchers != Issue),
@@ -1403,6 +1470,7 @@ ORDER BY a0."number";
 **Representative:** `test_edgeql_select_alias_indirection_10`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     sub := (
@@ -1423,6 +1491,7 @@ FILTER User.name = 'Elvis';
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Text { required body: str }
 type User extending Dictionary { ... }
@@ -1430,6 +1499,7 @@ type User extending Dictionary { ... }
 ```
 
 **Expected SQL:**
+
 ```sql
 -- `sub` is a singleton WITH-binding: the shortest Text, with a computed
 -- scalar field foo = body || '!'. Each User row reads sub.foo (a constant
@@ -1449,7 +1519,7 @@ FROM (SELECT 'default::User' AS "__source_type","id","name" FROM "default__user"
 WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."name");
 ```
 
-**Why it fails today:** path access of a WITH-bound type variant's *computed* field (`sub.foo`) from an outer shape drops the binding's computed shape during binding-ref resolution (known recurring blocker; `alias_indirection_04/08/11` are the deeper "computed link inside a variant, accessed downstream" forms; `05` compares two aliased object singletons with `=`).
+**Why it fails today:** path access of a WITH-bound type variant's _computed_ field (`sub.foo`) from an outer shape drops the binding's computed shape during binding-ref resolution (known recurring blocker; `alias_indirection_04/08/11` are the deeper "computed link inside a variant, accessed downstream" forms; `05` compares two aliased object singletons with `=`).
 
 ### select cross (cartesian) (5)
 
@@ -1462,12 +1532,14 @@ WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."name");
 **Representative:** `test_edgeql_select_cross08`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT _ := Issue.owner.name ++ <str>count(Issue.watchers.name)
 ORDER BY _;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Owned { required owner: User { note: str } }
 type Issue extending Named, Owned, Text { optional multi watchers: User; }
@@ -1475,6 +1547,7 @@ type Issue extending Named, Owned, Text { optional multi watchers: User; }
 ```
 
 **Expected SQL:**
+
 ```sql
 -- For each Issue, concat its owner's name with the (per-Issue) count of distinct
 -- watcher names. count() is a correlated aggregate scoped to the same Issue row.
@@ -1492,7 +1565,7 @@ JOIN (SELECT "id","name" FROM "default__user") o ON o."id" = oj."target"
 ORDER BY "value";
 ```
 
-**Why it fails today:** a scalar `count(Issue.watchers.name)` must be correlated to the *same* Issue row that supplies `Issue.owner.name` on the other side of `++`; the cross/aggregate correlation collapses the per-row scope (`cross_04` concats owner with backlink Issue numbers, `cross_10/13` nest aggregates `count(count(...))` / `count((Issue, count(...)))`, `func_05` is the VARIADIC `anytype` arg-count error path).
+**Why it fails today:** a scalar `count(Issue.watchers.name)` must be correlated to the _same_ Issue row that supplies `Issue.owner.name` on the other side of `++`; the cross/aggregate correlation collapses the per-row scope (`cross_04` concats owner with backlink Issue numbers, `cross_10/13` nest aggregates `count(count(...))` / `count((Issue, count(...)))`, `func_05` is the VARIADIC `anytype` arg-count error path).
 
 ### introspection / schema (`schema::`, `__type__`, `introspect`) (5)
 
@@ -1505,17 +1578,20 @@ ORDER BY "value";
 **Representative:** `test_edgeql_select_type_05`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User.__type__ { name };
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary { ... }
 # .__type__ is the implicit link to schema::ObjectType; .name == 'default::User'.
 ```
 
 **Expected SQL:**
+
 ```sql
 -- .__type__ projects each User to its ObjectType meta-row; the {name} shape
 -- reads that meta-object's name. With one shared meta-table this is a join from
@@ -1539,6 +1615,7 @@ JOIN (SELECT "id","name" FROM "schema__objecttype") t ON t."id" = u."__type___id
 **Representative:** `test_edgeql_collection_shape_08`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT X := array_agg(User) FILTER X[0].name != 'Sully';
 -- and:
@@ -1546,11 +1623,13 @@ SELECT X := [User] FILTER X[0].name = 'Elvis';
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary { ... }   -- has .name (from Named)
 ```
 
 **Expected SQL:**
+
 ```sql
 -- X is an array of User objects. The FILTER indexes element 0 and reads its
 -- .name, so the array elements must retain object identity to support X[0].name.
@@ -1575,17 +1654,20 @@ WHERE json_extract("value", '$[0].name') <> 'Sully';
 **Representative:** `test_edgeql_select_computable_33`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User {name, todo_ids := .todo.id} FILTER .name = 'Elvis';
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary { multi todo: Issue { rank: int64 } }
 -- todo stored in junction default__user__todo (source=User, target=Issue)
 ```
 
 **Expected SQL:**
+
 ```sql
 -- todo_ids is a computed MULTI scalar = the ids of the User's todo Issues.
 -- It must aggregate the target ids into a json array, correlated to a0.
@@ -1599,7 +1681,7 @@ FROM (SELECT 'default::User' AS "__source_type","id","name" FROM "default__user"
 WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."name");
 ```
 
-**Why it fails today:** a computed multi scalar that projects a *link target's* property (`.todo.id`) inside a shape is not lowered to the correlated `json_group_array` over the junction (`computable_31` is `WITH O := {multi m := 10} SELECT O{m}` — a multi computed over a free binding; `computable_36` is a computed `array<array<int64>>` property `[[1]]`).
+**Why it fails today:** a computed multi scalar that projects a _link target's_ property (`.todo.id`) inside a shape is not lowered to the correlated `json_group_array` over the junction (`computable_31` is `WITH O := {multi m := 10} SELECT O{m}` — a multi computed over a free binding; `computable_36` is a computed `array<array<int64>>` property `[[1]]`).
 
 ### select tvariant (type variant) (3)
 
@@ -1610,6 +1692,7 @@ WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."name");
 **Representative:** `test_edgeql_select_tvariant_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Issue{
     number,
@@ -1620,6 +1703,7 @@ SELECT Issue{
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text {
     multi related_to: Issue;
@@ -1629,6 +1713,7 @@ type Issue extending Named, Owned, Text {
 ```
 
 **Expected SQL:**
+
 ```sql
 -- The nested related_to shape is filtered by comparing the related Issue's owner
 -- to the OUTER Issue's owner. The predicate correlates the inner target's owner
@@ -1646,7 +1731,7 @@ FROM (SELECT 'default::Issue' AS "__source_type","id","number" FROM "default__is
 ORDER BY a0."number";
 ```
 
-**Why it fails today:** the nested shape's FILTER references the *outer* `Issue.owner` (a top-scope path extension) inside the inner correlated subquery; this outer-path correlation in a shape-local FILTER is not threaded (`tvariant_04` builds a `tsl := (.time_spent_log ?? L)` variant then shapes `.tsl{body}`; `tvariant_05` extends `Issue.owner` twice inside nested computed links).
+**Why it fails today:** the nested shape's FILTER references the _outer_ `Issue.owner` (a top-scope path extension) inside the inner correlated subquery; this outer-path correlation in a shape-local FILTER is not threaded (`tvariant_04` builds a `tsl := (.time_spent_log ?? L)` variant then shapes `.tsl{body}`; `tvariant_05` extends `Issue.owner` twice inside nested computed links).
 
 ### select tid position (`*` / `**` splat ordering) (3)
 
@@ -1657,6 +1742,7 @@ ORDER BY a0."number";
 **Representative:** `test_edgeql_select_tid_position_05`
 
 **EdgeQL:**
+
 ```edgeql
 FOR issue IN Issue SELECT issue {
   **,
@@ -1665,11 +1751,13 @@ FOR issue IN Issue SELECT issue {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text { ... }   -- ** = deep splat (incl. links)
 ```
 
 **Expected SQL:**
+
 ```sql
 -- The ** splat expands every pointer of Issue (and nested objects like owner),
 -- but the FIRST key emitted in each object's json_object MUST be the implicit
@@ -1697,6 +1785,7 @@ FROM (SELECT 'default::Issue' AS "__source_type","id","__type___id",
 **Representative:** `test_edgeql_select_free_object_distinct_02`
 
 **EdgeQL:**
+
 ```edgeql
 select {
   lol := assert_distinct((for x in {1,2,3} select { x := x }))
@@ -1708,11 +1797,13 @@ select {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 -- (no schema types; pure free-object / FOR over a scalar set)
 ```
 
 **Expected SQL:**
+
 ```sql
 -- Outer free object with one multi computed link `lol`, whose value is a set of
 -- 3 free objects { x := x } produced by FOR over {1,2,3}. lol is a json array of
@@ -1733,6 +1824,7 @@ SELECT json_object('lol',
 **Representative:** `test_edgeql_select_slice_04`
 
 **EdgeQL:**
+
 ```edgeql
 select [1,2,3][1:<optional int64>$0];       -- optional upper bound -> {} when arg unset
 select to_json('[true, 3, 4, null]')[1:];   -- json array slice
@@ -1741,11 +1833,13 @@ select [(1,'foo'), (2,'bar'), (3,'baz')][1:];  -- array-of-tuple slice
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 -- (no schema types; literal arrays / json)
 ```
 
 **Expected SQL:**
+
 ```sql
 -- Array slice [lo:hi] -> rebuild a json array of the in-range elements via
 -- json_each with key bounds; negative indices add length; an optional/empty
@@ -1785,6 +1879,7 @@ WHERE "value" IS NOT NULL;   -- optional/empty bound -> no row
 - `test_edgeql_function_source_09` — same as 07/08 but with `if 1=1 ELSE` (`enumerate(...).1 if 1=1 ELSE (SELECT User FILTER false)`). Expected: object-valued IF/ELSE over the enumerate element, then `{name}`.
 
 **Expected SQL:** (representative — `test_edgeql_function_source_07`, enumerate object-element extraction)
+
 ```sql
 -- enumerate((SELECT User)).1 is the User object element of each (index, User)
 -- pair; .1 must carry full object identity so the trailing {name} shape resolves.
@@ -1803,32 +1898,31 @@ FROM (
 
 **Why it fails today (group):** these are independent one-off behaviors — `enumerate(...).N` object-element extraction (`function_source_06/07/08/09`), object-valued `IF/ELSE` collapsing to NULL (`if_else_07_b`), per-iteration `LIMIT` inside `FOR` (`for_03`), `FOR` over an optional property in a shape (`for_04`), `*N` recursion depth (`recursive_01`), nested-collection params (`params_array_of_array_01`), shadowed-binding computed field in `ORDER BY` (`shadow_computable_01`), WITH-bound shape passthrough (`with_rebind_01`), `[.val] ++ [0]` empty-element propagation (`concat_null_01`), correlated double-aggregate FILTER (`scalar_views_01`), optional `priority.name ??` in FILTER + EMPTY LAST ordering (`coalesce_03`), filtered computed-leaf link shape (`partial_03`), `sum(<int64>backlink.number)` in ORDER BY (`order_03`).
 
-
 ---
 
 ## tests/edgeql_scope.test.ts (77)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 11 | scope ref outer | Computed shape field (often `multi tag :=`) references the OUTER `User`/alias, then re-projected via a WITH-rebound source; correlation to outer `id` must survive rebinding |
-| 9 | scope computables | Computed shape field derived from a computable link, or `count`/tuple over two correlated `.owner`/`.deck` paths sharing a common prefix |
-| 9 | scope detached | `DETACHED` decorrelates a path → CROSS JOIN of independent copies; explicit reconnection (`F.<friends = User`) re-correlates |
-| 6 | scope binding | `WITH`/`FOR`-`UNION` binding reused twice (`(SELECT L), (SELECT L)`) must yield a single shared set, not a fresh cross product |
-| 5 | scope filter | `FILTER` in a parallel/sibling scope (or over a `SET OF` arg of `??`/wrapped `SELECT`) must NOT prune the projected set |
-| 4 | scope nested | Computed slug/`count` field with a prefix shared between SELECT element and a SET-OF subexpression; nested shape masking a real link name |
-| 4 | scope source rebind | `WITH U := (SELECT User { c := ... }), A := (SELECT U FILTER ...)` then read `A.c`/`A {c}` — rebinding `U`→`A` drops the computed/filtered source |
-| 4 | scope tuple correlate | Correlated tuple `(User, User.friends)` / `(User{friends}, User.friends)` whose elements must stay zipped when later paths reference `.0`/`.1` |
-| 3 | scope sort/limit/offset/order | `ORDER BY`/`OFFSET`/`LIMIT` clause lives in a sibling scope; sort key over a tuple-element object field or computed off the iterating shape |
-| 3 | select outer rebind | Inner `WITH U := (select <link> { c := <link>@prop/path })` rebinds the link source then re-projects `U.c`; outer correlation + linkprop must thread through |
-| 3 | scope computable factoring | `count(((SELECT U.cards.foo), (SELECT U.cards.foo)))` — repeated factored computable must be one materialized set |
-| 3 | semijoin / intersection | `[is Bot].deck`, `Named[IS User].deck`, or filter against `Card.best_award.name` — type-intersection / computed-link semijoin |
-| 3 | scope materialized | Materialized FOR-group / free-object set re-read in a later shape or `ORDER BY .keyCard.cost` (issues #6059/#6060) |
-| 2 | scope implicit limit | `OFFSET n` with no `LIMIT` on a multi link/top set must apply Gel's implicit-limit clamping semantics |
-| 2 | scope schema computed | Schema-level computed link/property (`alter ... create link lcards := ...`) referencing the enclosing object (`User.name[0]`) |
-| 2 | scope FOR with computable | `WITH props := (FOR h IN User UNION (select h { namelen := len(h.name) }))` then re-shape `props { name, namelen }` |
-| 2 | scope branch | `count((... , ((SELECT User.name) ++ (User.name)).0))` — branch where one operand is wrapped `SELECT` (SET OF) and another is correlated |
-| 1 | scope linkprop | `@count` linkprop re-bound through an inner `WITH` and re-projected (`single @count := U.__count`) |
-| 1 | scope union | `SELECT {len(User.name), count(User)} FILTER User.name > 'C'` — set/UNION operands are SET OF, FILTER must not apply |
+| Count | Query group                   | Pattern                                                                                                                                                                      |
+| ----: | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|    11 | scope ref outer               | Computed shape field (often `multi tag :=`) references the OUTER `User`/alias, then re-projected via a WITH-rebound source; correlation to outer `id` must survive rebinding |
+|     9 | scope computables             | Computed shape field derived from a computable link, or `count`/tuple over two correlated `.owner`/`.deck` paths sharing a common prefix                                     |
+|     9 | scope detached                | `DETACHED` decorrelates a path → CROSS JOIN of independent copies; explicit reconnection (`F.<friends = User`) re-correlates                                                 |
+|     6 | scope binding                 | `WITH`/`FOR`-`UNION` binding reused twice (`(SELECT L), (SELECT L)`) must yield a single shared set, not a fresh cross product                                               |
+|     5 | scope filter                  | `FILTER` in a parallel/sibling scope (or over a `SET OF` arg of `??`/wrapped `SELECT`) must NOT prune the projected set                                                      |
+|     4 | scope nested                  | Computed slug/`count` field with a prefix shared between SELECT element and a SET-OF subexpression; nested shape masking a real link name                                    |
+|     4 | scope source rebind           | `WITH U := (SELECT User { c := ... }), A := (SELECT U FILTER ...)` then read `A.c`/`A {c}` — rebinding `U`→`A` drops the computed/filtered source                            |
+|     4 | scope tuple correlate         | Correlated tuple `(User, User.friends)` / `(User{friends}, User.friends)` whose elements must stay zipped when later paths reference `.0`/`.1`                               |
+|     3 | scope sort/limit/offset/order | `ORDER BY`/`OFFSET`/`LIMIT` clause lives in a sibling scope; sort key over a tuple-element object field or computed off the iterating shape                                  |
+|     3 | select outer rebind           | Inner `WITH U := (select <link> { c := <link>@prop/path })` rebinds the link source then re-projects `U.c`; outer correlation + linkprop must thread through                 |
+|     3 | scope computable factoring    | `count(((SELECT U.cards.foo), (SELECT U.cards.foo)))` — repeated factored computable must be one materialized set                                                            |
+|     3 | semijoin / intersection       | `[is Bot].deck`, `Named[IS User].deck`, or filter against `Card.best_award.name` — type-intersection / computed-link semijoin                                                |
+|     3 | scope materialized            | Materialized FOR-group / free-object set re-read in a later shape or `ORDER BY .keyCard.cost` (issues #6059/#6060)                                                           |
+|     2 | scope implicit limit          | `OFFSET n` with no `LIMIT` on a multi link/top set must apply Gel's implicit-limit clamping semantics                                                                        |
+|     2 | scope schema computed         | Schema-level computed link/property (`alter ... create link lcards := ...`) referencing the enclosing object (`User.name[0]`)                                                |
+|     2 | scope FOR with computable     | `WITH props := (FOR h IN User UNION (select h { namelen := len(h.name) }))` then re-shape `props { name, namelen }`                                                          |
+|     2 | scope branch                  | `count((... , ((SELECT User.name) ++ (User.name)).0))` — branch where one operand is wrapped `SELECT` (SET OF) and another is correlated                                     |
+|     1 | scope linkprop                | `@count` linkprop re-bound through an inner `WITH` and re-projected (`single @count := U.__count`)                                                                           |
+|     1 | scope union                   | `SELECT {len(User.name), count(User)} FILTER User.name > 'C'` — set/UNION operands are SET OF, FILTER must not apply                                                         |
 
 ### scope ref outer (11)
 
@@ -1847,6 +1941,7 @@ FROM (
 **Representative:** `test_edgeql_scope_ref_outer_04`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
   U := (
@@ -1861,6 +1956,7 @@ SELECT _ := A.cards.tag ORDER BY _;
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named {
     multi deck: Card { count: int64 { default := 1; } ... }
@@ -1873,6 +1969,7 @@ type Card extending Named { required name: str; ... }
 The computed `tag` on each deck Card correlates back to the owning `User` (`a0."name"`),
 so dropping the shape into the binding `U` and filtering it to `A` must preserve that
 correlation; `A.cards.tag` then flattens the per-card array to a scalar set:
+
 ```sql
 SELECT "value" AS "value" FROM (
   SELECT ((a0."name" || ?) || a1."name") AS "value"
@@ -1894,7 +1991,7 @@ correlation of the computed `tag`; the inner subquery either errors or reads the
 
 ### scope computables (9)
 
-- `test_edgeql_scope_computables_01` *(xfail: broke with SIMPLE_SCOPING)*
+- `test_edgeql_scope_computables_01` _(xfail: broke with SIMPLE_SCOPING)_
 - `test_edgeql_scope_computables_02`
 - `test_edgeql_scope_computables_05`
 - `test_edgeql_scope_computables_07a`
@@ -1907,11 +2004,13 @@ correlation of the computed `tag`; the inner subquery either errors or reads the
 **Representative:** `test_edgeql_scope_computables_08`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT count((Card.owners.name, Card.owners.deck_cost));
 ```
 
 **ESDL:**
+
 ```esdl
 type Card extending Named {
     multi owners := .<deck[IS User];          # computed backlink
@@ -1925,6 +2024,7 @@ type User extending Named {
 **Expected SQL:**
 Both tuple elements share the prefix `Card.owners` (a single correlated `User` set per
 Card), so the tuple must zip `name` with the per-owner `deck_cost`, then count the rows:
+
 ```sql
 SELECT (SELECT count(*) FROM (
   SELECT a1."name" AS "f0",
@@ -1961,6 +2061,7 @@ computed `deck_cost`) is not lowered; the shared-prefix correlation is dropped.
 **Representative:** `test_edgeql_scope_detached_03`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
   U0 := DETACHED User.name,
@@ -1970,6 +2071,7 @@ SELECT User.name ++ U0 ++ U1 ++ U2;
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { ... }   # 4 users: Alice, Bob, Carol, Dave
 # Named.name : required str
@@ -1978,6 +2080,7 @@ type User extending Named { ... }   # 4 users: Alice, Bob, Carol, Dave
 **Expected SQL:**
 Each `DETACHED User.name` is an independent copy of the name extent, so the result is a
 4-way CROSS JOIN (256 rows). The bare `User.name` is also its own scope here:
+
 ```sql
 SELECT (((a0."name" || a1."name") || a2."name") || a3."name") AS "value"
 FROM (SELECT 'default::User' AS "__source_type","id","name" FROM "default__user"
@@ -2005,6 +2108,7 @@ or mis-correlate the detached set).
 **Representative:** `test_edgeql_scope_binding_01`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     L := (FOR name in {'Alice', 'Bob'} UNION (
@@ -2015,6 +2119,7 @@ ORDER BY _;
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { ... }   # name: required str
 ```
@@ -2022,6 +2127,7 @@ type User extending Named { ... }   # name: required str
 **Expected SQL:**
 `L` is a 2-element materialized binding (Alice, Bob users). The tuple `((SELECT L.name),
 (SELECT L.name))` is a CROSS JOIN of two independent reads of the SAME binding → 4 rows:
+
 ```sql
 SELECT "value" FROM (
   SELECT json_array(a0."value", a1."value") AS "value"
@@ -2049,6 +2155,7 @@ set; the binding's per-iteration scope is mis-shared (over- or under-correlated)
 **Representative:** `test_edgeql_scope_filter_07`
 
 **EdgeQL:**
+
 ```edgeql
 # User.name is a SET OF argument of ??, so it's unaffected by the FILTER
 SELECT (<str>{} ?? User.name)
@@ -2057,14 +2164,16 @@ FILTER User.name = 'Alice';
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { ... }   # name: required str
 ```
 
 **Expected SQL:**
 `??` makes `User.name` a SET-OF operand, so the `User` mentioned in the FILTER is a
-*separate* scope; the filter is existential-but-independent and does not restrict the
+_separate_ scope; the filter is existential-but-independent and does not restrict the
 projected names. The result is all four names:
+
 ```sql
 SELECT "value" FROM (
   SELECT COALESCE("lhs", u."name") AS "value"
@@ -2088,6 +2197,7 @@ references and applies the filter to the projection (returning only `Alice`).
 **Representative:** `test_edgeql_scope_nested_06`
 
 **EdgeQL:**
+
 ```edgeql
 # combination of element + SET OF with a common prefix
 SELECT (SELECT (
@@ -2104,6 +2214,7 @@ FILTER
 ```
 
 **ESDL:**
+
 ```esdl
 type Card extending Named {
     required element: str;
@@ -2117,6 +2228,7 @@ type User extending Named { multi friends: User { nickname: str; } }
 `count(Card.owners.friends) > 2` is a SET-OF subexpression that is independent of the
 projected tuple but still correlated to the current `Card`, then the outer order/`.0` peels
 the first tuple element:
+
 ```sql
 SELECT json_extract("value", '$[0]') AS "value" FROM (
   SELECT json_array(
@@ -2147,6 +2259,7 @@ shared-prefix FILTER over the backlink is conflated with the projected count.
 **Representative:** `test_edgeql_scope_source_rebind_03a`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
   U := (SELECT User {
@@ -2156,6 +2269,7 @@ SELECT A {cards: {name}};
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { multi deck: Card { count: int64 ... } }
 type Card extending Named { ... }
@@ -2165,6 +2279,7 @@ type Card extending Named { ... }
 `cards` is a per-`User` computed (filtered `.deck`); filtering the shaped binding `U` down
 to `A` (Alice) and re-projecting `A {cards: {name}}` must keep `cards` correlated to the
 filtered Alice row, not to an unfiltered `User`:
+
 ```sql
 SELECT
   COALESCE((SELECT json_group_array(json_object('name', a1."name"))
@@ -2176,7 +2291,7 @@ FROM (SELECT a3.* FROM (... users ...) a3
 ```
 
 **Why it fails today:** Rebinding `U`→`A` detaches the computed `cards` shape from its
-filtered source; `inspect` reads the deck off an *unfiltered* `User` extent (CROSS JOIN with
+filtered source; `inspect` reads the deck off an _unfiltered_ `User` extent (CROSS JOIN with
 `A`), so `A.cards` fans out to every user's deck instead of just Alice's.
 
 ### scope tuple correlate (4)
@@ -2189,12 +2304,14 @@ filtered source; `inspect` reads the deck off an *unfiltered* `User` extent (CRO
 **Representative:** `test_edgeql_scope_tuple_correlate_03`
 
 **EdgeQL:**
+
 ```edgeql
 WITH X := (User, User.friends)
 SELECT count(X.0.friends.name ++ X.1.name);
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named {
     multi friends: User { nickname: str; }
@@ -2205,6 +2322,7 @@ type User extending Named {
 `X` zips each `User` with each of its own `friends`; `X.0.friends.name` re-navigates the
 first element's friends while `X.1.name` reads the (correlated) second element. The two
 must stay distinct:
+
 ```sql
 SELECT (SELECT count(*) FROM (
   SELECT (ff."name" || x1."name") AS "value"      -- X.0.friends.name ++ X.1.name
@@ -2229,6 +2347,7 @@ SELECT (SELECT count(*) FROM (
 **Representative:** `test_edgeql_scope_offset_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User {
     name,
@@ -2244,6 +2363,7 @@ ORDER BY User.name;
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named {
     multi friends: User { nickname: str; }
@@ -2254,6 +2374,7 @@ type User extending Named {
 The `friends` shape is ordered by name and offset by `count(User.friends) - 1` (per-row,
 correlated to the enclosing `User`); SQLite needs a sentinel `LIMIT -1` to allow a bare
 `OFFSET`:
+
 ```sql
 SELECT a0."id", a0."__source_type", a0."name",
   COALESCE((SELECT json_group_array(json_object(
@@ -2285,6 +2406,7 @@ applied with the wrong (decorrelated) friends set, so the wrong slice of friends
 **Representative:** `test_edgeql_select_outer_rebind_04`
 
 **EdgeQL:**
+
 ```edgeql
 select User {
   avatar := (
@@ -2305,6 +2427,7 @@ select User {
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named {
     avatar: Card {                       # single link WITH linkprops → junction table
@@ -2321,6 +2444,7 @@ The single `avatar` link carries linkprops, so it lives in junction `default__us
 retag := @tag }` rebinds the avatar row of the enclosing `User`; the linkprops must survive
 being re-projected as `t`→`t2` and `retag`, and single cardinality is wrapped with
 `json_extract(COALESCE(<arr>,'[]'), '$[0]')`:
+
 ```sql
 SELECT a0."id", a0."__source_type",
   json(COALESCE(json_extract(COALESCE((SELECT json_group_array(json_object(
@@ -2348,6 +2472,7 @@ correlation, or the single-cardinality wrap is dropped.
 **Representative:** `test_edgeql_scope_computable_factoring_01`
 
 **EdgeQL:**
+
 ```edgeql
 WITH U := (
     SELECT User {
@@ -2358,6 +2483,7 @@ SELECT count(((SELECT U.cards.foo), (SELECT U.cards.foo)));
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { multi deck: Card { count: int64 ... } }
 type Card extending Named { ... }   # foo := .name (computed in shape)
@@ -2366,6 +2492,7 @@ type Card extending Named { ... }   # foo := .name (computed in shape)
 **Expected SQL:**
 `U.cards.foo` is the set of Dave's card names. The tuple reads it twice → a CROSS JOIN of
 that set with itself; `count` = (#cards)^2:
+
 ```sql
 SELECT (SELECT count(*) FROM (
   SELECT json_array(a0."value", a1."value") AS "value"
@@ -2391,11 +2518,13 @@ inconsistently or fails to flatten the `foo` computed through the rebound `U`.
 **Representative:** `test_edgeql_scope_intersection_semijoin_01`
 
 **EdgeQL:**
+
 ```edgeql
 select count(Named[IS User].deck);
 ```
 
 **ESDL:**
+
 ```esdl
 abstract type Named { required name: str ... }
 type User extending Named { multi deck: Card { ... } }
@@ -2405,6 +2534,7 @@ type Card extending Named { ... }   # Named also has Card, Award, Bot subtypes
 **Expected SQL:**
 `Named[IS User]` intersects the `Named` extent down to `User` (incl. `Bot`); `.deck`
 navigates the deck link; `count` totals the deck rows:
+
 ```sql
 SELECT (SELECT count(*) FROM (
   SELECT a1."id"
@@ -2424,12 +2554,13 @@ wrong; `computable_join_01` filters against a computed `best_award` (single comp
 ### scope materialized (3)
 
 - `test_edgeql_scope_3x_nested_materialized_02`
-- `test_edgeql_scope_mat_issue_6059` *(xerror: Issue #6059)*
-- `test_edgeql_scope_mat_issue_6060` *(xerror: Issue #6060)*
+- `test_edgeql_scope_mat_issue_6059` _(xerror: Issue #6059)_
+- `test_edgeql_scope_mat_issue_6060` _(xerror: Issue #6060)_
 
 **Representative:** `test_edgeql_scope_mat_issue_6060`
 
 **EdgeQL:**
+
 ```edgeql
 with
   groups := (
@@ -2444,6 +2575,7 @@ order by .minCost;
 ```
 
 **ESDL:**
+
 ```esdl
 type Card extending Named { required element: str; required cost: int64; ... }
 ```
@@ -2452,6 +2584,7 @@ type Card extending Named { required element: str; required cost: int64; ... }
 The `FOR`-`UNION` produces 4 free objects each holding a materialized `elements` set (and a
 volatile `r`); `submissions` re-shapes them with `min(.elements.cost)`, and the outer
 SELECT orders by that aggregate. The free-object set must be materialized once and re-read:
+
 ```sql
 SELECT json_object('minCost', s."minCost") AS "value" FROM (
   SELECT (SELECT min(c."cost")
@@ -2475,12 +2608,14 @@ binding is not correctly materialized once and re-read; `materialized_02` is the
 **Representative:** `test_edgeql_scope_implicit_limit_01`
 
 **EdgeQL:**
+
 ```edgeql
 select User { deck: {name} order by .name offset 3 }
 filter .name = 'Carol';
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { multi deck: Card { ... } }
 type Card extending Named { ... }
@@ -2489,6 +2624,7 @@ type Card extending Named { ... }
 **Expected SQL:**
 `OFFSET 3` with no `LIMIT` on the multi deck link skips the first 3 ordered cards and keeps
 the rest; in SQLite a bare OFFSET needs a sentinel `LIMIT -1`:
+
 ```sql
 SELECT a0."id", a0."__source_type", a0."name",
   COALESCE((SELECT json_group_array(json_object(
@@ -2501,7 +2637,7 @@ FROM (... users ...) a0
 WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."name");
 ```
 
-**Why it fails today:** Gel applies an *implicit limit* to top-level/multi sets; the
+**Why it fails today:** Gel applies an _implicit limit_ to top-level/multi sets; the
 emitted SQL's interaction of `OFFSET` (and the no-LIMIT top-level cases in q1/q2) with that
 implicit clamp produces a row count that diverges from the expected result.
 
@@ -2513,6 +2649,7 @@ implicit clamp produces a row count that diverges from the expected result.
 **Representative:** `test_edgeql_scope_schema_computed_01`
 
 **EdgeQL:**
+
 ```edgeql
 # DDL:
 alter type User
@@ -2524,6 +2661,7 @@ select Bot { lcards: {name} }
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { ... }
 type Bot extending User;
@@ -2533,6 +2671,7 @@ type Card extending Named { ... }
 **Expected SQL:**
 The schema-level computed link `lcards` resolves per-`User` to Cards whose first letter
 matches the user's; `exists .lcards` becomes an existential semijoin, and `Bot` inherits it:
+
 ```sql
 SELECT a0."id", a0."__source_type", a0."name"
 FROM (... users ...) a0
@@ -2555,6 +2694,7 @@ WHERE EXISTS (
 **Representative:** `test_edgeql_scope_for_with_computable_01`
 
 **EdgeQL:**
+
 ```edgeql
 with props := (
   for h in User union (
@@ -2565,6 +2705,7 @@ select props { name, namelen };
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { ... }   # name: required str
 ```
@@ -2572,6 +2713,7 @@ type User extending Named { ... }   # name: required str
 **Expected SQL:**
 The `FOR`-`UNION` shapes each `User` with a `namelen` computed; the outer SELECT re-reads
 both `name` (stored) and the carried `namelen` computed from the materialized binding:
+
 ```sql
 SELECT json_object('name', a0."name", 'namelen', length(a0."name")) AS "value"
 FROM (... users ...) a0;
@@ -2589,6 +2731,7 @@ materialized FOR-binding drops it (the bare `name` survives but `namelen` is los
 **Representative:** `test_edgeql_scope_branch_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT count((
     (SELECT User.name),
@@ -2597,6 +2740,7 @@ SELECT count((
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { ... }   # 4 users
 ```
@@ -2605,6 +2749,7 @@ type User extending Named { ... }   # 4 users
 The first tuple element `(SELECT User.name)` is a SET OF (its own scope, 4 names); the
 second wraps `(SELECT User.name) ++ (User.name)` — both operands SET OF, so a 4x4 product —
 then takes `.0`. The tuple zips the two branches → count = 4 * 16:
+
 ```sql
 SELECT (SELECT count(*) FROM (
   SELECT json_array(a0."value", a1."value") AS "value"
@@ -2626,6 +2771,7 @@ wrong count.
 **Representative:** `test_edgeql_scope_linkprop_rebinding_01`
 
 **EdgeQL:**
+
 ```edgeql
 select assert_exists((WITH
   __user := DETACHED User
@@ -2645,6 +2791,7 @@ SELECT __user {
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named {
     multi deck: Card {
@@ -2658,6 +2805,7 @@ type User extending Named {
 `WITH __user2 := select __user.deck { __linkprop_count := @count }` rebinds the deck link
 rows of the enclosing `__user`, then re-emits the linkprop as `single @count :=
 __user2.__linkprop_count`:
+
 ```sql
 SELECT a0."id", a0."__source_type", a0."name",
   COALESCE((SELECT json_group_array(json_object(
@@ -2681,6 +2829,7 @@ linkprop column; `inspect` references a phantom `a0."@count"` on the flattened s
 **Representative:** `test_edgeql_scope_union_02`
 
 **EdgeQL:**
+
 ```edgeql
 # UNION and {} create SET OF scoped operands, so FILTER should not be effective
 SELECT {len(User.name), count(User)}
@@ -2689,6 +2838,7 @@ FILTER User.name > 'C';
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Named { ... }   # Alice, Bob, Carol, Dave
 ```
@@ -2697,6 +2847,7 @@ type User extending Named { ... }   # Alice, Bob, Carol, Dave
 The set constructor `{ ... }` (a UNION) makes each operand SET OF, so the FILTER's `User`
 is an independent scope and does not restrict the projected set — all four name lengths
 plus the total count:
+
 ```sql
 SELECT "value" FROM (
   SELECT length(u."name") AS "value" FROM (... users ...) u   -- len(User.name), all 4
@@ -2710,21 +2861,20 @@ WHERE EXISTS (SELECT 1 FROM (... users ...) f WHERE f."name" > ?);  -- independe
 `FILTER User.name > 'C'` is in a sibling scope, so it must not prune the result; the engine
 applies the filter to the `len(User.name)` operand, dropping the short-named users.
 
-
 ---
 
 ## tests/edgeql_functions_inline.test.ts (74)
 
 These tests define their schema/UDFs inline via `h.script(...)`; there is no `.esdl`. An inline (non-volatile) UDF is **inlined**: its `using (body)` is textually substituted into the call site and the whole thing lowers to one SQL statement. So the "Expected SQL" below is what you'd get by inlining the body into the call, then applying the engine's normal lowering. Aliases use the canonical `a0/a1…` scheme.
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 26 | inline UDFs over object sources/returns | UDF takes/returns an object set (incl. `Bar`/`Baz` unions, `[is T]` narrowing, link hops, `count`, tuples) — the object body is spliced into the caller as a correlated object source |
-| 14 | inline UDFs with INSERT bodies | `using ((insert …))` — INSERT (incl. nested/multi links, link-props, FOR-iterators, `unless conflict`) spliced into the caller and run per call-site row |
-| 13 | inline UDFs inside object/link-property shapes | `select T { c := foo(.x) }` — UDF inlined into a computed shape element, body may itself be an object/`with`/shape |
-| 10 | inline UDFs with UPDATE bodies | `using ((update … set {…}))` — UPDATE (incl. multi-link replace, link-prop, FOR-iterators) spliced into the caller |
-| 8 | inline scalar/set expansion (set args, variadic, FOR) | scalar UDF whose body is a `FOR … union` / `sum(array_unpack(variadic))` / nested-UDF call — set-of-int expansion |
-| 3 | inline UDFs with DELETE/policy bodies | `using ((delete … ).p)` where the deleted type drives `on source/target delete` cascade policies |
+| Count | Query group                                           | Pattern                                                                                                                                                                               |
+| ----: | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|    26 | inline UDFs over object sources/returns               | UDF takes/returns an object set (incl. `Bar`/`Baz` unions, `[is T]` narrowing, link hops, `count`, tuples) — the object body is spliced into the caller as a correlated object source |
+|    14 | inline UDFs with INSERT bodies                        | `using ((insert …))` — INSERT (incl. nested/multi links, link-props, FOR-iterators, `unless conflict`) spliced into the caller and run per call-site row                              |
+|    13 | inline UDFs inside object/link-property shapes        | `select T { c := foo(.x) }` — UDF inlined into a computed shape element, body may itself be an object/`with`/shape                                                                    |
+|    10 | inline UDFs with UPDATE bodies                        | `using ((update … set {…}))` — UPDATE (incl. multi-link replace, link-prop, FOR-iterators) spliced into the caller                                                                    |
+|     8 | inline scalar/set expansion (set args, variadic, FOR) | scalar UDF whose body is a `FOR … union` / `sum(array_unpack(variadic))` / nested-UDF call — set-of-int expansion                                                                     |
+|     3 | inline UDFs with DELETE/policy bodies                 | `using ((delete … ).p)` where the deleted type drives `on source/target delete` cascade policies                                                                                      |
 
 ### inline UDFs over object sources/returns (26)
 
@@ -2760,6 +2910,7 @@ UDFs that take or return an object set are inlined as a correlated object source
 **Representative:** `test_edgeql_functions_inline_object_01`
 
 **EdgeQL:**
+
 ```edgeql
 create type Bar {
     create required property a -> int64;
@@ -2778,11 +2929,13 @@ select foo({1, 2, 3}).a;
 ```
 
 **ESDL:**
+
 ```esdl
 type Bar { required property a -> int64; }   # table "default__bar" ( "id", "a" )
 ```
 
 **Expected SQL:** (inline the body `(select Bar{a} filter .a = x limit 1)` for the call `foo(1).a`; the outer `.a` then projects the `a` column of the single resulting object)
+
 ```sql
 SELECT a1."a" AS "value"
 FROM (SELECT ? AS "value") arg
@@ -2793,6 +2946,7 @@ CROSS JOIN LATERAL (
     LIMIT 1
 ) a1
 ```
+
 For the `foo({1,2,3})` call, the `arg` source becomes `(SELECT ? UNION ALL SELECT ? UNION ALL SELECT ?)`, correlated per element (one row per matching `Bar`).
 
 **Why it fails today:** an object-typed UDF body is not spliced as a correlated object source at the call site — the inliner does not substitute the `select Bar … filter .a = x` into the caller while binding `x` to the call argument, so the outer `.a` access / cardinality is lost (object-returning inline UDFs are largely unsupported; passing sibling object tests are the simple `using (x)` / `using (x.a)` identity cases).
@@ -2819,6 +2973,7 @@ An INSERT inside a UDF body must be spliced into the caller as a write run per c
 **Representative:** `test_edgeql_functions_inline_insert_correlate_01`
 
 **EdgeQL:**
+
 ```edgeql
 create type Bar {
     create required property a -> int64;
@@ -2832,17 +2987,20 @@ for x in {2, 3, 4} union (select foo(x).a);
 ```
 
 **ESDL:**
+
 ```esdl
 type Bar { required property a -> int64; }   # table "default__bar" ( "id", "a" )
 ```
 
 **Expected SQL (spliced INSERT, one per FOR row):** inline `((insert Bar{a := x}), x)`. For each iterator value the body becomes an INSERT whose `a := x` is bound to the call argument, and the tuple's `.0` is the just-inserted `Bar` (whose `.a` the outer query reads):
+
 ```sql
 -- conceptually, per row x in {2,3,4}:
 INSERT INTO "default__bar" ("id", "a") VALUES (<new-uuid>, x)
 RETURNING "id" AS "id", "a" AS "a";
 -- the caller then selects RETURNING."a" as the tuple element foo(x).a
 ```
+
 The write is driven row-by-row from the iterator source `(SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4)`; the returned object set is the set of inserted rows.
 
 **Why it fails today:** an INSERT inside a UDF body is not spliced into the caller as a write executed per call-site row — the DML-in-inline-UDF expansion (AST-level `expandInlineDmlFunctionCalls`) does not cover INSERT bodies wrapped in tuples / `unless conflict` / FOR-iterators / multi-link targets / nested UDF calls, so either no row is inserted or the returned object is dropped.
@@ -2868,6 +3026,7 @@ A UDF call inside a computed shape element is inlined and correlated to the shap
 **Representative:** `test_edgeql_functions_inline_shape_07`
 
 **EdgeQL:**
+
 ```edgeql
 create type Bar { create required property a -> int64; };
 create type Baz {
@@ -2887,12 +3046,14 @@ select Baz{ a, c := foo(.b).a } order by .a;
 ```
 
 **ESDL:**
+
 ```esdl
 type Bar { required property a -> int64; }                  # default__bar ( id, a )
 type Baz { required property a; required property b; }       # default__baz ( id, a, b )
 ```
 
 **Expected SQL:** the computed shape element `c := foo(.b).a` inlines to `assert_exists((select Bar filter .a = .b limit 1)).a`, evaluated as a correlated scalar subquery per `Baz` row (`.b` bound to the outer `Baz.b`):
+
 ```sql
 SELECT a0."a" AS "a",
        (SELECT a1."a"
@@ -2902,6 +3063,7 @@ SELECT a0."a" AS "a",
 FROM "default__baz" a0
 ORDER BY a0."a"
 ```
+
 (`assert_exists` adds a "must be exactly one" guard; for `shape_09`'s `set of Bar` body and `shape_12`'s multi-link source the element instead builds a `json_group_array` of the correlated `Bar.a` rows.)
 
 **Why it fails today:** inlining a UDF call inside a computed shape element does not substitute the (object/`count`/link-prop/multi-link) body correlated to the shape's subject row — `.b` / `.bar` / `.bar@b` are not rebound to the function parameter, so the computed column resolves to nothing or errors.
@@ -2924,6 +3086,7 @@ An UPDATE inside an inline UDF body must be spliced as a write driven by the cal
 **Representative:** `test_edgeql_functions_inline_update_iterator_01`
 
 **EdgeQL:**
+
 ```edgeql
 create type Bar { create required property a -> int64; };
 create function foo(x: int64, y: int64) -> set of int64 {
@@ -2937,11 +3100,13 @@ for x in {1, 2, 3} union (select foo(x - 1, x));
 ```
 
 **ESDL:**
+
 ```esdl
 type Bar { required property a -> int64; }   # default__bar ( id, a )
 ```
 
 **Expected SQL (spliced UPDATE, returning .a):** inline `(update Bar filter .a <= y set {a := x}).a` with `x`,`y` bound to the args:
+
 ```sql
 UPDATE "default__bar"
 SET "a" = ?                       -- x
@@ -2949,6 +3114,7 @@ WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value")  -- y
               WHERE "a" <= "value")
 RETURNING "a" AS "value";
 ```
+
 Under `for x in {1,2,3}` the UPDATE is executed once per iterator row (binding `x-1`,`x`) and the returned `.a` values are unioned. The outer `select Bar.a` afterwards reads the mutated table.
 
 **Why it fails today:** an UPDATE inside an inline UDF body is not spliced as a write driven by the call site — the inliner does not bind the params into the UPDATE's filter/`set` nor execute it per FOR/`if` iteration, so the table is not mutated (or the returned `.a` set is wrong).
@@ -2969,6 +3135,7 @@ Scalar UDFs whose body is set-valued must thread a (possibly multi) argument int
 **Representative:** `test_edgeql_functions_inline_basic_19`
 
 **EdgeQL:**
+
 ```edgeql
 create function foo(x: int64) -> set of int64 {
     using (for y in {x, x + 1, x + 2} union (y));
@@ -2982,6 +3149,7 @@ select foo({11, 21, 31});       # set arg: cross-product per element
 **ESDL:** none (no object types).
 
 **Expected SQL:** inline the body `for y in {x, x+1, x+2} union (y)` with `x` bound to the (possibly multi) argument. For the scalar call `foo(1)`:
+
 ```sql
 SELECT a0."value" AS "value"
 FROM (
@@ -2990,6 +3158,7 @@ FROM (
     UNION ALL SELECT (? + 2) AS "value"
 ) a0
 ```
+
 For the set arg `foo({11,21,31})` the parameter source is `(SELECT 11 UNION ALL SELECT 21 UNION ALL SELECT 31)` and the FOR-union is correlated to each `x` element (9 rows total). The variadic siblings (`basic_09`) instead lower to `sum("value")` over `array_unpack` of the collected args.
 
 **Why it fails today:** inlining a `set of` body (FOR-union / variadic-array) does not correctly bind a multi-valued argument and distribute the body element-wise — the function-parameter set is not threaded into the inlined FOR source, so set-arg / variadic / empty-set cases produce wrong cardinality.
@@ -3005,6 +3174,7 @@ A DELETE inside an inline UDF body must be spliced as a write that also fires th
 **Representative:** `test_edgeql_functions_inline_delete_policy_source_02`
 
 **EdgeQL:**
+
 ```edgeql
 create type Bar { create required property a -> int64; };
 create type Baz {
@@ -3022,6 +3192,7 @@ select foo(5);    # deletes Baz with b<=5 AND, via policy, their linked Bar
 ```
 
 **ESDL:**
+
 ```esdl
 type Bar { required property a -> int64; }            # default__bar ( id, a )
 type Baz {
@@ -3031,6 +3202,7 @@ type Baz {
 ```
 
 **Expected SQL (spliced DELETE + cascade, returning .b):** inline `(delete Baz filter .b <= x).b`. The primary DELETE selects the matching `Baz` rows; the `on source delete delete target` policy then deletes the linked `Bar` targets (for `source_03`, only those `Bar` with no surviving inbound `bar` link — the `if orphan` guard):
+
 ```sql
 -- 1) capture victims
 WITH victims AS (
@@ -3051,7 +3223,6 @@ DELETE FROM "default__baz" WHERE "id" IN (SELECT "id" FROM victims);
 
 **Why it fails today:** a DELETE inside an inline UDF body is not spliced as a write that also fires the link `on source/target delete` cascade policy — the inliner does not execute the DELETE per call (binding `x`), so neither the `Baz`/`Bar` rows are removed nor the policy-driven cascade (incl. `if orphan`) runs.
 
-
 ---
 
 ## tests/edgeql_select_interpreter.test.ts (63)
@@ -3062,34 +3233,34 @@ collections, tuples-with-subqueries, set-ops over foreign extents, type-variant
 checks). For each group the "Expected SQL" shows the lowerable core; genuinely
 interpreter-only / error-expecting cases say so.
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 10 | setops | `UNION`/`EXCEPT`/`INTERSECT` over object extents, set-ops in FILTER, `(a UNION b, Issue).0` tuple-of-setop, type-variant in `{...}` union |
-| 8 | subqueries (correlated) | common-prefix `Issue`/`Issue2 := Issue` correlation, `EXISTS (SELECT … FILTER … = outer)`, `.number ++ sub` cross |
-| 4 | function source (enumerate over subquery) | `enumerate(...).1` / `enumerate(array_unpack([…]){…})` then UNION/`??`/IF + trailing `{name}` shape |
-| 4 | cross | scalar cross-product with correlated `count(...)` of a sibling path; `count((Issue, count(...)))` |
-| 4 | collection shape | array/tuple literals wrapping object sets — `[(User,)][0]`, `([User],).0`, free-shape over them |
-| 4 | expr objects | `array_agg(obj)[i].link.prop`, `array_unpack(array_agg(obj)).link`, object-in-array `IS T` |
-| 4 | tvariant bad (variant handling) | `SELECT Issue { priority := Priority }` etc. — type-variant re-point of a pointer; runs `h.script` expecting it to succeed |
-| 3 | tvariant | type-variant computed pointer evaluated then re-projected (`}.tsl { body }`, top-scope path extension) |
-| 3 | alias indirection | `WITH sub := T{foo:=…}` then reference `sub.foo` / nested computed link off a binding |
-| 2 | computable | computed pointer that's a UNION / nested `.todo.id` over a WITH-rebind |
-| 2 | for | `FOR x IN {…} UNION (… LIMIT n)` per-iteration cardinality; `FOR z IN .empty UNION (1)` |
-| 1 | polymorphic | `SELECT User { [IS Named].id }` — polymorphic shape element collides with auto-id |
-| 1 | reverse link (expects error) | `User.<owner[IS Text]@since` — error message text mismatch |
-| 1 | order | `ORDER BY (SELECT sum(<int64>User.<watchers[IS Issue].number))` — uncorrelated backlink in ORDER BY |
-| 1 | equivalence | `I2 != Issue AND I2.priority.name ?= Issue.priority.name` — `?=` over correlated foreign extent |
-| 1 | slice | array/json slice with empty/optional bound and json-string slicing |
-| 1 | tuple | nested tuple `(name, (status.name, count(backlink)))` cross-product over backlink |
-| 1 | linkproperty | `since := (SELECT .owner)@since` — link-prop off a parenthesized link |
-| 1 | if_else (expects error) | `'bar' IF … ELSE 123` — branch type mismatch must raise |
-| 1 | partial | `watchers: {…} FILTER .name='Yury'` single-card sub-shape result rendering |
-| 1 | banned free shape (expects error) | `DISTINCT {{z:=1},{z:=2}}` / `{z:=1} = {z:=2}` must be rejected |
-| 1 | assert fail (expects error) | `array_agg(...)[{1000}].m` — out-of-bounds index must raise |
-| 1 | concat null | `x := [.val] ++ [0]` empty-element array NULL propagation |
-| 1 | subshape filter | `owner: { name } FILTER false` on a required single link |
-| 1 | shadow computable | `SELECT User := User { …, is_elvis := … } ORDER BY User.is_elvis` rebind + order by computed |
-| 1 | card blowup | deeply-nested repeated computed sub-shapes (`status1..status8`) cardinality explosion |
+| Count | Query group                               | Pattern                                                                                                                                   |
+| ----: | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+|    10 | setops                                    | `UNION`/`EXCEPT`/`INTERSECT` over object extents, set-ops in FILTER, `(a UNION b, Issue).0` tuple-of-setop, type-variant in `{...}` union |
+|     8 | subqueries (correlated)                   | common-prefix `Issue`/`Issue2 := Issue` correlation, `EXISTS (SELECT … FILTER … = outer)`, `.number ++ sub` cross                         |
+|     4 | function source (enumerate over subquery) | `enumerate(...).1` / `enumerate(array_unpack([…]){…})` then UNION/`??`/IF + trailing `{name}` shape                                       |
+|     4 | cross                                     | scalar cross-product with correlated `count(...)` of a sibling path; `count((Issue, count(...)))`                                         |
+|     4 | collection shape                          | array/tuple literals wrapping object sets — `[(User,)][0]`, `([User],).0`, free-shape over them                                           |
+|     4 | expr objects                              | `array_agg(obj)[i].link.prop`, `array_unpack(array_agg(obj)).link`, object-in-array `IS T`                                                |
+|     4 | tvariant bad (variant handling)           | `SELECT Issue { priority := Priority }` etc. — type-variant re-point of a pointer; runs `h.script` expecting it to succeed                |
+|     3 | tvariant                                  | type-variant computed pointer evaluated then re-projected (`}.tsl { body }`, top-scope path extension)                                    |
+|     3 | alias indirection                         | `WITH sub := T{foo:=…}` then reference `sub.foo` / nested computed link off a binding                                                     |
+|     2 | computable                                | computed pointer that's a UNION / nested `.todo.id` over a WITH-rebind                                                                    |
+|     2 | for                                       | `FOR x IN {…} UNION (… LIMIT n)` per-iteration cardinality; `FOR z IN .empty UNION (1)`                                                   |
+|     1 | polymorphic                               | `SELECT User { [IS Named].id }` — polymorphic shape element collides with auto-id                                                         |
+|     1 | reverse link (expects error)              | `User.<owner[IS Text]@since` — error message text mismatch                                                                                |
+|     1 | order                                     | `ORDER BY (SELECT sum(<int64>User.<watchers[IS Issue].number))` — uncorrelated backlink in ORDER BY                                       |
+|     1 | equivalence                               | `I2 != Issue AND I2.priority.name ?= Issue.priority.name` — `?=` over correlated foreign extent                                           |
+|     1 | slice                                     | array/json slice with empty/optional bound and json-string slicing                                                                        |
+|     1 | tuple                                     | nested tuple `(name, (status.name, count(backlink)))` cross-product over backlink                                                         |
+|     1 | linkproperty                              | `since := (SELECT .owner)@since` — link-prop off a parenthesized link                                                                     |
+|     1 | if_else (expects error)                   | `'bar' IF … ELSE 123` — branch type mismatch must raise                                                                                   |
+|     1 | partial                                   | `watchers: {…} FILTER .name='Yury'` single-card sub-shape result rendering                                                                |
+|     1 | banned free shape (expects error)         | `DISTINCT {{z:=1},{z:=2}}` / `{z:=1} = {z:=2}` must be rejected                                                                           |
+|     1 | assert fail (expects error)               | `array_agg(...)[{1000}].m` — out-of-bounds index must raise                                                                               |
+|     1 | concat null                               | `x := [.val] ++ [0]` empty-element array NULL propagation                                                                                 |
+|     1 | subshape filter                           | `owner: { name } FILTER false` on a required single link                                                                                  |
+|     1 | shadow computable                         | `SELECT User := User { …, is_elvis := … } ORDER BY User.is_elvis` rebind + order by computed                                              |
+|     1 | card blowup                               | deeply-nested repeated computed sub-shapes (`status1..status8`) cardinality explosion                                                     |
 
 ### setops (10)
 
@@ -3107,6 +3278,7 @@ interpreter-only / error-expecting cases say so.
 **Representative:** `test_edgeql_select_interpreter_setops_13a`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     L := LogEntry
@@ -3117,6 +3289,7 @@ SELECT
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text {
     multi time_spent_log: LogEntry;
@@ -3130,6 +3303,7 @@ abstract type Text { required body: str; }
 **Expected SQL:**
 The lowerable core is a UNION-ALL of the two `Text`/`LogEntry` body sources, crossed
 with `Issue`, projecting tuple element `.0` (the `LogEntry`) and reading `body`:
+
 ```sql
 SELECT (SELECT json_object('id', t."id", '__source_type', t."__source_type", 'body', t."body"))
 FROM "default__issue" iss
@@ -3141,6 +3315,7 @@ CROSS JOIN (
     SELECT le2."id", le2."body", 'default::LogEntry' FROM "default__logentry" le2   -- L
 ) t;
 ```
+
 (13b wraps the tuple in `SELECT (…)`; 13c inlines `LogEntry` for `L`. 24 = `EXCEPT
 {LogEntry, Comment}` / `INTERSECT` over the `Owned` extent. 27/28 = `EXCEPT` /
 `INTERSECT` over scalar sets from `str_split`/`len`. 14/15 = type-variant in a
@@ -3164,6 +3339,7 @@ over object extents emit a stub `SELECT NULL AS "id"` (e.g. setops_24 → `SELEC
 **Representative:** `test_edgeql_select_interpreter_subqueries_05`
 
 **EdgeQL:**
+
 ```edgeql
 # find all issues such that there's at least one more
 # issue with the same priority
@@ -3180,6 +3356,7 @@ ORDER BY
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text {
     priority: Priority;     # optional single link → inline "priority_id" FK column
@@ -3191,6 +3368,7 @@ type Priority extending Dictionary;
 `Issue2 := Issue` is an independent extent; the FILTER is an existential over the
 cross-product where identities differ and priorities are equal (`=` over single
 links is non-empty intersection of target ids):
+
 ```sql
 SELECT a0."id", 'default::Issue' AS "__source_type", a0."number"
 FROM (SELECT * FROM "default__issue") a0
@@ -3202,6 +3380,7 @@ WHERE EXISTS (
 )
 ORDER BY a0."number" ASC;
 ```
+
 (06 = same with `?=` so both-empty also matches → numbers 1,4. 04 = `EXISTS sub`
 where `sub` is a WITH binding. 07/08/15 = `EXISTS (SELECT User/Text FILTER User =
 Issue.watchers AND User.<watchers != Issue)` self-referential backlink. 10/14 =
@@ -3220,6 +3399,7 @@ FILTER is dropped — inspect emits the source `SELECT … FROM "default__issue"
 **Representative:** `test_edgeql_function_source_07`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT (enumerate((
     SELECT User FILTER .name[0] = 'E'
@@ -3227,6 +3407,7 @@ SELECT (enumerate((
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary;          # has required name: str
 ```
@@ -3235,6 +3416,7 @@ type User extending Dictionary;          # has required name: str
 `enumerate(S)` numbers a set as `(int64, elem)` tuples; `.1` projects the **object
 element** back out, unioned with an empty `User`, then a `{name}` shape is applied.
 The lowerable core enumerates the filtered `User` rows, takes `.1`, and reads `name`:
+
 ```sql
 SELECT json_object('id', e."id", 'name', e."name")
 FROM (
@@ -3245,6 +3427,7 @@ FROM (
     SELECT u2."id", u2."name" FROM "default__user" u2 WHERE 0   -- (SELECT User FILTER false)
 ) e;
 ```
+
 (06 = `enumerate(array_unpack([(SELECT User …)]) {name})` → `[0, {name}]` tuple;
 08 = `.1 ?? (SELECT User FILTER false)`; 09 = `.1 if 1=1 ELSE (SELECT User FILTER false)`.)
 
@@ -3263,12 +3446,14 @@ entirely — the tuple-element-of-call + applied shape isn't carried through.
 **Representative:** `test_edgeql_select_interpreter_cross08`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT _ := Issue.owner.name ++ <str>count(Issue.watchers.name)
 ORDER BY _;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text {
     optional multi watchers: User;       # default__issue__watchers junction
@@ -3279,6 +3464,7 @@ abstract type Owned { required owner: User; }   # default__issue__owner junction
 **Expected SQL:**
 For each `Issue`, concat its single owner name with the **per-Issue** count of its
 watchers (correlated to the same `Issue` row):
+
 ```sql
 SELECT (ow."name" || CAST((
     SELECT count(*) FROM "default__issue__watchers" wj WHERE wj."source" = iss."id"
@@ -3306,11 +3492,13 @@ cross_10/cross_13 (`count((Issue, count(...)))`) emit a stub `SELECT NULL AS "id
 **Representative:** `test_edgeql_collection_shape_04`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT [(User,)][0]
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary;
 ```
@@ -3318,16 +3506,19 @@ type User extending Dictionary;
 **Expected SQL:**
 A 1-element array of a 1-tuple of an object set; indexing `[0]` yields the tuple
 per `User` row. The object element serializes as `{}`/`{id}`:
+
 ```sql
 SELECT json_array(json_object('id', u."id", '__source_type', u."__source_type"))
 FROM "default__user" u;   -- one row per User, each a [(User,)] indexed at 0
 ```
+
 (06 wraps it in a free shape `{ z := ([User],).0 }`; 07 = `(Z, array_agg(array_unpack(Z))).1`
 over `<array<User>>{} IF false ELSE [User]`; 08 = `array_agg(User) FILTER X[0].name != 'Sully'`.)
 
 **Why it fails today:** array/tuple literals that **wrap object sets** emit a stub
 `SELECT NULL AS "id", NULL AS "__source_type"` — object-valued collection construction
-+ indexing isn't lowered; runtime-interpreted.
+
+- indexing isn't lowered; runtime-interpreted.
 
 ### expr objects (4)
 
@@ -3339,11 +3530,13 @@ over `<array<User>>{} IF false ELSE [User]`; 08 = `array_agg(User) FILTER X[0].n
 **Representative:** `test_edgeql_select_interpreter_expr_objects_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT array_agg(Issue ORDER BY .body)[0].owner.name;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text { ... }   # owner via default__issue__owner junction
 ```
@@ -3351,6 +3544,7 @@ type Issue extending Named, Owned, Text { ... }   # owner via default__issue__ow
 **Expected SQL:**
 `array_agg` collects all `Issue` objects ordered by body into one array; `[0]`
 takes the first; then we hop `.owner.name`:
+
 ```sql
 SELECT ow."name"
 FROM (
@@ -3360,8 +3554,10 @@ FROM (
 JOIN "default__issue__owner" oj ON oj."source" = agg.first_id
 JOIN "default__user" ow ON ow."id" = oj."target";
 ```
+
 (02 = `array_unpack(array_agg(Issue)).owner.name`; 04 = `array_agg(Named …)[0] IS Status`
-+ tuple of object-array members; 08 = `DISTINCT [(SELECT Issue{number,name} …)]`.)
+
+- tuple of object-array members; 08 = `DISTINCT [(SELECT Issue{number,name} …)]`.)
 
 **Why it fails today:** indexing an `array_agg` of **objects** then hopping a link
 emits a stub `SELECT NULL AS "id"` — object-array element link navigation isn't
@@ -3377,6 +3573,7 @@ lowered; runtime-interpreted.
 **Representative:** `test_edgeql_select_interpreter_tvariant_bad_06`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Issue {
     multi owner := User
@@ -3384,6 +3581,7 @@ SELECT Issue {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Owned { required owner: User; }   # owner is single+required on Issue
 type Issue extending Named, Owned, Text { ... }
@@ -3397,6 +3595,7 @@ variant: `priority := Priority` (bad_05), `multi owner := User` (bad_06),
 (bad_08). No result is asserted, so any valid plan is acceptable; the expected
 lowerable core for bad_06 is a per-Issue shape whose `owner` is the full `User`
 extent (a cross/multi rebind):
+
 ```sql
 SELECT iss."id", 'default::Issue' AS "__source_type",
        (SELECT json_group_array(json_object('id', u."id")) FROM "default__user" u) AS "owner"
@@ -3416,6 +3615,7 @@ re-derivation on a redefined pointer). Should compile and run.
 **Representative:** `test_edgeql_select_interpreter_tvariant_04`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     L := LogEntry   # there happens to only be 1 entry
@@ -3428,6 +3628,7 @@ SELECT
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text {
     multi time_spent_log: LogEntry;
@@ -3439,6 +3640,7 @@ type LogEntry extending Owned, Text { required body: str; }
 Build the variant `tsl` (per-Issue `time_spent_log`, coalesced to `L` when empty),
 then **re-select** `.tsl` and read `body`. Only Issue 1 has a log; others fall back
 to `L`, so every Issue yields a `LogEntry` (here all the same "Rewriting everything."):
+
 ```sql
 SELECT (SELECT le."body")
 FROM "default__issue" iss
@@ -3450,6 +3652,7 @@ JOIN /* tsl = coalesce(time_spent_log, L) */ (
 ) tsl ON tsl.iss_id = iss."id"
 JOIN "default__logentry" le ON le."id" = tsl.le_id;
 ```
+
 (01 = `related_to: {number} FILTER Issue.related_to.owner = Issue.owner` correlated
 sub-shape FILTER; 05 = top-scope path extension `Issue.owner.<owner[IS Issue]{…}`
 inside a computed of `Issue.owner`.)
@@ -3467,6 +3670,7 @@ hop; runtime-interpreted.
 **Representative:** `test_edgeql_select_interpreter_alias_indirection_10`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     sub := (
@@ -3483,6 +3687,7 @@ FILTER User.name = 'Elvis';
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Text { required body: str; }    # Comment/Issue/LogEntry are Text
 type User extending Dictionary;
@@ -3491,6 +3696,7 @@ type User extending Dictionary;
 **Expected SQL:**
 `sub` is a single (`LIMIT 1`) `Text` with a computed `foo`; every `User` row gets the
 **same** `sub.foo` scalar (the binding is independent of `User`):
+
 ```sql
 SELECT u."id", 'default::User' AS "__source_type", u."name",
   (SELECT (t."body" || '!')
@@ -3501,6 +3707,7 @@ SELECT u."id", 'default::User' AS "__source_type", u."name",
 FROM "default__user" u
 WHERE u."name" = 'Elvis';
 ```
+
 (05 = `I.owner = U` equality between two WITH bindings; 11 = nested
 `open_issues := (SELECT Issue { spent_time := sum(...) } FILTER .owner = User)`
 computed link off the `Developers` binding.)
@@ -3517,6 +3724,7 @@ computed-shape on the WITH binding isn't carried through to the path access on
 **Representative:** `test_edgeql_select_interpreter_computable_34`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Issue{
     number,
@@ -3526,6 +3734,7 @@ FILTER Issue.number = '1';
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary {
     multi todo: Issue { rank: int64 { default := 42; } }
@@ -3536,6 +3745,7 @@ abstract type Owned { required owner: User; }
 **Expected SQL:**
 `foo` is a computed link whose body is a self-UNION of `.owner.todo` (the owner's
 todo Issues, doubled). Lowerable core projects the union per Issue:
+
 ```sql
 SELECT iss."id", 'default::Issue' AS "__source_type", iss."number",
   (SELECT json_group_array(json_object('id', t."target"))
@@ -3551,6 +3761,7 @@ SELECT iss."id", 'default::Issue' AS "__source_type", iss."number",
 FROM "default__issue" iss
 WHERE iss."number" = '1';
 ```
+
 (33 = `WITH Z := (SELECT User { asdf := (SELECT .todo ORDER BY .number LIMIT 1)})`
 then `Z {name, asdf_id := .asdf.id}` — chained computed link off a WITH-rebind;
 inspect drops the inner `asdf` shape so `.asdf.id` resolves wrong.)
@@ -3567,6 +3778,7 @@ body isn't fully lowered; runtime-interpreted.
 **Representative:** `test_edgeql_select_interpreter_for_03`
 
 **EdgeQL:**
+
 ```edgeql
 FOR x IN {1, 3, 4}
 UNION (
@@ -3578,6 +3790,7 @@ UNION (
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text { required number: issue_num_t; }
 ```
@@ -3585,6 +3798,7 @@ type Issue extending Named, Owned, Text { required number: issue_num_t; }
 **Expected SQL:**
 For each `x`, run an **independent** `LIMIT 2` sub-select; the FOR is a UNION-ALL of
 the per-iteration bodies (so LIMIT applies per `x`, not globally):
+
 ```sql
 SELECT json_object('name', s."name", 'number', s."number")
 FROM (SELECT 1 AS x UNION ALL SELECT 3 UNION ALL SELECT 4) iter
@@ -3608,6 +3822,7 @@ constant `1 AS "asdf"` unconditionally instead of empty → `null`.
 **Representative:** `test_edgeql_select_interpreter_polymorphic_04`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User {
     [IS Named].id,
@@ -3615,6 +3830,7 @@ SELECT User {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Named { required name: str; }
 type User extending Dictionary;     # Dictionary extends Named
@@ -3623,6 +3839,7 @@ type User extending Dictionary;     # Dictionary extends Named
 **Expected SQL:**
 A polymorphic shape element selecting `id` only when the row `IS Named` (always true
 for `User`):
+
 ```sql
 SELECT json_object('id', u."id")
 FROM "default__user" u;
@@ -3639,12 +3856,14 @@ is added alongside the implicit id rather than as the sole field; runs via `h.sc
 **Representative:** `test_edgeql_select_interpreter_reverse_link_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT
     User.<owner[IS Text]@since
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Owned { required owner: User { note: str; } }
 type Issue extending ... Owned { overloaded required link owner { property since: datetime; } }
@@ -3652,6 +3871,7 @@ abstract type Text { ... }     # Text has no @since link-prop on owner
 ```
 
 **Expected SQL / expectation:**
+
 ```sql
 -- none — must throw at compile time with "property 'since' does not exist"
 ```
@@ -3667,6 +3887,7 @@ expected `property 'since' does not exist`).
 **Representative:** `test_edgeql_select_interpreter_order_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User {name}
 ORDER BY (
@@ -3675,6 +3896,7 @@ ORDER BY (
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending ... { optional multi watchers: User; }   # backlink .<watchers[IS Issue]
 ```
@@ -3682,6 +3904,7 @@ type Issue extending ... { optional multi watchers: User; }   # backlink .<watch
 **Expected SQL:**
 Order each `User` by the sum of the numbers of Issues that user watches — the
 backlink **must be correlated** to the outer `User`:
+
 ```sql
 SELECT u."id", 'default::User' AS "__source_type", u."name"
 FROM "default__user" u
@@ -3705,6 +3928,7 @@ sort key is the global sum for every row (order undefined).
 **Representative:** `test_edgeql_select_interpreter_equivalence_02`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     I2 := Issue
@@ -3717,6 +3941,7 @@ ORDER BY Issue.number;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending ... { priority: Priority; }
 type Priority extending Dictionary;   # has name
@@ -3725,6 +3950,7 @@ type Priority extending Dictionary;   # has name
 **Expected SQL:**
 `?=` treats two empty `priority.name`s as equal, so Issues with no priority (1 and 4)
 match each other:
+
 ```sql
 SELECT a0."id", 'default::Issue' AS "__source_type", a0."number"
 FROM "default__issue" a0
@@ -3748,6 +3974,7 @@ with `?=` empty-equivalence over a cross of two `Issue` extents isn't lowered
 **Representative:** `test_edgeql_select_interpreter_slice_04`
 
 **EdgeQL:**
+
 ```edgeql
 select [1,2,3,4,5][1:];
 -- ... and:
@@ -3761,6 +3988,7 @@ select (<optional json>$0)[2:];              -- $0 empty → []
 **Expected SQL:**
 Open-ended array slice and json slice; with an empty optional bound the whole slice
 is empty:
+
 ```sql
 -- [1,2,3,4,5][1:]
 SELECT (SELECT json_group_array(value) FROM json_each(json_array(1,2,3,4,5)) WHERE key >= 1) AS "value";
@@ -3779,6 +4007,7 @@ expected value (one of the ~12 sub-asserts fails); the array+param forms lower O
 **Representative:** `test_edgeql_select_interpreter_tuple_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT
     _ := (
@@ -3791,6 +4020,7 @@ ORDER BY _.0 THEN _.1;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending ... Owned { required status: Status; }   # backlink .<owner[IS Issue]
 type Status extending Dictionary;
@@ -3800,6 +4030,7 @@ type Status extending Dictionary;
 A nested tuple: cross of each `User.name` with the **set** of distinct statuses of
 that user's owned issues, paired with the per-user count of owned issues. The inner
 `status.name` must fan out (one row per status), `count` stays per-user:
+
 ```sql
 SELECT json_array(u."name", json_array(st."name", cnt.c))
 FROM "default__user" u
@@ -3824,12 +4055,14 @@ status fans out) — nested-tuple × set semantics mis-lowered.
 **Representative:** `test_edgeql_select_interpreter_linkproperty_04`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT
     Issue { since := (SELECT .owner)@since }
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending ... Owned {
     overloaded required link owner { property since: datetime; }
@@ -3839,6 +4072,7 @@ type Issue extending ... Owned {
 **Expected SQL:**
 `@since` is the link property on `Issue.owner`; reading it off a parenthesized
 `(SELECT .owner)` must still resolve to the junction's `since` column:
+
 ```sql
 SELECT iss."id", 'default::Issue' AS "__source_type",
        oj."since" AS "since"
@@ -3857,6 +4091,7 @@ can't bind to the junction row (run via `h.script`, expected to succeed).
 **Representative:** `test_edgeql_select_interpreter_if_else_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Issue {
     foo := 'bar' IF Issue.number = '1' ELSE 123
@@ -3864,11 +4099,13 @@ SELECT Issue {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text { required number: issue_num_t; }
 ```
 
 **Expected SQL / expectation:**
+
 ```sql
 -- none — must throw at compile time with a branch-type mismatch (str vs int64) error
 ```
@@ -3883,6 +4120,7 @@ type unification of the conditional expression isn't enforced.
 **Representative:** `test_edgeql_partial_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Issue {
     number,
@@ -3894,6 +4132,7 @@ SELECT Issue {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Issue extending ... { optional multi watchers: User; required status: Status; }
 type User { required name: str; }
@@ -3902,6 +4141,7 @@ type User { required name: str; }
 **Expected SQL:**
 Outer filter on correlated `status`/`owner` names; inner `watchers` sub-shape with a
 computed `name_upper` and its own FILTER:
+
 ```sql
 SELECT iss."number",
   (SELECT json_group_array(json_object('name', wu."name", 'name_upper', upper(wu."name")))
@@ -3923,6 +4163,7 @@ combined with the multi-condition outer FILTER produces a mismatched shape/resul
 **Representative:** `test_edgeql_select_interpreter_banned_free_shape_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT DISTINCT {{ z := 1 }, { z := 2 }};
 -- and:
@@ -3932,6 +4173,7 @@ SELECT DISTINCT { z := 1 } = { z := 2 };
 **Relevant ESDL:** _(none — free object shapes)_
 
 **Expected SQL / expectation:**
+
 ```sql
 -- none — must throw at compile time (free shapes have no identity/equality; DISTINCT/= must be rejected)
 ```
@@ -3946,17 +4188,20 @@ shapes — equality/uniqueness on free shapes isn't rejected.
 **Representative:** `test_edgeql_assert_fail_object_computed_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT array_agg((SELECT User {m := Publication}))[{1000}].m;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary;
 type Publication { required title: str; }
 ```
 
 **Expected SQL / expectation:**
+
 ```sql
 -- none — must throw at runtime with "array index 1000 is out of bounds"
 ```
@@ -3972,6 +4217,7 @@ bounds-checked; this is the object-array path that also stubs in expr_objects).
 **Representative:** `test_edgeql_select_interpreter_concat_null_01`
 
 **EdgeQL:**
+
 ```edgeql
 select BooleanTest {
     name,
@@ -3981,6 +4227,7 @@ select BooleanTest {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type BooleanTest extending Named { val: int64; multi tags: str; }
 ```
@@ -3989,6 +4236,7 @@ type BooleanTest extending Named { val: int64; multi tags: str; }
 When `.val` is empty (`{}`), `[.val]` is an **empty set** (an array literal of an
 empty element is empty), so `[.val] ++ [0]` is empty → `x` is `null`; otherwise
 `[val, 0]`:
+
 ```sql
 SELECT bt."name", bt."val",
   CASE WHEN bt."val" IS NULL THEN NULL
@@ -4008,11 +4256,13 @@ empty-element array (`[<∅>]` → empty set) NULL propagation isn't modeled.
 **Representative:** `test_edgeql_select_interpreter_subshape_filter_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Comment { owner: { name } FILTER false }
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Comment extending Text, Owned { required issue: Issue; }
 abstract type Owned { required owner: User; }   # owner is required single
@@ -4021,6 +4271,7 @@ abstract type Owned { required owner: User; }   # owner is required single
 **Expected SQL:**
 `owner` is a **required single** link, but `FILTER false` filters it to empty; the
 sub-shape becomes an always-empty single object (`null`):
+
 ```sql
 SELECT c."id", 'default::Comment' AS "__source_type",
   json_extract(COALESCE((
@@ -4042,12 +4293,14 @@ sub-shape filter mis-plans (run via `h.script`, expected to succeed with empty o
 **Representative:** `test_edgeql_select_interpreter_shadow_computable_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User := User { name, is_elvis := User.name = 'Elvis' }
 ORDER BY User.is_elvis
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Dictionary;   # required name: str
 ```
@@ -4055,6 +4308,7 @@ type User extending Dictionary;   # required name: str
 **Expected SQL:**
 `User := User {…}` shadow-rebinds `User` to the shaped variant; the ORDER BY then
 references the **computed** `is_elvis` of the rebound set:
+
 ```sql
 SELECT u."id", 'default::User' AS "__source_type", u."name",
        (u."name" = 'Elvis') AS "is_elvis"
@@ -4073,6 +4327,7 @@ rebound set's computed `is_elvis`; rebind + order-by-computed not threaded.
 **Representative:** `test_edgeql_select_interpreter_card_blowup_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Comment {
   issue := assert_exists(( .issue {
@@ -4084,6 +4339,7 @@ SELECT Comment {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type Comment extending Text, Owned { required issue: Issue; }
 type Issue extending ... { required status: Status; }
@@ -4094,6 +4350,7 @@ type Status extending Dictionary;
 Each `statusN` is an identical correlated sub-shape reading `.status` with `__type__`
 metadata; the 8 copies should each be an independent correlated subquery off the
 same `Comment.issue.status`:
+
 ```sql
 SELECT c."id",
   (SELECT json_object('id', iss."id",
@@ -4110,21 +4367,20 @@ each with `__type__.name/.id`) blow up the plan — the engine multiplies cardin
 (combinatorial join growth) instead of keeping each sub-shape independent
 (run via `h.script`, expected to compile/run without explosion).
 
-
 ---
 
 ## tests/edgeql_insert.test.ts (39)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 13 | insert dependent (nested INSERT/FOR/UPDATE writing links) | `INSERT T { link := (INSERT U …) }`, `UPDATE … SET { link := (INSERT …) }`, nested INSERT inside `FOR` |
-| 11 | insert unless conflict | `INSERT T {…} UNLESS CONFLICT [ON (.p)] [ELSE (…)]` upsert: conflict probe + INSERT/ELSE branch |
-| 5 | insert update cross type conflict | INSERT/UPDATE on sibling types must probe each other for a shared exclusive constraint |
-| 3 | DML expression in WITH/SELECT/free-object | INSERT used as a value inside `WITH … SELECT`, `enumerate`, tuple, or a free object |
-| 2 | insert cross type conflict | Two INSERTs of related types in one statement colliding on a shared exclusive constraint |
-| 2 | insert + access policy | INSERT under an access policy (`deny select`, computed-link global cast) |
-| 2 | tuple/collection links & multi-tuple | `multi property tuple<…>` / link-prop assigned from a tuple set via `assert_distinct` |
-| 1 | upsert/coalesce with UPDATE ?? INSERT | `(UPDATE …) ?? (INSERT …)` inside `FOR` |
+| Count | Query group                                               | Pattern                                                                                                |
+| ----: | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+|    13 | insert dependent (nested INSERT/FOR/UPDATE writing links) | `INSERT T { link := (INSERT U …) }`, `UPDATE … SET { link := (INSERT …) }`, nested INSERT inside `FOR` |
+|    11 | insert unless conflict                                    | `INSERT T {…} UNLESS CONFLICT [ON (.p)] [ELSE (…)]` upsert: conflict probe + INSERT/ELSE branch        |
+|     5 | insert update cross type conflict                         | INSERT/UPDATE on sibling types must probe each other for a shared exclusive constraint                 |
+|     3 | DML expression in WITH/SELECT/free-object                 | INSERT used as a value inside `WITH … SELECT`, `enumerate`, tuple, or a free object                    |
+|     2 | insert cross type conflict                                | Two INSERTs of related types in one statement colliding on a shared exclusive constraint               |
+|     2 | insert + access policy                                    | INSERT under an access policy (`deny select`, computed-link global cast)                               |
+|     2 | tuple/collection links & multi-tuple                      | `multi property tuple<…>` / link-prop assigned from a tuple set via `assert_distinct`                  |
+|     1 | upsert/coalesce with UPDATE ?? INSERT                     | `(UPDATE …) ?? (INSERT …)` inside `FOR`                                                                |
 
 ---
 
@@ -4147,6 +4403,7 @@ each with `__type__.name/.id`) blow up the plan — the engine multiplies cardin
 **Representative:** `test_edgeql_insert_dependent_04`
 
 **EdgeQL:**
+
 ```
 SELECT (
     INSERT Person {
@@ -4158,6 +4415,7 @@ SELECT (
 ```
 
 **Relevant ESDL:**
+
 ```
 type Person {
     required single property name -> str { constraint std::exclusive; default := "Nemo"; }
@@ -4169,6 +4427,7 @@ type Note { required property name -> str; property note -> str; link subject ->
 ```
 
 **Expected SQL:** (multi-statement DML executed by the engine; the column set is decided at write time)
+
 ```
 -- 1. iterate the FOR set, inserting one Note per element, capturing ids:
 INSERT INTO "default__note" ("id", "name") VALUES (?, ?);   -- 'hello'
@@ -4186,6 +4445,7 @@ INSERT INTO "default__person__notes" ("source", "target", "rowid")
 --    FROM "default__note" a1 JOIN "default__person__notes" a2
 --      ON a2."target" = a1."id" WHERE a2."source" = <person>."id" ORDER BY a2."rowid")
 ```
+
 A **single** link (e.g. `dependent_18`'s `note := (INSERT Note …)`) is stored as an FK column `note_id` on `default__person`, not a junction:
 `INSERT INTO "default__person" ("id","name","note_id","tag2") VALUES (?,?,?,?)`.
 
@@ -4210,6 +4470,7 @@ A **single** link (e.g. `dependent_18`'s `note := (INSERT Note …)`) is stored 
 **Representative:** `test_edgeql_insert_unless_conflict_17`
 
 **EdgeQL:**
+
 ```
 FOR x IN {"1", "2", "3", "4"} UNION (
     INSERT Person { name := x }
@@ -4219,6 +4480,7 @@ FOR x IN {"1", "2", "3", "4"} UNION (
 ```
 
 **Relevant ESDL:**
+
 ```
 type Person {
     required single property name -> str { constraint std::exclusive; default := "Nemo"; }
@@ -4228,6 +4490,7 @@ type Person {
 ```
 
 **Expected SQL:** (per FOR element: probe the exclusive prop, then INSERT or run the ELSE branch on the conflicting row)
+
 ```
 -- conflict probe on the exclusive property .name:
 SELECT a0."id" FROM "default__person" a0 WHERE a0."name" = ? LIMIT 1;   -- bind x
@@ -4238,6 +4501,7 @@ INSERT INTO "default__person" ("id", "name", "tag2") VALUES (?, ?, '<n/a>');
 -- if an existing row WAS found → ELSE branch (UPDATE the conflicting row):
 UPDATE "default__person" SET "tag" = '!' WHERE "id" = ?;   -- the probed id
 ```
+
 The bare `UNLESS CONFLICT` (no `ON`) form (`unless_conflict_28`) must probe **every** exclusive constraint, including a `multi property name` (probe the element-storage table for any overlapping value). `unless_conflict_25` probes an exclusive **link** `.l` (FK column `l_id`).
 
 **Why it fails today:** Several distinct gaps. `01`/`04` are flaky harness equality assertions (`expected undefined to not deeply equal undefined`). `02`/`11` expect specific validation errors (`UNLESS CONFLICT argument must be a property`, `self-referencing INSERTs are not allowed`) that aren't raised. `16` errors `INSERT UNLESS CONFLICT ON does not support volatile properties` (`<str>math::floor(random()*2)` rejected — Gel allows it). `17` UPDATE-in-ELSE inside FOR doesn't apply (`tag` count 1≠2). `20b` parse error `Expected '{' after ':' in link shape` on `sub: Person IS DerivedPerson` in the verify query. `25` raises `missing value for required property 'n'` (nested `INSERT X UNLESS CONFLICT ON (.n) ELSE (X)` as a link value mishandled). `27` raises `missing value for required property 'first'` (nested upsert binding `P` lost). `28` raises `name violates exclusivity constraint` (multi-prop conflict not deduped by the probe). `self_03` does NOT throw — two INSERTs of the same exclusive `name` in one statement (one nested DETACHED) aren't both counted by the exclusivity check.
@@ -4255,6 +4519,7 @@ The bare `UNLESS CONFLICT` (no `ON`) form (`unless_conflict_28`) must probe **ev
 **Representative:** `test_edgeql_insert_update_cross_type_conflict_05b`
 
 **EdgeQL:**
+
 ```
 -- setup: INSERT Person { name := 'Foo' }; INSERT DerivedPerson { name := 'Bar' };
 WITH P := Person
@@ -4262,12 +4527,14 @@ UPDATE P FILTER true SET { name := "!" };   -- must raise "name violates exclusi
 ```
 
 **Relevant ESDL:**
+
 ```
 type Person { required single property name -> str { constraint std::exclusive; ... } }
 type DerivedPerson extending Person { property sub_key -> str { constraint exclusive; } }
 ```
 
 **Expected SQL:** (the UPDATE spans both `Person` and `DerivedPerson`; setting both rows' `name` to `"!"` must be detected as a collision across the sibling tables that share the inherited exclusive `name`)
+
 ```
 UPDATE "default__person"        SET "name" = '!' WHERE <filter over Person rows>;
 UPDATE "default__derivedperson" SET "name" = '!' WHERE <filter over DerivedPerson rows>;
@@ -4293,6 +4560,7 @@ SELECT "name", count(*) AS c FROM (
 **Representative:** `test_edgeql_insert_enumerate_01`
 
 **EdgeQL:**
+
 ```
 WITH
      F := (INSERT Subordinate {name := "!"}),
@@ -4302,11 +4570,13 @@ SELECT (Z.0, Z.1.0, Z.1.1);
 ```
 
 **Relevant ESDL:**
+
 ```
 type Subordinate { required property name -> str; property val -> int64; }
 ```
 
 **Expected SQL:** (each WITH-bound INSERT runs once and is captured as a single object; then a pure SELECT projects the tuple)
+
 ```
 INSERT INTO "default__subordinate" ("id", "name") VALUES (?, '!');    -- F
 INSERT INTO "default__subordinate" ("id", "name") VALUES (?, '??');   -- B
@@ -4327,6 +4597,7 @@ SELECT 0 AS "0", json_object('id', ?) AS "1", json_object('id', ?) AS "2";
 **Representative:** `test_edgeql_insert_cross_type_conflict_16`
 
 **EdgeQL:**
+
 ```
 -- inline schema: Foo { multi link foo -> Foo; required name -> str { exclusive } }; Bar extending Foo;
 WITH name := 'Alice'
@@ -4337,12 +4608,14 @@ INSERT Foo {
 ```
 
 **Relevant ESDL:** (created inline by the test)
+
 ```
 type Foo { multi link foo -> Foo; required property name -> str { constraint exclusive }; }
 type Bar extending Foo;
 ```
 
-**Expected SQL:** (nested child INSERT then parent INSERT; the shared inherited exclusive `name` across `Foo`/`Bar` must be probed *before* writing so the duplicate is reported as a Gel constraint error, not a raw SQLite UNIQUE error)
+**Expected SQL:** (nested child INSERT then parent INSERT; the shared inherited exclusive `name` across `Foo`/`Bar` must be probed _before_ writing so the duplicate is reported as a Gel constraint error, not a raw SQLite UNIQUE error)
+
 ```
 -- cross-type pre-check over the Foo closure (Foo ∪ Bar) for the value 'Alice':
 SELECT count(*) FROM (
@@ -4365,6 +4638,7 @@ INSERT INTO "default__foo" ("id", "name") VALUES (?, 'Alice');   -- parent (coll
 **Representative:** `test_edgeql_insert_conflict_policy_02`
 
 **EdgeQL:**
+
 ```
 -- alter type Person { create access policy yes allow all using (true);
 --                     create access policy no deny select using (true); };
@@ -4374,12 +4648,14 @@ insert Person { name := "test" } unless conflict on (.name) else (Person);
 ```
 
 **Relevant ESDL:**
+
 ```
 type Person { required single property name -> str { constraint std::exclusive; ... } }
 -- + runtime access policies: `allow all` + `deny select using (true)`
 ```
 
 **Expected SQL:** (the conflict probe and the ELSE `(Person)` read are subject to `deny select` → they see zero rows → the INSERT proceeds and then hits the exclusive constraint)
+
 ```
 -- conflict probe wrapped in the access-policy SELECT filter (deny select → WHERE 0):
 SELECT a0."id" FROM "default__person" a0 WHERE a0."name" = 'test' AND (0) LIMIT 1;  -- empty
@@ -4399,6 +4675,7 @@ INSERT INTO "default__person" ("id","name","tag2") VALUES (?, 'test', '<n/a>'); 
 **Representative:** `test_edgeql_insert_tuples_04`
 
 **EdgeQL:**
+
 ```
 with noobs := {
   ((insert Subordinate { name := "foo" }), "bar"),
@@ -4411,6 +4688,7 @@ select (insert InsertTest {
 ```
 
 **Relevant ESDL:**
+
 ```
 type InsertTest {
     required property l2 -> int64;
@@ -4421,6 +4699,7 @@ type Subordinate { required property name -> str; }
 ```
 
 **Expected SQL:** (insert the two Subordinates, capture (objectId, comment) pairs from the tuple set, then write the parent and the link rows with the `@comment` link-property column)
+
 ```
 INSERT INTO "default__subordinate" ("id","name") VALUES (?, 'foo');
 INSERT INTO "default__subordinate" ("id","name") VALUES (?, 'spam');
@@ -4442,6 +4721,7 @@ INSERT INTO "default__inserttest__subordinates" ("source","target","comment","ro
 **Representative:** `test_edgeql_insert_coalesce_04`
 
 **EdgeQL:**
+
 ```
 select (for n in array_unpack(<array<int64>>$0) union (
     (update InsertTest filter .l2 = n set { name := "!" }) ??
@@ -4450,6 +4730,7 @@ select (for n in array_unpack(<array<int64>>$0) union (
 ```
 
 **Relevant ESDL:**
+
 ```
 type InsertTest {
     property name -> str;
@@ -4459,6 +4740,7 @@ type InsertTest {
 ```
 
 **Expected SQL:** (per FOR element `n`: try the UPDATE first; if it matched zero rows, run the INSERT as the `??` fallback)
+
 ```
 UPDATE "default__inserttest" SET "name" = '!' WHERE "l2" = ? RETURNING "id";   -- bind n
 -- if zero rows updated → INSERT fallback:
@@ -4469,35 +4751,32 @@ INSERT INTO "default__inserttest" ("id","l2","name","l3") VALUES (?, ?, '?', 'te
 
 **Why it fails today:** `coalesce_04` returns `['false']` where `true` expected — `(UPDATE …) ?? (INSERT …)` inside a FOR doesn't fall back to INSERT when the UPDATE is empty, and/or the `new := .id not in InsertTest.id` flag is evaluated against the post-insert set rather than the pre-statement snapshot.
 
-
-
-
 ---
 
 ## tests/edgeql_linkprops.test.ts (35)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 3 | props back shape | Backlink/computed-backlink `@count` shape that is mis-assembled (complex nested, self-rename, `SpecialCard.owners`) |
-| 2 | props back negative | `.<deck { @count }` / `[IS Object]` linkprop reads that should throw "has no property 'count'" |
-| 3 | props basic | `@count` used in inner-shape `FILTER`/`ORDER BY`, and `.cost IN .<deck[IS User]@count` |
-| 3 | props cross | Correlated `.cost = .<deck[IS User]@count` (path & computed-field positions) |
-| 3 | props implication | Boolean implication over backlink `@count` in computed fields / FILTER / shape |
-| 5 | props setops | DISTINCT / UNION / tuple / `FILTER` over a linkprop set (`User.deck@count`, `User.friends@nickname`) |
-| 4 | props dunder default | `@x := __default__` on a link property in INSERT/UPDATE shapes |
-| 3 | props link union | `@x` linkprop read through a `(Bar \| Foo)` union link |
-| 2 | props link computed | Reading a *computed* link property (`@total_cost`, `@tag`) as a stored column |
-| 2 | props link shadow | Shadowed/aliased `deck := (SELECT User.deck …)` then reading `@count` from it |
-| 1 | props computable_02 | WITH-bound ad-hoc computed linkprop `@foo` read in the outer shape |
-| 1 | props agg_01 | Per-user `sum(User.deck@count)` inside `FOR User` not correlated |
-| 1 | props intersect_01 | `[IS User].deck: { @count }` intersection link over `Named` extent |
-| 1 | props modification_01 | Unknown link property `@y` in INSERT must throw "has no property 'y'" |
-| 1 | props tuples_01 | Tuple-typed link property `@roles` (`tuple<role1,role2>`) read + field access |
+| Count | Query group           | Pattern                                                                                                             |
+| ----: | --------------------- | ------------------------------------------------------------------------------------------------------------------- |
+|     3 | props back shape      | Backlink/computed-backlink `@count` shape that is mis-assembled (complex nested, self-rename, `SpecialCard.owners`) |
+|     2 | props back negative   | `.<deck { @count }` / `[IS Object]` linkprop reads that should throw "has no property 'count'"                      |
+|     3 | props basic           | `@count` used in inner-shape `FILTER`/`ORDER BY`, and `.cost IN .<deck[IS User]@count`                              |
+|     3 | props cross           | Correlated `.cost = .<deck[IS User]@count` (path & computed-field positions)                                        |
+|     3 | props implication     | Boolean implication over backlink `@count` in computed fields / FILTER / shape                                      |
+|     5 | props setops          | DISTINCT / UNION / tuple / `FILTER` over a linkprop set (`User.deck@count`, `User.friends@nickname`)                |
+|     4 | props dunder default  | `@x := __default__` on a link property in INSERT/UPDATE shapes                                                      |
+|     3 | props link union      | `@x` linkprop read through a `(Bar \| Foo)` union link                                                              |
+|     2 | props link computed   | Reading a _computed_ link property (`@total_cost`, `@tag`) as a stored column                                       |
+|     2 | props link shadow     | Shadowed/aliased `deck := (SELECT User.deck …)` then reading `@count` from it                                       |
+|     1 | props computable_02   | WITH-bound ad-hoc computed linkprop `@foo` read in the outer shape                                                  |
+|     1 | props agg_01          | Per-user `sum(User.deck@count)` inside `FOR User` not correlated                                                    |
+|     1 | props intersect_01    | `[IS User].deck: { @count }` intersection link over `Named` extent                                                  |
+|     1 | props modification_01 | Unknown link property `@y` in INSERT must throw "has no property 'y'"                                               |
+|     1 | props tuples_01       | Tuple-typed link property `@roles` (`tuple<role1,role2>`) read + field access                                       |
 
 ### props back shape (3)
 
 - `test_edgeql_props_back_01`
-- `test_edgeql_props_back_09` *(xerror: stack overflow)*
+- `test_edgeql_props_back_09` _(xerror: stack overflow)_
 - `test_edgeql_props_schema_back_02`
 
 A backlink (`.<deck[IS User]`) or computed-backlink (`.owners`) shape that surfaces `@count`,
@@ -4509,6 +4788,7 @@ renamed/plain forms (back_02/03/05/08, schema_back_03/04/05) now pass.
 **Representative:** `test_edgeql_props_schema_back_02`
 
 **EdgeQL:**
+
 ```edgeql
 -- third sub-assertion of schema_back_02 (the failing one):
 select SpecialCard { name, owners: { name, @count }}
@@ -4517,6 +4797,7 @@ filter .name = 'Djinn';
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Named { multi deck: Card { count: int64 { default := 1; }; } }
 type Bot extending User;
@@ -4525,6 +4806,7 @@ type SpecialCard extending Card;
 ```
 
 **Expected SQL:**
+
 ```sql
 -- .owners expands to the reverse-deck junction; @count reads default__user__deck."count"
 -- (source/target swapped). The SpecialCard extent must still project the owners shape.
@@ -4551,7 +4833,7 @@ shape is not assembled for the `SpecialCard` extent. back_01 nests the backlink 
 ### props back negative (2)
 
 - `test_edgeql_props_back_06`
-- `test_edgeql_props_back_07` *(xfail: too permissive with intersections on supertypes)*
+- `test_edgeql_props_back_07` _(xfail: too permissive with intersections on supertypes)_
 
 Reading the link property `@count` through a backlink that does NOT resolve to the owning
 `User.deck` link — either with no type intersection (`.<deck`) or through `[IS Object]` — must be
@@ -4560,6 +4842,7 @@ rejected, because the `count` property is declared on `User.deck`, not on the ba
 **Representative:** `test_edgeql_props_back_06`
 
 **EdgeQL (negative test — must throw):**
+
 ```edgeql
 select Card { name, z := .<deck { @count }}     -- no [IS User] intersection
 filter .name = 'Dragon';
@@ -4567,6 +4850,7 @@ filter .name = 'Dragon';
 ```
 
 **Expected SQL:**
+
 ```sql
 -- none — must throw at compile time with "has no property 'count'"
 ```
@@ -4585,6 +4869,7 @@ untyped (back_06) or narrowed only to `Object` (back_07), instead of requiring t
 **Representative:** `test_edgeql_props_basic_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User {
     name,
@@ -4596,11 +4881,13 @@ SELECT User {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 multi deck: Card { count: int64 { default := 1; }; }   # @count = junction column
 ```
 
 **Expected SQL:**
+
 ```sql
 -- inner shape FILTER must compare the target's cost column to the junction count
 -- column on the SAME deck row, inside the correlated subquery.
@@ -4635,6 +4922,7 @@ the backlink `@count` set, so the membership test is wrong.
 **Representative:** `test_edgeql_props_cross_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Card { name }
 FILTER .cost = .<deck[IS User]@count    -- card cost = its count in SOME deck
@@ -4643,12 +4931,14 @@ ORDER BY .name;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 multi deck: Card { count: int64 { default := 1; }; }
 multi owners := .<deck[IS User];        # backlink used in cross_04
 ```
 
 **Expected SQL:**
+
 ```sql
 -- existential: does any reverse-deck junction row for this card have count = cost?
 SELECT a0."id", a0."__source_type", a0."name"
@@ -4680,6 +4970,7 @@ for some cards).
 **Representative:** `test_edgeql_props_implication_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Card { name }
 FILTER NOT (NOT .<deck[IS User]@count = 1 OR .element = 'Fire')
@@ -4688,11 +4979,13 @@ ORDER BY .name;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 multi deck: Card { count: int64 { default := 1; }; }
 ```
 
 **Expected SQL:**
+
 ```sql
 -- existential over the reverse-deck junction count column, combined with the
 -- element predicate; element-wise EdgeQL "=" => EXISTS form.
@@ -4722,6 +5015,7 @@ refactored AND form, passes — so the OR/NOT shape is the broken path.
 **Representative:** `test_edgeql_props_setops_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT DISTINCT User.deck@count;                       -- {1,2,3,4}
 SELECT User.deck@count FILTER User.deck.element = 'Fire';   -- bag {1,2,2}
@@ -4731,12 +5025,14 @@ SELECT DISTINCT (
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 multi deck: Card { count: int64 { default := 1; }; }   # @count = junction column
 multi friends: User { nickname: str; }                 # @nickname (setops_03/04)
 ```
 
 **Expected SQL:**
+
 ```sql
 -- the linkprop set is the "count" column of the junction, optionally constrained
 -- by an existential FILTER on a sibling path off the SAME deck row.
@@ -4756,8 +5052,8 @@ SELECT DISTINCT "value" AS "value" FROM (
 ```
 
 **Why it fails today:** The bare `SELECT DISTINCT User.deck@count` compiles fine, but
-`FILTER User.deck.element = 'Fire'` on a linkprop projection throws *"reference to
-'User.deck.element' changes the interpretation of 'User' elsewhere in the query"* — the FILTER's
+`FILTER User.deck.element = 'Fire'` on a linkprop projection throws _"reference to
+'User.deck.element' changes the interpretation of 'User' elsewhere in the query"_ — the FILTER's
 sibling path is not correlated to the same `deck` junction row that produced `@count`. setops_02 is a
 `deck.name UNION` count mismatch (18 vs 14), setops_03 mis-orders the `friends@nickname` UNION set,
 setops_04/05 over-count a `(DISTINCT A.deck@count, A.name)` tuple (4 vs 2 — DISTINCT not applied to the
@@ -4773,6 +5069,7 @@ linkprop column).
 **Representative:** `test_edgeql_props_dunder_default_01`
 
 **EdgeQL:**
+
 ```edgeql
 insert Src {
     n := 1,
@@ -4786,6 +5083,7 @@ SELECT Src { n, l: { n, @x } };   -- @x = -1 where __default__ used
 ```
 
 **Relevant ESDL (script-defined):**
+
 ```esdl
 CREATE TYPE Tgt { CREATE PROPERTY n -> int64; };
 CREATE TYPE Src {
@@ -4798,6 +5096,7 @@ CREATE TYPE Src {
 ```
 
 **Expected SQL:**
+
 ```sql
 -- @x := __default__ must resolve to the link-property's declared default (-1),
 -- written as the "x" column of the single link junction default__src__l.
@@ -4823,6 +5122,7 @@ existing link row to apply the default.
 **Representative:** `test_edgeql_props_link_union_01`
 
 **EdgeQL (after a CREATE-TYPE script):**
+
 ```edgeql
 SELECT Baz.fubar.l@x;             -- ["test"]
 SELECT Baz.fubar.l[IS Tgt2]@x;    -- ["test"]
@@ -4830,6 +5130,7 @@ SELECT (Foo UNION Bar).l@x;       -- ["test"]
 ```
 
 **Relevant ESDL (script-defined):**
+
 ```esdl
 CREATE TYPE Tgt;
 CREATE TYPE Tgt2 EXTENDING Tgt;
@@ -4839,6 +5140,7 @@ CREATE TYPE Baz { CREATE LINK fubar -> (Bar | Foo); };   -- union-of-types link
 ```
 
 **Expected SQL:**
+
 ```sql
 -- fubar is a (Bar|Foo) union link; reaching .l@x must read the "x" linkprop column
 -- from whichever owner junction (default__bar__l / default__foo__l) the row lives in,
@@ -4857,7 +5159,7 @@ SELECT "value" FROM (
 ```
 
 **Why it fails today:** Throws `[Unsupported:LinkProperty] Unknown field '@x' on 'Tgt2'` — the
-linkprop `@x` is looked up on the *target* type (`Tgt2`) instead of on the union-link `l` owned by
+linkprop `@x` is looked up on the _target_ type (`Tgt2`) instead of on the union-link `l` owned by
 `Bar`/`Foo`. union_02/03 differ only in `MULTI` cardinality of `l` and fail identically.
 
 ### props link computed (2)
@@ -4868,6 +5170,7 @@ linkprop `@x` is looked up on the *target* type (`Tgt2`) instead of on the union
 **Representative:** `test_edgeql_props_link_computed_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User {
     name,
@@ -4877,6 +5180,7 @@ SELECT User {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 multi deck: Card {
     count: int64 { default := 1; };
@@ -4889,6 +5193,7 @@ avatar: Card {
 ```
 
 **Expected SQL:**
+
 ```sql
 -- @total_cost is computed, not a column: lower to @count * target.cost.
 SELECT a0."id", a0."__source_type", a0."name",
@@ -4917,6 +5222,7 @@ instead of being lowered to their defining expression (`@count * .cost`, resp.
 **Representative:** `test_edgeql_props_link_shadow_02`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     AliasedUser := User {
@@ -4930,11 +5236,13 @@ SELECT AliasedUser {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 multi deck: Card { count: int64 { default := 1; }; }
 ```
 
 **Expected SQL:**
+
 ```sql
 -- the shadowed deck still maps to the same junction; @count must survive the
 -- ORDER BY .name LIMIT 2 reshaping and be read per surviving deck row.
@@ -4960,6 +5268,7 @@ per-user `LIMIT 2` ordering is wrong (mismatched object set).
 - `test_edgeql_props_computable_02`
 
 **EdgeQL:**
+
 ```edgeql
 WITH MyUser := (
     SELECT User { my_deck := (SELECT Card { @foo := Card.name }
@@ -4970,7 +5279,7 @@ SELECT MyUser { name, my_deck: { @foo } };
 -- expected my_deck.@foo = 'Djinn'
 ```
 
-**Relevant ESDL:** `my_deck` is an ad-hoc computed link; `@foo := Card.name` is a *computed* linkprop
+**Relevant ESDL:** `my_deck` is an ad-hoc computed link; `@foo := Card.name` is a _computed_ linkprop
 on it (not from the schema). The non-WITH form (computable_01) passes.
 
 **Expected SQL:** `@foo` should carry the inner `Card.name` value (`'Djinn'`) through the WITH binding
@@ -4986,6 +5295,7 @@ the outer shape projection.
 - `test_edgeql_props_agg_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT sum(User.deck@count);                  -- 51 (PASSES)
 SELECT _ := (FOR User in User
@@ -4996,6 +5306,7 @@ ORDER BY _;                                   -- per-user sums: [10,Alice],[12,B
 **Relevant ESDL:** `multi deck: Card { count: int64 { default := 1; }; }`
 
 **Expected SQL:**
+
 ```sql
 -- per-user aggregate: sum the junction "count" column grouped by the FOR user row.
 SELECT json_array(
@@ -5015,6 +5326,7 @@ per-iteration user — it returns the global 51 for every row (`expected 51 to d
 - `test_edgeql_props_intersect_01`
 
 **EdgeQL:**
+
 ```edgeql
 select Named {
    [IS User].deck: { name, @count }      -- type-intersection link with linkprop
@@ -5022,6 +5334,7 @@ select Named {
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Named { required name: str { delegated constraint exclusive; } }
 type User extending Named { multi deck: Card { count: int64 { default := 1; }; } }
@@ -5040,18 +5353,21 @@ is not assembled correctly for the polymorphic `Named` extent.
 - `test_edgeql_props_modification_01`
 
 **EdgeQL (negative test — must throw):**
+
 ```edgeql
 insert Src { l := assert_single(Tgt { @y := "..." }) };
 -- expected: throw "link 'l' of object type 'default::Src' has no property 'y'"
 ```
 
 **Relevant ESDL (script-defined):**
+
 ```esdl
 CREATE TYPE Tgt;
 CREATE TYPE Src { CREATE LINK l -> Tgt { CREATE PROPERTY x -> str; }; };  -- only @x exists
 ```
 
 **Expected SQL:**
+
 ```sql
 -- none — must throw at compile time with "has no property 'y'"
 ```
@@ -5065,6 +5381,7 @@ declared properties.
 - `test_edgeql_props_tuples_01`
 
 **EdgeQL:**
+
 ```edgeql
 insert Foo { orgs := (select Org {
     @roles := (role1 := true, role2 := false) }) };
@@ -5072,6 +5389,7 @@ select Foo.orgs@roles.role1;   -- expected: true
 ```
 
 **Relevant ESDL (script-defined):**
+
 ```esdl
 create type Org;
 create type Foo {
@@ -5088,21 +5406,20 @@ create type Foo {
 not registered as a readable junction column, so `@roles` (and the subsequent `.role1` field access)
 cannot be resolved.
 
-
 ---
 
 ## tests/edgeql_calls.test.ts (29)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 9 | Overload-resolution rejection not raised | An invalid `call(...)` should be rejected ("function does not exist" / "is not unique" / "newly created objects cannot be passed"), but the resolver silently binds an overload and runs it. |
-| 7 | `anytype` array/tuple return wrapping | UDF returns `array<anytype>` / `tuple<...>` (incl. tuple-in-array, typed-scalar element); the generic return value is not wrapped/serialized to the right shape. |
-| 5 | Object-typed param dispatch / inlining (`calls obj`) | Param is an object type (`Rectangle`, `FlatShape`, `Person`); the call's source must be the object table and the right subtype overload must be inlined. |
-| 4 | Polymorphic-param overload picks wrong/missing body | Multiple overloads on `anyint`/`int64`/`anyscalar`/`str` (and nested `inner(a)`); the wrong overload body is inlined → `null`/wrong value. |
-| 1 | NAMED ONLY array default binding | `NAMED ONLY b: array<anytype> = []` default is not applied; `len(b)` is computed against the passed value even when defaulted/omitted. |
-| 1 | Aggregate scalar type inference | `sum()` over a homogeneous `float32` set should infer `std::float32`, not widen to `std::float64`. |
-| 1 | JSON-typed array indexing in UDF | `a[idx]` where `a` is a `json` value indexes a JSON array → "malformed JSON". |
-| 1 | SDL `function ... using(...)` syntax | SDL-style (non-`CREATE`) function declaration block is not parsed. |
+| Count | Query group                                          | Pattern                                                                                                                                                                                      |
+| ----: | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     9 | Overload-resolution rejection not raised             | An invalid `call(...)` should be rejected ("function does not exist" / "is not unique" / "newly created objects cannot be passed"), but the resolver silently binds an overload and runs it. |
+|     7 | `anytype` array/tuple return wrapping                | UDF returns `array<anytype>` / `tuple<...>` (incl. tuple-in-array, typed-scalar element); the generic return value is not wrapped/serialized to the right shape.                             |
+|     5 | Object-typed param dispatch / inlining (`calls obj`) | Param is an object type (`Rectangle`, `FlatShape`, `Person`); the call's source must be the object table and the right subtype overload must be inlined.                                     |
+|     4 | Polymorphic-param overload picks wrong/missing body  | Multiple overloads on `anyint`/`int64`/`anyscalar`/`str` (and nested `inner(a)`); the wrong overload body is inlined → `null`/wrong value.                                                   |
+|     1 | NAMED ONLY array default binding                     | `NAMED ONLY b: array<anytype> = []` default is not applied; `len(b)` is computed against the passed value even when defaulted/omitted.                                                       |
+|     1 | Aggregate scalar type inference                      | `sum()` over a homogeneous `float32` set should infer `std::float32`, not widen to `std::float64`.                                                                                           |
+|     1 | JSON-typed array indexing in UDF                     | `a[idx]` where `a` is a `json` value indexes a JSON array → "malformed JSON".                                                                                                                |
+|     1 | SDL `function ... using(...)` syntax                 | SDL-style (non-`CREATE`) function declaration block is not parsed.                                                                                                                           |
 
 ### Overload-resolution rejection not raised (9)
 
@@ -5121,6 +5438,7 @@ A mismatched/ambiguous `call(...)` must fail overload resolution (the test asser
 **Representative:** `test_edgeql_calls_08`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE FUNCTION call8(a: int64 = 1, NAMED ONLY b: int64 = 2) -> int64
     USING EdgeQL $$ SELECT a + b $$;
@@ -5136,9 +5454,11 @@ SELECT call8();     -- ERROR: function call8 is not unique
 **Relevant DDL:** none (two `call8` overloads only; differ solely by the defaulted first arg's type).
 
 **Expected SQL:** the resolvable calls inline normally, e.g. `SELECT call8(1)` →
+
 ```sql
 SELECT (1 + 2) AS "value"
 ```
+
 and `SELECT call8()` must NOT compile — overload resolution must report `call8 is not unique` (ambiguous: zero positional args match both signatures via their defaults). Sibling tests want `function <name> does not exist` instead: 03 (NAMED ONLY arg passed positionally / unknown named arg `z`), 07 (extra positional / unknown named arg), 11 (`array<int32>` param given `float`/heterogeneous literal — no implicit element cast), 18 (`VARIADIC a: anytype` given mixed `int,int,str` — must be homogeneous), 20 (`anyreal`/`anyscalar` param given mismatched `str`), 26 (`array<anyscalar>` given `array<tuple>`), 27 (`array<anyint>` given `array<str>`/`array<bytes>`/`array<float>`/`array<tuple>`). `obj_05` wants `newly created or updated objects cannot be passed to functions` when an `INSERT`/`UPDATE` result is passed as an object arg.
 
 **Why it fails today:** Argument-binding / overload matching is too permissive — it accepts mismatched positional vs NAMED-ONLY placement, extra/unknown args, non-homogeneous VARIADIC/array element types, and ambiguous all-default overloads, instead of failing resolution; and no check forbids passing freshly-mutated objects.
@@ -5158,6 +5478,7 @@ A UDF whose return type is `array<anytype>` / `tuple<...>` (including tuple-in-a
 **Representative:** `test_edgeql_calls_35a`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE FUNCTION call35(a: int64) -> tuple<int64, tuple<foo: int64>>
     USING EdgeQL $$ SELECT (a, ((a + 1),)) $$;
@@ -5169,9 +5490,11 @@ SELECT call35(1).1.foo;    -- 2
 **Relevant DDL:** none (35c also: `CREATE SCALAR TYPE Foo extending str;` then `array<tuple<Foo>>`).
 
 **Expected SQL:** the body inlines with `a := 1`, building the nested (positional + named-field) tuple as JSON, e.g.
+
 ```sql
 SELECT json_array(1, json_object('foo', 1 + 1)) AS "value"
 ```
+
 and `.1.foo` peels `json_extract(<above>, '$[1].foo')`. For 14 (`SELECT [a]` with `a := b'aaaa'`) the result must wrap a single bytes element preserving the `Uint8Array` decode; 17 picks the `str` overload (`['!!!!', a, '!!!!']`) over the `anytype` one; 22 picks the `array<anytype>` concat overload (`a ++ b` → array concat, not string concat); 31 returns `anytype` and is then indexed/field-accessed (`...[0]`, `.a`, `.1`, `.a[1]`).
 
 **Why it fails today:** The generic (`anytype`/array/tuple) return value of an inlined UDF is not wrapped/serialized into the correct nested JSON shape (named tuple fields, typed scalar elements, bytes), so structural equality / subsequent indexing yields `null` or a malformed shape.
@@ -5189,6 +5512,7 @@ A function whose argument is an object set (e.g. `area(Rectangle)`, `area(FlatSh
 **Representative:** `test_edgeql_calls_obj_01`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE FUNCTION area(s: FlatShape) -> float64 USING (-1);
 CREATE FUNCTION area(s: Rectangle) -> float64 USING (s.w * s.h);
@@ -5200,6 +5524,7 @@ SELECT area(Circle);      -- 314.0
 ```
 
 **ESDL:**
+
 ```esdl
 CREATE TYPE Shape;
 CREATE TYPE FlatShape;
@@ -5213,11 +5538,13 @@ CREATE TYPE Circle EXTENDING FlatShape {
 ```
 
 **Expected SQL:** with an object-typed param the call's source is the object table, and the most-specific overload body inlines against that source. `SELECT area(Rectangle)` →
+
 ```sql
 SELECT (a0."w" * a0."h") AS "value"
 FROM (SELECT 'default::Rectangle' AS "__source_type", "id" AS "id",
              "w" AS "w", "h" AS "h" FROM "default__rectangle") a0
 ```
+
 For `area(FlatShape)` inside the shape, dispatch is per-row by the row's concrete `__source_type`: a Rectangle row uses `w*h`, a Circle row uses `r^2*3.14` — a `CASE`/`UNION` over the FlatShape extent keyed on the concrete subtype. (38: `call38(C38) -> SELECT a.name` → `SELECT a0."name" ... FROM "default__c38" a0`; 40: `r.width * r.height`; obj_02: `dimensions` returns `SET OF`; obj_03: 4 overloads keyed on `Person`/`str` combos.)
 
 **Why it fails today:** A function call whose argument is an object set is not lowered to "source = that object table + inline the matching subtype overload's body against its columns"; per-row polymorphic dispatch by concrete `__source_type` is not done, so the body yields `null`.
@@ -5234,6 +5561,7 @@ Multiple overloads on polymorphic scalar params (`anyint` vs `int64`, `anyscalar
 **Representative:** `test_edgeql_calls_12`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE FUNCTION call12(a: anyint) -> int64 USING EdgeQL $$ SELECT <int64>a + 100 $$;
 CREATE FUNCTION call12(a: int64)  -> int64 USING EdgeQL $$ SELECT <int64>a + 1   $$;
@@ -5245,9 +5573,11 @@ SELECT call12(1);         -- 2    (int64 -> exact int64 overload)
 **Relevant DDL:** none.
 
 **Expected SQL:** pick the most-specific overload by the concrete arg type. `SELECT call12(<int32>1)` →
+
 ```sql
 SELECT (CAST(CAST(1 AS INTEGER) AS INTEGER) + 100) AS "value"
 ```
+
 `SELECT call12(1)` → `SELECT (CAST(1 AS INTEGER) + 1) AS "value"`. Siblings: 28 (`array<anyint>` exact vs `array<anyscalar>` fallback — `['a','b']` must take the `anyscalar` body `len(a)+1000`); 16 (overloads on `(array<anytype>,int64)` / `(array<anytype>,str)` / `(anyscalar,int64)` — index by int vs str, and string indexing via the `anyscalar` overload); 13 (nested `inner(a)`: after adding `inner(a: str)`, `call13_2('aaa')` must resolve `inner` to the `str` overload → 2, while bytes/array stay on the `anytype` overload → 1).
 
 **Why it fails today:** Overload selection on polymorphic parameters (`anyint` vs `int64`, `anyscalar` vs concrete, exact array element type) does not pick the most-specific match (and does not re-resolve nested `inner(a)` against the bound concrete type), so the wrong body is inlined or none binds → `null`/wrong value.
@@ -5261,6 +5591,7 @@ A `NAMED ONLY b: array<anytype> = []` default must bind when the arg is omitted,
 **Representative:** `test_edgeql_calls_04`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE FUNCTION call4(a: int32, NAMED ONLY b: array<anytype> = []) -> int32
     USING EdgeQL $$ SELECT a + len(b) $$;
@@ -5273,9 +5604,11 @@ SELECT call4(100, b := [1, 2]);    -- 102
 **Relevant DDL:** none.
 
 **Expected SQL:** when `b` is omitted, the default empty array binds so `len(b) = 0`. `SELECT call4(100)` →
+
 ```sql
 SELECT (100 + json_array_length(COALESCE(json_array(), '[]'))) AS "value"
 ```
+
 (i.e. `100 + 0`).
 
 **Why it fails today:** The `NAMED ONLY b: array<anytype> = []` default is not substituted when the arg is omitted (binding picks up a non-empty value), so `len(b)` is non-zero and `call4(100)` returns 102 instead of 100.
@@ -5289,6 +5622,7 @@ SELECT (100 + json_array_length(COALESCE(json_array(), '[]'))) AS "value"
 **Representative:** `test_edgeql_calls_10`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT (INTROSPECT TYPEOF sum({<float32>1, <float32>2, <float32>3})).name;
 -- std::float32   (engine returns std::float64)
@@ -5297,6 +5631,7 @@ SELECT (INTROSPECT TYPEOF sum({<float32>1, <float32>2, <float32>3})).name;
 **Relevant DDL:** none.
 
 **Expected SQL:** `INTROSPECT TYPEOF` is a compile-time fact — the whole expression folds to a string literal of the inferred type name:
+
 ```sql
 SELECT 'std::float32' AS "value"
 ```
@@ -5312,6 +5647,7 @@ Indexing `a[idx]` where the inlined arg `a` is a `json` value must extract a JSO
 **Representative:** `test_edgeql_calls_23`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE FUNCTION call23(a: anytype, idx: int64) -> anytype
     USING EdgeQL $$ SELECT a[idx] $$;
@@ -5326,6 +5662,7 @@ SELECT call23(to_json('[{"a":"b"}]'), 0);  -- {"a": "b"}
 **Relevant DDL:** none.
 
 **Expected SQL:** for a `json` arg the index must extract a JSON element (and for `str` it must `substr`). `SELECT call23(to_json('[{"a":"b"}]'), 0)` →
+
 ```sql
 SELECT json_extract(json('[{"a":"b"}]'), '$[0]') AS "value"
 ```
@@ -5341,6 +5678,7 @@ A declarative SDL `function name(...) -> T using (...);` block (not `CREATE FUNC
 **Representative:** `test_edgeql_calls_13_sdl`
 
 **EdgeQL:**
+
 ```edgeql
 function inner(a: anytype) -> str using ("anytype");
 function inner(a: int64)   -> str using ("int64");
@@ -5353,12 +5691,12 @@ SELECT call13_sdl(1);    -- "int64"
 **Relevant DDL:** the SDL block above (declarative `function` declarations, not `CREATE FUNCTION`).
 
 **Expected SQL:** once the SDL function declarations parse and register the overloads, the calls inline like the `CREATE FUNCTION` variants (`test_edgeql_calls_13`): `SELECT call13_sdl(1)` resolves `inner` to the `int64` overload →
+
 ```sql
 SELECT 'int64' AS "value"
 ```
 
 **Why it fails today:** Parser error `Expected 'select', 'insert', 'update', 'delete', 'for', 'configure', transaction, or DDL statement` (E_SYNTAX, line 2) — the declarative SDL `function name(...) using (...);` form is not accepted by the statement parser (only `CREATE FUNCTION ...` DDL is).
-
 
 ---
 
@@ -5367,7 +5705,7 @@ SELECT 'int64' AS "value"
 Almost all failures share one root cause: **type-intersection narrowing is dropped**. A
 type-expression that involves `&` (or a nested chain `[IS A][IS B]`, or `&` mixed into a
 `|`) should narrow the source to the concrete types present in **all** named branches'
-closures; instead the engine emits the *base* source's closure (or a plain union of the
+closures; instead the engine emits the _base_ source's closure (or a plain union of the
 branch closures), leaking rows from types that belong to only one side and mis-sizing the
 `__source_type IN (...)` gate. Union-only narrowing (`[IS A | B]`) works, which is why the
 `basic_union*` tests pass. The one independent root cause is the `Object IS T` boolean
@@ -5382,14 +5720,14 @@ Concrete-type closures in `advtypes.esdl` (used throughout the expected SQL):
 - `Ba & Bb` → `{CBaBb, CBaBbBc}` · `Bb & Bc` → `{CBbBc, CBaBbBc}` · `Ba & Bc` → `{CBaBc, CBaBbBc}`
 - `Ba & Bb & Bc` → `{CBaBbBc}`
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 8 | Update complex type | `UPDATE Ba[IS Bb & Bc] SET {...}` — UPDATE only the rows in the intersection closure |
-| 6 | Complex intersection (source narrowing) | `SELECT {CBa, Ba[IS Bb & Bc]}{...}` / `{Ba,XBa}[is Bb\|XBa]` / chained `x:=Ba[IS Bb]; x[IS Bc]` — narrow source to the concrete-type intersection, then `__source_type IN (...)`-gate each `[IS T].member` |
-| 4 | Type-check boolean in shape | `SELECT Object[IS …]{ x := Object IS (Ba & Bb) }` — membership test must return a JSON boolean (and use the **intersection** closure) |
-| 2 | Basic intersection | `SELECT Ba[IS Bb].bb` / `.__type__.name` — single-level `&`-style narrowing dropped |
-| 2 | WITH-binding & FOR intersection | `WITH x := Ba SELECT x[IS Bb]{...}` / `FOR x IN Ba UNION (x[IS Bb]{...})` — narrowing dropped when applied to a binding / iteration var |
-| 1 | Backlink intersection | `A.<l_a[is S & T]{name}` — narrowing dropped on a backlink source |
+| Count | Query group                             | Pattern                                                                                                                                                                                                    |
+| ----: | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     8 | Update complex type                     | `UPDATE Ba[IS Bb & Bc] SET {...}` — UPDATE only the rows in the intersection closure                                                                                                                       |
+|     6 | Complex intersection (source narrowing) | `SELECT {CBa, Ba[IS Bb & Bc]}{...}` / `{Ba,XBa}[is Bb\|XBa]` / chained `x:=Ba[IS Bb]; x[IS Bc]` — narrow source to the concrete-type intersection, then `__source_type IN (...)`-gate each `[IS T].member` |
+|     4 | Type-check boolean in shape             | `SELECT Object[IS …]{ x := Object IS (Ba & Bb) }` — membership test must return a JSON boolean (and use the **intersection** closure)                                                                      |
+|     2 | Basic intersection                      | `SELECT Ba[IS Bb].bb` / `.__type__.name` — single-level `&`-style narrowing dropped                                                                                                                        |
+|     2 | WITH-binding & FOR intersection         | `WITH x := Ba SELECT x[IS Bb]{...}` / `FOR x IN Ba UNION (x[IS Bb]{...})` — narrowing dropped when applied to a binding / iteration var                                                                    |
+|     1 | Backlink intersection                   | `A.<l_a[is S & T]{name}` — narrowing dropped on a backlink source                                                                                                                                          |
 
 ### Update complex type (8)
 
@@ -5409,6 +5747,7 @@ of the updated rows feeds `temp`, shaped as in the "complex intersection" group.
 **Representative:** `test_edgeql_advtypes_update_complex_type_04`
 
 **EdgeQL:**
+
 ```edgeql
 with
     temp := (
@@ -5428,6 +5767,7 @@ order by .tn then .ba then .bb then .bc;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type Ba { required property ba -> str; }
 abstract type Bb { required property bb -> int64; }
@@ -5441,8 +5781,9 @@ type CBaBbBc extending Ba, Bb, Bc;
 ```
 
 **Expected SQL:**
-`Ba & Bb & Bc` narrows the *write set* to `{CBaBbBc}`; only that table is updated (other
+`Ba & Bb & Bc` narrows the _write set_ to `{CBaBbBc}`; only that table is updated (other
 concrete types of `Ba` are untouched). Each surviving column is updated in place:
+
 ```sql
 UPDATE "default__cbabbbc"
 SET "ba" = "ba" || '!',
@@ -5451,6 +5792,7 @@ SET "ba" = "ba" || '!',
 -- RETURNING / re-select of the updated rows feeds `temp`, shaped as in the
 -- "complex intersection" group (source = {CBaBbBc}).
 ```
+
 For mixed exprs (`_03` `Ba[is Bb|Bc]`, `_05` `Ba[IS CBa | Bb & Bc]`, `_07`
 `Object[IS (Ba&Bb)|(Ba&Bc)]`, `_08` `{Object[IS Ba&Bb], Object[IS Ba&Bc]}`) the UPDATE
 fans out one statement per table in the **intersection** closure of the type-expr, e.g.
@@ -5479,6 +5821,7 @@ the intersection closure of the expanded boolean type-expr; each `[IS T].member`
 **Representative:** `test_edgeql_advtypes_complex_intersection_04`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT {CBa, Ba[IS Bb & Bc]} {
     tn := .__type__.name,
@@ -5494,6 +5837,7 @@ ORDER BY .ba;
 **Expected SQL:**
 The set is the UNION ALL of two branches: `CBa` (closure `{CBa}`) and `Ba[IS Bb & Bc]`
 (closure `Ba ∩ Bb ∩ Bc = {CBaBbBc}`). `[IS Bb].bb`/`[IS Bc].bc` are gated by source type:
+
 ```sql
 SELECT a0."id" AS "id",
        a0."__source_type" AS "__source_type",
@@ -5509,6 +5853,7 @@ FROM (
 ORDER BY a0."ba";
 -- expected: cba0, cba1, cba8/bb8/bc8.5, cba9/bb9/bc9.5
 ```
+
 (`_11` `{Object[IS Ba&Bb], Object[IS Ba&Bc]}` → branches `{CBaBb,CBaBbBc}` and
 `{CBaBc,CBaBbBc}` (CBaBbBc duplicated); `_12` `{Ba,XBa}[is Bb|XBa]` → `(Ba∪XBa) ∩
 (Bb∪XBa) = {CBaBb,CBaBbBc,XBa}`; `_13` `{Ba[is Bb], XBa}` → `{CBaBb,CBaBbBc}` ∪ `XBa`;
@@ -5535,6 +5880,7 @@ collapsed type.
 **Representative:** `test_edgeql_advtypes_complex_type_checking_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Object[IS Ba | Bb | Bc] {
     tn := .__type__.name,
@@ -5550,6 +5896,7 @@ ORDER BY .tn;
 **Expected SQL:**
 Each `IS (X & Y)` is a boolean over the intersection closure (two values), cast to JSON
 boolean; the source is the closure of `(Ba | Bb | Bc)`:
+
 ```sql
 SELECT a0."id" AS "id",
        a0."__source_type" AS "__source_type",
@@ -5568,6 +5915,7 @@ FROM (
 ) a0
 ORDER BY a0."__source_type";
 ```
+
 (`_01` `Object IS Ba` → `IN (Ba`'s 4 closure values`)`; `_02` `Object IS (Ba | Bb)` →
 union closure; `_04` `Object IS (Ba & Bb & Bc)` → `IN ('default::CBaBbBc')`.)
 
@@ -5588,6 +5936,7 @@ Single-level `Ba[IS Bb]` narrows to `Ba ∩ Bb = {CBaBb, CBaBbBc}`, then reads a
 **Representative:** `test_edgeql_advtypes_basic_intersection_03`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Ba[IS Bb].bb;
 ```
@@ -5597,6 +5946,7 @@ SELECT Ba[IS Bb].bb;
 **Expected SQL:**
 `Ba[IS Bb]` narrows to `Ba ∩ Bb = {CBaBb, CBaBbBc}`; `.bb` reads the column from just those
 two tables:
+
 ```sql
 SELECT a0."bb" AS "value"
 FROM (
@@ -5606,6 +5956,7 @@ FROM (
 ) a0;
 -- expected values: 2, 3, 8, 9
 ```
+
 (`_01` `Ba[IS Bb].__type__.name` over the same `{CBaBb, CBaBbBc}` source → those two type
 names.)
 
@@ -5624,6 +5975,7 @@ emits the **union** closure `{CBaBb, CBaBbBc, CBb, CBbBc}` (leaking the `Bb`-onl
 **Representative:** `test_edgeql_advtypes_complex_intersection_17`
 
 **EdgeQL:**
+
 ```edgeql
 WITH x := Ba
 SELECT x[IS Bb] {
@@ -5633,7 +5985,9 @@ SELECT x[IS Bb] {
     [IS Bc].bc,
 }
 ```
+
 `for_complex_intersection_01` is the FOR form of the same shape:
+
 ```edgeql
 FOR x IN Ba UNION (
     x[IS Bb] { tn := .__type__.name, ba, bb, [IS Bc].bc }
@@ -5643,6 +5997,7 @@ FOR x IN Ba UNION (
 **Relevant ESDL:** (same `Ba`/`Bb`/`Bc` + `C*` hierarchy)
 
 **Expected SQL:**
+
 ```sql
 SELECT a0."id" AS "id",
        a0."__source_type" AS "__source_type",
@@ -5672,11 +6027,13 @@ concrete types extending **both** named types.
 **Representative:** `test_edgeql_advtypes_complex_intersection_15`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT A.<l_a[is S & T] { name } ORDER BY .name;
 ```
 
 **Relevant ESDL:**
+
 ```esdl
 abstract type R { required property name -> str { delegated constraint exclusive; } }
 type A extending R;
@@ -5690,6 +6047,7 @@ type V extending U, S, T;   -- the only S & T concrete type
 Backlink over `l_a`, then narrow the source side to `S ∩ T = {V}` (the only concrete type
 extending both). The source is restricted to `default__v`; junction rows still come from
 both `S`'s and `V`'s `l_a` tables:
+
 ```sql
 SELECT DISTINCT a0."id" AS "id", a0."__source_type" AS "__source_type", a0."name" AS "name"
 FROM (
@@ -5710,19 +6068,18 @@ ORDER BY a0."name";
 `bin/inspect.ts sql` shows the `t0` source emitting the `[is S | T]` union (`S UNION V`)
 instead of `S ∩ T = {V}`, so `sss`/`ttt` leak into the result alongside `vvv`.
 
-
 ---
 
 ## tests/edgeql_for.test.ts (19)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 12 | for in computable | `FOR x IN <set> UNION (SELECT .deck {…})` inside a computed shape field, often wrapped in `assert_*`/`DISTINCT`/a 1-tuple — the FOR body references the *outer* object (`User.deck` / `.deck`), so it must compile to a per-element subquery *correlated to the outer row* while still iterating per FOR element. |
-| 2 | for fake group | `FOR x IN <set> UNION { key := …, elements := … }` builds one free-object per element; a nested object/link field must be a correlated subquery, not a fan-out join. |
-| 2 | for empty | `FOR x IN {} UNION ()` over a statically-empty / untyped iterator must be **rejected** with `FOR statement has iterator of indeterminate type`. |
-| 1 | for and computable | `FOR x IN {1,2} UNION (SELECT User { m := x })` — the iterator value `x` is projected as a computed field on every iterated object and later counted. |
-| 1 | for mix | `FOR X IN {Card.name, User.name} UNION count(User.friends)` — iterating a heterogeneous set while the body is an aggregate that *ignores* the iterator. |
-| 1 | for optional | `FOR optional x IN (<empty>,) UNION …` — an optional FOR over an empty set must still yield one body row (with `x` empty), modelled as a LEFT/OUTER correlation. |
+| Count | Query group        | Pattern                                                                                                                                                                                                                                                                                                           |
+| ----: | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|    12 | for in computable  | `FOR x IN <set> UNION (SELECT .deck {…})` inside a computed shape field, often wrapped in `assert_*`/`DISTINCT`/a 1-tuple — the FOR body references the _outer_ object (`User.deck` / `.deck`), so it must compile to a per-element subquery _correlated to the outer row_ while still iterating per FOR element. |
+|     2 | for fake group     | `FOR x IN <set> UNION { key := …, elements := … }` builds one free-object per element; a nested object/link field must be a correlated subquery, not a fan-out join.                                                                                                                                              |
+|     2 | for empty          | `FOR x IN {} UNION ()` over a statically-empty / untyped iterator must be **rejected** with `FOR statement has iterator of indeterminate type`.                                                                                                                                                                   |
+|     1 | for and computable | `FOR x IN {1,2} UNION (SELECT User { m := x })` — the iterator value `x` is projected as a computed field on every iterated object and later counted.                                                                                                                                                             |
+|     1 | for mix            | `FOR X IN {Card.name, User.name} UNION count(User.friends)` — iterating a heterogeneous set while the body is an aggregate that _ignores_ the iterator.                                                                                                                                                           |
+|     1 | for optional       | `FOR optional x IN (<empty>,) UNION …` — an optional FOR over an empty set must still yield one body row (with `x` empty), modelled as a LEFT/OUTER correlation.                                                                                                                                                  |
 
 ### for in computable (12)
 
@@ -5742,6 +6099,7 @@ instead of `S ∩ T = {V}`, so `sss`/`ttt` leak into the result alongside `vvv`.
 **Representative:** `test_edgeql_for_in_computable_12`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT User {
     select_deck := (assert_exists((
@@ -5756,10 +6114,12 @@ SELECT User {
     )),)
 } FILTER .name = 'Alice';
 ```
+
 Expected: per Alice, a 1-tuple wrapping the cards whose name starts with `I` or `B`, each tagged with the matching `letter`:
 `[[{name:"Bog monster", letter:"B"}, {name:"Imp", letter:"I"}]]`.
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Named {
     multi deck: Card {
@@ -5775,6 +6135,7 @@ type SpecialCard extending Card;
 
 **Expected SQL:**
 The whole `select_deck` field is a correlated `json_group_array` subquery. The FOR set literal `{'I','B'}` is a 2-row source CROSS JOINed with the FOR body, but the body's `User.deck` hop stays **correlated to the outer User row `a0`** (`aJ."source" = a0."id"`), and the FILTER `User.deck.name[0] = letter` becomes an existential predicate comparing the deck card's name-prefix to the current `letter`. The `(…,)` wrap then nests the whole array as a single tuple element:
+
 ```sql
 SELECT
   a0."id" AS "id",
@@ -5795,7 +6156,7 @@ FROM (SELECT 'default::User' AS "__source_type","id","name" FROM "default__user"
 WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."name");   -- .name = 'Alice'
 ```
 
-**Why it fails today:** inside an `assert_*`/`DISTINCT`/1-tuple wrapper the FOR loses its iteration. The engine collapses the FOR body into a *single* correlated scalar subquery picking one deck card and folds the iterator `letter` into `json_group_array("value")` (yielding `["I","B"]` once) instead of CROSS JOINing the `{'I','B'}` source with the body and re-correlating each per-letter deck row — observed output is one card with both letters, not two cards each tagged with its own letter. The plain unwrapped `SELECT User { select_deck := (FOR … UNION (SELECT User.deck {…})) }` form already compiles correctly; the wrapped variants (assert_distinct/assert_exists/`(…,)` — 06/07/08/10/12), the nested double-FOR + UPDATE variants (02/02b/02d/02e) and the bare `.deck.name`/`@letter` body (05/04/09) all hit this broken correlation. Tests 04/09/10 are documented xerrors (`@letter`/`letter` tuple-singleton & scoping not yet implemented).
+**Why it fails today:** inside an `assert_*`/`DISTINCT`/1-tuple wrapper the FOR loses its iteration. The engine collapses the FOR body into a _single_ correlated scalar subquery picking one deck card and folds the iterator `letter` into `json_group_array("value")` (yielding `["I","B"]` once) instead of CROSS JOINing the `{'I','B'}` source with the body and re-correlating each per-letter deck row — observed output is one card with both letters, not two cards each tagged with its own letter. The plain unwrapped `SELECT User { select_deck := (FOR … UNION (SELECT User.deck {…})) }` form already compiles correctly; the wrapped variants (assert_distinct/assert_exists/`(…,)` — 06/07/08/10/12), the nested double-FOR + UPDATE variants (02/02b/02d/02e) and the bare `.deck.name`/`@letter` body (05/04/09) all hit this broken correlation. Tests 04/09/10 are documented xerrors (`@letter`/`letter` tuple-singleton & scoping not yet implemented).
 
 ### for fake group (2)
 
@@ -5805,6 +6166,7 @@ WHERE EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."name");   
 **Representative:** `test_edgeql_for_fake_group_01c`
 
 **EdgeQL:**
+
 ```edgeql
 with GR := (
     for x in {'Earth', 'Water'} union {
@@ -5818,10 +6180,12 @@ select GR {
 }
 order by .key.element;
 ```
+
 Expected: exactly **2** rows (one free-object per element), each with its matching `elements` list:
 `[{key:{element:"Earth"}, elements:[{name:"Dwarf"},{name:"Golem"}]}, {key:{element:"Water"}, elements:[{name:"Bog monster"},{name:"Giant turtle"}]}]`.
 
 **Relevant ESDL:**
+
 ```esdl
 type Card extending Named {        # Named: required name: str
     required element: str;
@@ -5830,7 +6194,8 @@ type SpecialCard extending Card;
 ```
 
 **Expected SQL:**
-The FOR produces one free-object **per element value**; the `elements` field is a *correlated subquery* over `Card` (filtered by the current `x`), NOT a join that fans the row out:
+The FOR produces one free-object **per element value**; the `elements` field is a _correlated subquery_ over `Card` (filtered by the current `x`), NOT a join that fans the row out:
+
 ```sql
 SELECT
   json_object(
@@ -5857,16 +6222,19 @@ ORDER BY a0."value";    -- order by .key.element
 **Representative:** `test_edgeql_for_empty_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT (FOR x in {} UNION ());
 -- and (02):
 WITH s := {} SELECT (FOR x in {s} UNION ());
 ```
+
 Expected: a **compile-time error** matching `FOR statement has iterator of indeterminate type` (the iterator's element type cannot be inferred from an empty/untyped set).
 
 **Relevant ESDL:** n/a (no schema objects involved).
 
 **Expected SQL:**
+
 ```sql
 -- none — must throw at compile time with "FOR statement has iterator of indeterminate type"
 ```
@@ -5880,20 +6248,24 @@ Expected: a **compile-time error** matching `FOR statement has iterator of indet
 **Representative:** `test_edgeql_for_and_computable_05`
 
 **EdgeQL:**
+
 ```edgeql
 WITH X := (SELECT (FOR x IN {1,2} UNION (
     SELECT User { m := x }))),
 SELECT count(X.m);
 ```
+
 Expected: `[8]` — 4 Users × 2 iterations of `x` = 8 instances, each carrying a (singleton) computed `m`, so `count(X.m)` = 8.
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Named { … }   # 4 users in the dataset (Alice, Bob, Carol, Dave)
 ```
 
 **Expected SQL:**
 The FOR CROSS JOINs the `{1,2}` source with every `User`, attaching `x` as the computed field `m`; `count(X.m)` counts the non-empty `m` over that 8-row product:
+
 ```sql
 SELECT count(*) FROM (
   SELECT a1."value" AS "m"
@@ -5913,14 +6285,17 @@ SELECT count(*) FROM (
 **Representative:** `test_edgeql_for_mix_04`
 
 **EdgeQL:**
+
 ```edgeql
 FOR X IN {Card.name, User.name}
 # this should be just [3] for each name (9 + 4 of names)
 UNION count(User.friends);
 ```
+
 Expected: thirteen `3`s — `count(User.friends)` is evaluated once per element of the 13-element iterator set (9 Card names + 4 User names), and `User.friends` has cardinality 3 in the dataset, independent of `X`.
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Named {
     multi friends: User { nickname: str; }
@@ -5929,7 +6304,8 @@ type Card extending Named { … }
 ```
 
 **Expected SQL:**
-The iterator is the UNION ALL of all Card names and User names (13 rows); the body is a *scalar aggregate that does not reference X*, so each iterated row yields the same constant count. The aggregate must be evaluated **per iterated row** (correlated to the X source), not collapsed to a single row. `count(User.friends)` reads the `default__user__friends` junction:
+The iterator is the UNION ALL of all Card names and User names (13 rows); the body is a _scalar aggregate that does not reference X_, so each iterated row yields the same constant count. The aggregate must be evaluated **per iterated row** (correlated to the X source), not collapsed to a single row. `count(User.friends)` reads the `default__user__friends` junction:
+
 ```sql
 SELECT
   (SELECT count(*) FROM "default__user__friends") AS "value"   -- count(User.friends) = 3
@@ -5949,14 +6325,17 @@ FROM (
 **Representative:** `test_edgeql_for_optional_01`
 
 **EdgeQL:**
+
 ```edgeql
 for optional x in
     ((select User filter .name = 'George'),)
 union x.0.deck_cost ?? 0;
 ```
+
 Expected: `[0]` — `'George'` does not exist, so the optional iterator binds `x` to the empty set, but `for optional` still yields **one** body row; `x.0.deck_cost` is empty and `?? 0` gives `0`. (Other sub-cases in the same test exercise `for optional x in (<Card>{},)` nested inside an outer non-optional FOR, expecting the outer row to survive.)
 
 **Relevant ESDL:**
+
 ```esdl
 type User extending Named {
     multi deck: Card { count: int64 { default := 1; } };
@@ -5966,6 +6345,7 @@ type User extending Named {
 
 **Expected SQL:**
 `for optional` is a LEFT-style correlation: the iterator source is LEFT JOINed (so one row survives even when empty), and the body reads `x` as possibly-NULL. The empty tuple `(<empty>,)` source produces a single all-NULL row:
+
 ```sql
 SELECT COALESCE(
     (SELECT SUM(aC."cost")                              -- x.0.deck_cost
@@ -5983,23 +6363,22 @@ LEFT JOIN (
 
 **Why it fails today:** the optional iterator's correlation alias is not materialised when the set is empty — observed `no such column: g0.id` (the body references the iterated User's `id` but the optional source is compiled as an inner, droppable join rather than a row-preserving outer join). `for optional` needs a row-preserving (LEFT) correlation so the single body row is emitted with `x` empty.
 
-
 ---
 
 ## tests/edgeql_expr_aliases.test.ts (18)
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 3 | aliases if/else (set-valued conditional) | `A IF cond ELSE B` where A/cond/B are independent sets; FOR-over IF/ELSE chains |
-| 3 | aliases nested (computed link in alias shape) | schema `alias X := T { link := T.<back[IS U] {...} }`; single-link cardinality + computed prop in nested shape |
-| 3 | computable nested (WITH-binding computed link/field) | `WITH C := T { l := .<x }` then re-project/access the WITH-added computed; nested per-binding counts |
-| 2 | aliases filter (alias as IN/NOT IN operand) | `SELECT Alias FILTER Alias IN/NOT IN <set>` — alias used as whole-object set operand inside FILTER |
-| 2 | alias error-message expectations | engine must *raise* a specific error (backlink through computed link; alias link-helper type) |
-| 1 | computable aliased link | alias-redefined link (`my_friends := User.friends`) projected with a link property `@nickname` |
-| 1 | aliases basic (named-tuple set alias) | `CREATE ALIAS scores := SELECT { (name:=…, score:=…, …), … }` then `SELECT scores ORDER BY scores.name` |
-| 1 | aliases create (redefined link w/ computed prop) | `CREATE ALIAS DCard := SELECT Card { owners := (... { name_upper := str_upper(.name) }) }` |
-| 1 | aliases array of array | array-of-array alias unpacked twice with nested `array_agg`/`for`/`array_unpack` |
-| 1 | aliases introspection | `schema::Type.from_alias`, `schema::Tuple`/`TupleElement`, alias link-helper types in introspection metadata |
+| Count | Query group                                          | Pattern                                                                                                        |
+| ----: | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+|     3 | aliases if/else (set-valued conditional)             | `A IF cond ELSE B` where A/cond/B are independent sets; FOR-over IF/ELSE chains                                |
+|     3 | aliases nested (computed link in alias shape)        | schema `alias X := T { link := T.<back[IS U] {...} }`; single-link cardinality + computed prop in nested shape |
+|     3 | computable nested (WITH-binding computed link/field) | `WITH C := T { l := .<x }` then re-project/access the WITH-added computed; nested per-binding counts           |
+|     2 | aliases filter (alias as IN/NOT IN operand)          | `SELECT Alias FILTER Alias IN/NOT IN <set>` — alias used as whole-object set operand inside FILTER             |
+|     2 | alias error-message expectations                     | engine must _raise_ a specific error (backlink through computed link; alias link-helper type)                  |
+|     1 | computable aliased link                              | alias-redefined link (`my_friends := User.friends`) projected with a link property `@nickname`                 |
+|     1 | aliases basic (named-tuple set alias)                | `CREATE ALIAS scores := SELECT { (name:=…, score:=…, …), … }` then `SELECT scores ORDER BY scores.name`        |
+|     1 | aliases create (redefined link w/ computed prop)     | `CREATE ALIAS DCard := SELECT Card { owners := (... { name_upper := str_upper(.name) }) }`                     |
+|     1 | aliases array of array                               | array-of-array alias unpacked twice with nested `array_agg`/`for`/`array_unpack`                               |
+|     1 | aliases introspection                                | `schema::Type.from_alias`, `schema::Tuple`/`TupleElement`, alias link-helper types in introspection metadata   |
 
 ### aliases if/else (set-valued conditional) (3)
 
@@ -6012,6 +6391,7 @@ LEFT JOIN (
 **Representative:** `test_edgeql_aliases_if_else_03`
 
 **EdgeQL:**
+
 ```edgeql
 -- part 1 (multi-set projection, must keep duplicates):
 SELECT _ := User.deck.element ORDER BY _;
@@ -6032,6 +6412,7 @@ ORDER BY _;
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 type User extending Named {
     multi deck: Card { count: int64 { default := 1 }; }
@@ -6043,6 +6424,7 @@ type Card extending Named { required element: str; required cost: int64; }
 ```
 
 **Expected SQL:**
+
 ```sql
 -- part 1: NO DISTINCT — every (User, deck-card) row contributes one element.
 SELECT a0."element" AS "value"
@@ -6088,6 +6470,7 @@ A schema alias redefines a link as a computed backlink (`winner := Award.<awards
 **Representative:** `test_edgeql_aliases_nested_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT AwardAlias {
     name,
@@ -6097,6 +6480,7 @@ SELECT AwardAlias {
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 type User extending Named {
     multi awards: Award { constraint exclusive; }  -- exclusive => winner is single
@@ -6114,6 +6498,7 @@ alias AwardAlias := (
 ```
 
 **Expected SQL:**
+
 ```sql
 -- winner is SINGLE: wrap the correlated array in json_extract(COALESCE(arr,'[]'),'$[0]')
 SELECT a0."id" AS "id", a0."__source_type", a0."name" AS "name",
@@ -6143,6 +6528,7 @@ A WITH-binding shape introduces a computed link/field (`C := Card { ava_owners :
 **Representative:** `test_edgeql_computable_nested_02`
 
 **EdgeQL:**
+
 ```edgeql
 WITH C := Card { ava_owners := .<avatar }
 SELECT C {
@@ -6160,6 +6546,7 @@ ORDER BY .name;
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 type User extending Named { avatar: Card { text: str; }; }  -- .<avatar backlinks here
 type Bot extending User;
@@ -6168,6 +6555,7 @@ type Card extending Named { ... };
 ```
 
 **Expected SQL (shape of):**
+
 ```sql
 -- ava_owners must be a resolvable computed link on the binding C:
 --   correlated subquery over the avatar junction (backlink), then a nested
@@ -6185,18 +6573,19 @@ WHERE EXISTS (SELECT 1 FROM "default__user__avatar" aj WHERE aj."target" = a0."i
 ORDER BY a0."name";
 ```
 
-**Why it fails today:** a computed link/field introduced in a WITH-binding shape (`C := Card { ava_owners := .<avatar }`) is not visible when `C` is re-projected — compile aborts with `object type 'default::Card' has no link or property 'ava_owners'` (02/03). For `computable_nested_01` the query compiles but the per-owner inner aggregates `fr0 := count(O.friends)` / `fr1 := (WITH F := O.friends SELECT count(F))` are decorrelated: they re-derive the card's owners from scratch and count friends of *all* owners instead of correlating to the current `O` row.
+**Why it fails today:** a computed link/field introduced in a WITH-binding shape (`C := Card { ava_owners := .<avatar }`) is not visible when `C` is re-projected — compile aborts with `object type 'default::Card' has no link or property 'ava_owners'` (02/03). For `computable_nested_01` the query compiles but the per-owner inner aggregates `fr0 := count(O.friends)` / `fr1 := (WITH F := O.friends SELECT count(F))` are decorrelated: they re-derive the card's owners from scratch and count friends of _all_ owners instead of correlating to the current `O` row.
 
 ### aliases filter (alias as IN/NOT IN operand) (2)
 
 - `test_edgeql_aliases_filter_01`
 - `test_edgeql_aliases_filter02`
 
-The SELECT subject is an alias and that same alias is used as a *whole-object* operand of `IN`/`NOT IN` inside the FILTER (membership against another alias's id set, or against an inline `SELECT Card …` subquery).
+The SELECT subject is an alias and that same alias is used as a _whole-object_ operand of `IN`/`NOT IN` inside the FILTER (membership against another alias's id set, or against an inline `SELECT Card …` subquery).
 
 **Representative:** `test_edgeql_aliases_filter_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT FireCard { name }
 FILTER FireCard IN DaveCard
@@ -6211,6 +6600,7 @@ ORDER BY AirCard.name;
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 alias AirCard  := (SELECT Card FILTER Card.element = 'Air');
 alias FireCard := (SELECT Card FILTER Card.element = 'Fire');
@@ -6218,6 +6608,7 @@ alias DaveCard := (SELECT Card FILTER 'Dave' IN Card.<deck[IS User].name);
 ```
 
 **Expected SQL:**
+
 ```sql
 -- subject FireCard = (Card WHERE element='Fire'); the FILTER `FireCard IN DaveCard`
 -- is an existential membership check of the subject object id against DaveCard's id set.
@@ -6234,18 +6625,19 @@ WHERE (EXISTS (SELECT 1 FROM (SELECT ? AS "value") WHERE "value" = a0."element")
 ORDER BY a0."name" ASC;
 ```
 
-**Why it fails today:** when the SELECT subject is an alias and that same alias (or another object-set alias) is used as a *whole-object* operand of `IN`/`NOT IN` inside the FILTER, the operand fails to resolve — `E_SEMANTIC: object type or alias 'default::FireCard' does not exist` (and identically `'default::AirCard'` for filter02). (`FILTER FireCard.name = …` resolves fine; only the bare-object-set-as-IN-operand form breaks.)
+**Why it fails today:** when the SELECT subject is an alias and that same alias (or another object-set alias) is used as a _whole-object_ operand of `IN`/`NOT IN` inside the FILTER, the operand fails to resolve — `E_SEMANTIC: object type or alias 'default::FireCard' does not exist` (and identically `'default::AirCard'` for filter02). (`FILTER FireCard.name = …` resolves fine; only the bare-object-set-as-IN-operand form breaks.)
 
 ### alias error-message expectations (2)
 
 - `test_edgeql_aliases_backlinks_01`
 - `test_edgeql_aliases_helper_01`
 
-These tests assert the compiler *raises* a specific error: following a backlink through a *computed* link, and referencing an internal alias link-helper type by name.
+These tests assert the compiler _raises_ a specific error: following a backlink through a _computed_ link, and referencing an internal alias link-helper type by name.
 
 **Representative:** `test_edgeql_aliases_backlinks_01`
 
 **EdgeQL:**
+
 ```edgeql
 -- backlinks_01: must THROW /cannot follow backlink 'owners'/
 SELECT User.<owners[Is Card];
@@ -6255,6 +6647,7 @@ SELECT __AwardAlias2__winner;
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 type Card extending Named { multi owners := .<deck[IS User]; }  -- owners is COMPUTED
 alias AwardAlias2 := (SELECT Award { winner := Award.<awards[IS User] { deck: { id } } });
@@ -6263,12 +6656,13 @@ alias AwardAlias2 := (SELECT Award { winner := Award.<awards[IS User] { deck: { 
 ```
 
 **Expected SQL:**
+
 ```sql
 -- none — must throw at compile time with "cannot follow backlink 'owners'"
 --        (helper_01 must throw "cannot refer to alias link helper type 'default::__AwardAlias2__winner'")
 ```
 
-**Why it fails today:** the engine does not raise. `User.<owners[Is Card]` (a backlink through the *computed* link `owners`) silently compiles to a CROSS JOIN instead of raising `cannot follow backlink 'owners'`. `SELECT __AwardAlias2__winner` compiles as if the internal helper type were a real, user-visible type (`FROM "default____awardalias2__winner"`) instead of raising `cannot refer to alias link helper type …`.
+**Why it fails today:** the engine does not raise. `User.<owners[Is Card]` (a backlink through the _computed_ link `owners`) silently compiles to a CROSS JOIN instead of raising `cannot follow backlink 'owners'`. `SELECT __AwardAlias2__winner` compiles as if the internal helper type were a real, user-visible type (`FROM "default____awardalias2__winner"`) instead of raising `cannot refer to alias link helper type …`.
 
 ### computable aliased link (1)
 
@@ -6279,6 +6673,7 @@ An alias renames a link (`my_friends := User.friends`); the nested shape on the 
 **Representative:** `test_edgeql_computable_aliased_link_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT AliasedFriends {
     my_name,
@@ -6289,6 +6684,7 @@ FILTER .name = 'Alice';
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 type User extending Named {
     multi friends: User { nickname: str; }   -- link property @nickname
@@ -6299,6 +6695,7 @@ alias AliasedFriends := (
 ```
 
 **Expected SQL:**
+
 ```sql
 -- my_friends must still expose the @nickname LINK PROPERTY from the underlying
 -- friends junction (the alias just renames the link; link-props survive):
@@ -6325,6 +6722,7 @@ A schema-level `CREATE ALIAS` over a SET of named tuples is selected and ordered
 **Representative:** `test_edgeql_aliases_basic_03`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE ALIAS scores := (
     SELECT {
@@ -6342,6 +6740,7 @@ SELECT scores ORDER BY scores.name;
 **Relevant ESDL:** none — `scores` is a schema-level `CREATE ALIAS` of a SET of named tuples; no object types involved.
 
 **Expected SQL** (alias inlined; one named-tuple json_object per element, ordered by `name`):
+
 ```sql
 SELECT "value" FROM (
   SELECT json_object('name', n."value", 'score', s."value", 'games', g."value") AS "value"
@@ -6364,6 +6763,7 @@ A `CREATE ALIAS` overrides a link (`owners`) with an expression that adds a nest
 **Representative:** `test_edgeql_aliases_create_01`
 
 **EdgeQL:**
+
 ```edgeql
 CREATE ALIAS DCard := (
     SELECT Card {
@@ -6383,6 +6783,7 @@ SELECT DCard {
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 type User extending Named { multi deck: Card { ... }; }
 type Card extending Named { multi owners := .<deck[IS User]; }
@@ -6391,6 +6792,7 @@ type Card extending Named { multi owners := .<deck[IS User]; }
 ```
 
 **Expected SQL:**
+
 ```sql
 SELECT c."id","__source_type", c."name" AS "name",
   COALESCE((SELECT json_group_array(json_object(
@@ -6404,7 +6806,7 @@ WHERE c."name" LIKE 'D%'
 ORDER BY c."name" ASC;
 ```
 
-**Why it fails today:** the nested computed property `name_upper := str_upper(.name)` defined inside the alias's *redefined* `owners` link comes back empty (`''` instead of `'CAROL'`). `.name` inside the redefined link's nested shape is not bound to the link target, so `str_upper(.name)` evaluates over an empty/NULL value (same family as `nested_03`).
+**Why it fails today:** the nested computed property `name_upper := str_upper(.name)` defined inside the alias's _redefined_ `owners` link comes back empty (`''` instead of `'CAROL'`). `.name` inside the redefined link's nested shape is not bound to the link target, so `str_upper(.name)` evaluates over an empty/NULL value (same family as `nested_03`).
 
 ### aliases array of array (1)
 
@@ -6415,6 +6817,7 @@ An `array<array<Card>>` alias is unpacked twice (`array_unpack` over each cost b
 **Representative:** `test_edgeql_aliases_array_of_array_02`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT array_agg((
     for card_group in array_unpack(AliasCardsByCost)
@@ -6428,6 +6831,7 @@ SELECT array_agg((
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 alias AliasCardsByCost := array_agg((
     for cost in range_unpack(range(0, max(Card.cost) + 1))
@@ -6440,7 +6844,7 @@ alias AliasCardsByCost := array_agg((
 
 **Expected SQL (shape of):** a nested-aggregation pipeline — the alias `AliasCardsByCost` expands to `array_agg` over `range_unpack(range(0, max(cost)+1))` of per-cost `array_agg` of Card object refs; the outer query then `array_unpack`s that (FOR over each cost bucket), `array_unpack`s each bucket (FOR over each Card), projects `card.name`, and re-aggregates with two levels of `json_group_array`, preserving empty inner arrays (cost 0 bucket = `[]`).
 
-**Why it fails today:** the whole nested `array_agg`/`for`/`array_unpack(AliasCardsByCost)` expression compiles to a degenerate `SELECT NULL AS "id", NULL AS "__source_type"` — the array-of-array-of-objects alias, when round-tripped through `array_unpack` (twice) and re-aggregated, produces no valid source. (The simpler `array_of_array_01`, `select AliasArrayOfArrayOfScalar`, passes for an array-of-array of *scalars*.)
+**Why it fails today:** the whole nested `array_agg`/`for`/`array_unpack(AliasCardsByCost)` expression compiles to a degenerate `SELECT NULL AS "id", NULL AS "__source_type"` — the array-of-array-of-objects alias, when round-tripped through `array_unpack` (twice) and re-aggregated, produces no valid source. (The simpler `array_of_array_01`, `select AliasArrayOfArrayOfScalar`, passes for an array-of-array of _scalars_.)
 
 ### aliases introspection (1)
 
@@ -6451,6 +6855,7 @@ Introspection metadata for aliases: the `schema::Type.from_alias` flag, `schema:
 **Representative:** `test_edgeql_aliases_introspection`
 
 **EdgeQL:**
+
 ```edgeql
 -- part 2 (the load-bearing one): tuple alias element types in order
 CREATE ALIAS tuple_alias := ('foo', 10);
@@ -6471,6 +6876,7 @@ filter .name = 'winner' and .source.name = 'default::AwardAlias';
 ```
 
 **Relevant ESDL:**
+
 ```edgeql
 alias AwardAlias := (Award { winner := Award.<awards[IS User] { name_upper := ... } });
 -- requires: schema::Type.from_alias flag set for AirCard/AwardAlias/helper types;
@@ -6478,10 +6884,9 @@ alias AwardAlias := (Award { winner := Award.<awards[IS User] { name_upper := ..
 --           the alias link target (__AwardAlias__winner helper) marked from_alias=true
 ```
 
-**Expected SQL:** the queries already lower to plausible SQL over `schema__type`, `schema__tuple`, `schema__tupleelement`, `schema__pointer`; correctness depends on the introspection tables being *populated* for aliases.
+**Expected SQL:** the queries already lower to plausible SQL over `schema__type`, `schema__tuple`, `schema__tupleelement`, `schema__pointer`; correctness depends on the introspection tables being _populated_ for aliases.
 
 **Why it fails today:** alias introspection metadata is incomplete. `element_types: { name := .type.name }` projects `NULL AS "name_id"` (the TupleElement→type→name chain is not resolved), and the `from_alias` flag / `schema::Tuple`/`TupleElement` rows / alias link-helper target types are not populated for `CREATE ALIAS`-created aliases — so the introspection rows the test expects are missing/empty. (This is a schema-metadata population gap, not a pure SQL-shape bug.)
-
 
 ---
 
@@ -6491,18 +6896,18 @@ In this engine's physical layout the `multi property tag_set1`/`tag_set2` values
 stored as a JSON array in a column on the object table (`default__item."tag_set1"`),
 read element-wise via `json_each(COALESCE(a0."tag_set1", '[]'))`. `tag_array` is a
 plain `array<str>` stored as a JSON column (`a0."tag_array"`). The failing cluster is
-*derived* values built from these multi-property sources: array/tuple constructors over
+_derived_ values built from these multi-property sources: array/tuple constructors over
 several multi props (which yield a **set of arrays/tuples** via cartesian expansion),
 then indexed/sliced/element-projected, plus cross-item self-referential `NOT IN`/
 `NOT EXISTS` filters over those sets.
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 7 | Indexed/sliced array over multi-property sources | `[Item.tag_set1, Item.tag_set2][i]`, `[...][{0,1}]`, `[...][1:20]` — index/slice of an array built from multiple multi props |
-| 3 | Cross-item self-referential set difference | `WITH I2 := Item ... FILTER _ NOT IN ((SELECT I2 FILTER I2 != Item).tag_set1)` |
-| 3 | Cross-item self-referential array difference | `WITH I2 := Item ... array_unpack(Item.tag_array) NOT IN / NOT EXISTS over other items` |
-| 1 | Tuple-element projection over multi-property sources | `(Item.tag_set1,).0`, `(Item.tag_set1, Item.tag_set2).1` |
-| 1 | Element-wise `re_match` over two multi properties | `re_match(Item.tag_set1, Item.tag_set2)` |
+| Count | Query group                                          | Pattern                                                                                                                      |
+| ----: | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+|     7 | Indexed/sliced array over multi-property sources     | `[Item.tag_set1, Item.tag_set2][i]`, `[...][{0,1}]`, `[...][1:20]` — index/slice of an array built from multiple multi props |
+|     3 | Cross-item self-referential set difference           | `WITH I2 := Item ... FILTER _ NOT IN ((SELECT I2 FILTER I2 != Item).tag_set1)`                                               |
+|     3 | Cross-item self-referential array difference         | `WITH I2 := Item ... array_unpack(Item.tag_array) NOT IN / NOT EXISTS over other items`                                      |
+|     1 | Tuple-element projection over multi-property sources | `(Item.tag_set1,).0`, `(Item.tag_set1, Item.tag_set2).1`                                                                     |
+|     1 | Element-wise `re_match` over two multi properties    | `re_match(Item.tag_set1, Item.tag_set2)`                                                                                     |
 
 ### Indexed/sliced array over multi-property sources (7)
 
@@ -6517,6 +6922,7 @@ then indexed/sliced/element-projected, plus cross-item self-referential `NOT IN`
 **Representative:** `test_edgeql_links_derived_array_06`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Item {
     name,
@@ -6528,13 +6934,14 @@ ORDER BY .name;
 ```
 
 The distinguishing operand is `[Item.tag_set1, Item.tag_set2]`: an array constructor
-over two *multi* props. Per Gel semantics this is a **set** of arrays — one per element
+over two _multi_ props. Per Gel semantics this is a **set** of arrays — one per element
 of the cartesian product of the two sets. Slicing/indexing then applies element-wise to
 each array in that set. (`derived_array_01/02` use `[...][1]`/`array_get([...],1)`,
 `03/04/05` use a set index `[...][{0,1}]`/`array_get(...,{0,1})`, `06/07` slice `[1:20]`/
 `[{1,2}:20]`. The single-source `Item.tag_array[...]` half of each test already works.)
 
 **Relevant ESDL:**
+
 ```esdl
 type Item extending Named {
     multi property tag_set1 -> str;
@@ -6581,7 +6988,7 @@ ORDER BY a0."name" ASC
 ```
 
 **Why it fails today:** the index/slice operator only handles a single stored array
-operand; when the array operand is a constructor over multi props (a *set* of arrays),
+operand; when the array operand is a constructor over multi props (a _set_ of arrays),
 the compiler silently **drops the entire shape field** — `bin/inspect.ts sql` shows the
 `a_t2`/`t4` column missing from the SELECT list entirely (no per-element index/slice over
 the cartesian-expanded set, and no result ordering).
@@ -6595,6 +7002,7 @@ the cartesian-expanded set, and no result ordering).
 **Representative:** `test_edgeql_links_set_12`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     I2 := Item
@@ -6615,13 +7023,14 @@ ORDER BY .name;
 subquery.
 
 **Relevant ESDL:**
+
 ```esdl
 type Item extending Named {
     multi property tag_set1 -> str;
 }
 ```
 
-**Expected SQL:** `(SELECT I2 FILTER I2 != Item).tag_set1` is the union of every *other*
+**Expected SQL:** `(SELECT I2 FILTER I2 != Item).tag_set1` is the union of every _other_
 item's `tag_set1` set; `unique` keeps the tags of the current item not present there.
 
 ```sql
@@ -6649,7 +7058,7 @@ ORDER BY a0."name" ASC
 ```
 
 **Why it fails today:** the `NOT IN` right side compiles to
-`NOT IN (SELECT a0."tag_set1")` — it references the *current* item's whole `tag_set1`
+`NOT IN (SELECT a0."tag_set1")` — it references the _current_ item's whole `tag_set1`
 JSON column, never joining in the other items (`SELECT I2 FILTER I2 != Item` is lost) and
 never `json_each`-unpacking the set. So nothing is ever excluded, giving wrong/over-large
 `unique` sets (set_12 yields count 2 where 1 is expected).
@@ -6663,6 +7072,7 @@ never `json_each`-unpacking the set. So nothing is ever excluded, giving wrong/o
 **Representative:** `test_edgeql_links_array_09`
 
 **EdgeQL:**
+
 ```edgeql
 WITH
     I2 := Item
@@ -6686,6 +7096,7 @@ array_unpack(I2.tag_array) = array_unpack(Item.tag_array))`. Same correlated-oth
 root, over `array_unpack(tag_array)` instead of `tag_set1`.
 
 **Relevant ESDL:**
+
 ```esdl
 type Item extending Named {
     property tag_array -> array<str>;
@@ -6732,6 +7143,7 @@ items). The correlated cross-item subquery feeding `NOT IN`/`NOT EXISTS` over an
 **Representative:** `test_edgeql_links_derived_tuple_01`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Item {
     n1 := (Item.name,),
@@ -6750,6 +7162,7 @@ The two broken fields are the `.N` projections out of a tuple built from multi p
 fields `t1`/`t2` already produce correct cartesian-expanded sets.)
 
 **Relevant ESDL:**
+
 ```esdl
 type Item extending Named {
     multi property tag_set1 -> str;
@@ -6796,6 +7209,7 @@ the sorted `["rectangle","wood"]`.
 **Representative:** `test_edgeql_links_derived_array_08`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT Item {
     name,
@@ -6807,10 +7221,11 @@ ORDER BY .name;
 
 `re_match(pattern, string)` is called element-wise over the cartesian product of the two
 multi sets; each call returns `array<str>` (or the **empty set** on no match). For
-`table` the only matches are where a tag equals itself (`rectangle`~`rectangle`,
-`wood`~`wood`), giving `[["rectangle"],["wood"]]`.
+`table` the only matches are where a tag equals itself (`rectangle`~~`rectangle`,
+`wood`~~`wood`), giving `[["rectangle"],["wood"]]`.
 
 **Relevant ESDL:**
+
 ```esdl
 type Item extending Named {
     multi property tag_set1 -> str;
@@ -6843,11 +7258,10 @@ ORDER BY a0."name" ASC
 ```
 
 **Why it fails today:** the lowering keeps every cartesian pair and emits `null` for
-non-matching pairs instead of eliminating them (re_match returns an *empty set*, not
+non-matching pairs instead of eliminating them (re_match returns an _empty set_, not
 null), and the result is unordered. For `table` it produces
 `[["wood"],null,null,["rectangle"]]` instead of `[["rectangle"],["wood"]]` — wrong length,
 stray nulls, wrong order.
-
 
 ---
 
@@ -6860,11 +7274,11 @@ with `required owner: User` (overloaded, carries link prop `since` → junction 
 `required status: Status`. The backlink `User.<owner[IS Issue]` is the set of Issues a user owns
 (junction table `default__issue__owner`). `Status` has `name`.
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 2 | Existential AND of two scalar conditions over a backlink | `any(FOR i IN User.<owner[IS Issue] SELECT cond1 AND cond2)` / `EXISTS … AND (FOR … = …)` |
-| 1 | Cross product after a filtered subquery | `(SELECT Issue FILTER …).number ++ Status.name` |
-| 1 | Self-comparison of object set inside a sub-FILTER | `FILTER I = U2.<owner[IS Issue]` where `I := User.<owner[IS Issue]` |
+| Count | Query group                                              | Pattern                                                                                   |
+| ----: | -------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+|     2 | Existential AND of two scalar conditions over a backlink | `any(FOR i IN User.<owner[IS Issue] SELECT cond1 AND cond2)` / `EXISTS … AND (FOR … = …)` |
+|     1 | Cross product after a filtered subquery                  | `(SELECT Issue FILTER …).number ++ Status.name`                                           |
+|     1 | Self-comparison of object set inside a sub-FILTER        | `FILTER I = U2.<owner[IS Issue]` where `I := User.<owner[IS Issue]`                       |
 
 ### Existential AND of two scalar conditions over a backlink (2)
 
@@ -6879,6 +7293,7 @@ an object-identity self-join (not_exists04). Both must lower to a single existen
 **Representative:** `test_edgeql_filter_two_scalar_conditions01`
 
 **EdgeQL:**
+
 ```edgeql
 # Find Users who own at least one Issue with simultaneously
 # time_estimate > 9000 and due_date on 2020/01/15.
@@ -6894,6 +7309,7 @@ ORDER BY User.name;
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Dictionary;          # has required name: str
 abstract type Owned { required owner: User { note: str; } }
@@ -6908,6 +7324,7 @@ type Issue extending Named, Owned, Text {
 **Expected SQL:** (the `any(FOR … SELECT c1 AND c2)` form must lower to the same existential-over-backlink
 shape the passing sibling `two_scalar_exists01` already produces — an `EXISTS` correlated subquery joining
 the owner junction to the Issue table and ANDing both element-wise scalar predicates)
+
 ```sql
 SELECT a0."id" AS "id", a0."__source_type" AS "__source_type", a0."name" AS "name"
 FROM (SELECT 'default::User' AS "__source_type", "id" AS "id", "name" AS "name"
@@ -6926,6 +7343,7 @@ WHERE EXISTS (
 )
 ORDER BY a0."name" ASC
 ```
+
 (`not_exists04` is the same family: `EXISTS User.<owner[IS Issue] AND (FOR lol IN U2.<owner[IS Issue] SELECT NOT EXISTS lol.time_estimate AND User.<owner[IS Issue] = lol)` — an existential over the backlink combining a `NOT EXISTS` scalar test with an object-identity self-join; expected to lower to an `EXISTS` correlating the two backlink roots on `id`.)
 
 **Why it fails today:** the `any(...)`/`FOR`-over-backlink form is not lowered to the element-wise
@@ -6938,13 +7356,14 @@ test, so conditions01 returns 3 users instead of 1 (Yury) and not_exists04 retur
 - `test_edgeql_filter_flow03`
 
 The interaction of FILTER with a cross product: the left operand of the `++` string concatenation is
-a *filtered* Issue subquery, cross-joined against the full `Status` set. The first sub-assertion (the
+a _filtered_ Issue subquery, cross-joined against the full `Status` set. The first sub-assertion (the
 unfiltered baseline) passes; the failing sub-assertions wrap the Issue source in `(SELECT Issue FILTER
 Issue.owner.name = 'Elvis')` before the cross product.
 
 **Representative:** `test_edgeql_filter_flow03` (second/third sub-assertions)
 
 **EdgeQL:**
+
 ```edgeql
 # interaction of filter and cross product (expects 4 rows)
 SELECT _ := (
@@ -6955,15 +7374,17 @@ ORDER BY _;
 ```
 
 **ESDL:**
+
 ```esdl
 type Issue extending Named, Owned, Text { required number: issue_num_t; }
 abstract type Owned { required owner: User { note: str; } }   # owner.name via default__issue__owner
 type Status extending Dictionary;                              # has name
 ```
 
-**Expected SQL:** (a CROSS JOIN of the *filtered* Issue source against the Status source, concatenating
+**Expected SQL:** (a CROSS JOIN of the _filtered_ Issue source against the Status source, concatenating
 `number ++ name`. The unfiltered baseline already compiles to `(a0."number" || a1."name")` over a CROSS
 JOIN, so the filtered subquery must remain a row source on the left of the same CROSS JOIN.)
+
 ```sql
 SELECT "value" AS "value"
 FROM (
@@ -6990,13 +7411,14 @@ still produces the degenerate plan.)
 
 - `test_edgeql_filter_two_scalar_exists04`
 
-An `EXISTS` over the backlink whose inner FILTER nests a *second* backlink subquery
+An `EXISTS` over the backlink whose inner FILTER nests a _second_ backlink subquery
 (`SELECT U2.<owner[IS Issue] FILTER I = U2.<owner[IS Issue]`) and compares it for object identity
 against the outer bound set `I`. The identity equality must correlate the two backlink roots on `id`.
 
 **Representative:** `test_edgeql_filter_two_scalar_exists04`
 
 **EdgeQL:**
+
 ```edgeql
 WITH U2 := User
 SELECT User{name}
@@ -7016,6 +7438,7 @@ ORDER BY User.name;
 ```
 
 **ESDL:**
+
 ```esdl
 type User extending Dictionary;
 type Issue extending Named, Owned, Text { optional time_estimate: int64; due_date: datetime; }
@@ -7026,6 +7449,7 @@ type Issue extending Named, Owned, Text { optional time_estimate: int64; due_dat
 object-identity self-join: correlate the inner Issue backlink to the outer `I` on `id` and project
 `due_date`. Expected to lower to a nested `EXISTS` whose inner source filters the second backlink root
 to the rows whose `id` equals the outer `I."id"`.)
+
 ```sql
 -- … outer EXISTS over User.<owner[IS Issue] as _ex0 (= I) …
 -- inner: SELECT 1 FROM default__issue__owner _lj1
@@ -7040,17 +7464,16 @@ to the rows whose `id` equals the outer `I."id"`.)
 the equality between the bound set `I` (alias of `User.<owner[IS Issue]`) and another object-set path
 `U2.<owner[IS Issue]` is not recognized as object-identity comparison, so the sub-FILTER never type-checks.
 
-
 ---
 
 ## tests/edgeql_userddl.test.ts (2)
 
 Schema is defined inline via DDL inside each test (`h.script("CREATE …")`), not from an `.esdl` file.
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 1 | UDF call distributed over a multi-set argument | `count(func_20({'q','w'}))` where `func_20 -> SET OF str` |
-| 1 | START / POPULATE / COMMIT MIGRATION session | DDL migration block + `sys::ExtensionPackage` |
+| Count | Query group                                    | Pattern                                                   |
+| ----: | ---------------------------------------------- | --------------------------------------------------------- |
+|     1 | UDF call distributed over a multi-set argument | `count(func_20({'q','w'}))` where `func_20 -> SET OF str` |
+|     1 | START / POPULATE / COMMIT MIGRATION session    | DDL migration block + `sys::ExtensionPackage`             |
 
 ### UDF call distributed over a multi-set argument (1)
 
@@ -7059,6 +7482,7 @@ Schema is defined inline via DDL inside each test (`h.script("CREATE …")`), no
 **Representative:** `test_edgeql_userddl_20`
 
 **EdgeQL / DDL:**
+
 ```edgeql
 CREATE FUNCTION func_20(a: str) -> SET OF str
     USING EdgeQL $$
@@ -7076,6 +7500,7 @@ Called element-wise on the 2-element set `{'q','w'}` it must yield
 **Expected SQL:** The multi-set argument must be distributed element-wise: the inlined UDF body is
 evaluated once per input element and the per-element result sets are UNION-ALL'd, then counted
 (matching the `count(<set>)` idiom `SELECT (SELECT count(*) FROM (<set source>)) AS "value"`).
+
 ```sql
 SELECT (
   SELECT count(*) FROM (
@@ -7086,6 +7511,7 @@ SELECT (
   )
 ) AS "value"
 ```
+
 Compare the (mis-)compiled idiom observed for a single-return UDF, which already shows the bug shape:
 `count(ident({'q','w'}))` emits
 `SELECT count((SELECT json_group_array("value") FROM (SELECT ? UNION ALL SELECT ?))) AS "value"` —
@@ -7102,6 +7528,7 @@ returns 1 instead of 4. The single-arg call `func_20('q')` works because there i
 **Representative:** `test_edgeql_userddl_all_extensions_01`
 
 **EdgeQL / DDL:**
+
 ```edgeql
 SELECT DISTINCT sys::ExtensionPackage.name;     -- enumerate available extensions
 
@@ -7118,7 +7545,7 @@ DESCRIBE CURRENT DATABASE CONFIG AS DDL;
 DESCRIBE INSTANCE CONFIG AS DDL;
 ```
 
-**Relevant DDL:** none in an `.esdl` — the test drives the migration *session* state machine and the
+**Relevant DDL:** none in an `.esdl` — the test drives the migration _session_ state machine and the
 `sys::ExtensionPackage` system catalog.
 
 **Expected SQL:** No single SQL — this is a DDL / migration-session runtime path. Expected behavior is
@@ -7131,7 +7558,6 @@ with extensions toggled), and that `sys::ExtensionPackage.name` enumerates the e
 `POPULATE MIGRATION` / `COMMIT MIGRATION` (and the `using future` / `using extension` toggles inside the
 migration block) are unimplemented, so the script throws. Left as a parity placeholder.
 
-
 ---
 
 ## tests/dump01.test.ts (1)
@@ -7141,9 +7567,9 @@ Schema: `tests/schemas/dump01_test.esdl` (`--schema dump01_test`), which the har
 Setup: `dump01_setup` (inserts D #0–3, E #4–7, F #8). This is the dump/restore round-trip validation
 of the `D` link data.
 
-| Count | Query group | Pattern |
-|---:|---|---|
-| 1 | Polymorphic base-type shape with per-subtype-overloaded links | `SELECT D { single_link {…}, multi_link {…} } FILTER .__type__.name = 'default::D'` |
+| Count | Query group                                                   | Pattern                                                                             |
+| ----: | ------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+|     1 | Polymorphic base-type shape with per-subtype-overloaded links | `SELECT D { single_link {…}, multi_link {…} } FILTER .__type__.name = 'default::D'` |
 
 (one row per group; the Count column sums to 1)
 
@@ -7153,12 +7579,13 @@ of the `D` link data.
 
 `SELECT D` is polymorphic over the concrete set `{D, E, F}` (E and F extend D). The shape projects the
 single `single_link` and the multi `multi_link` (both to `C`), and the `FILTER .__type__.name =
-'default::D'` should restrict the result to the four D instances only. The complication: E *overloads*
+'default::D'` should restrict the result to the four D instances only. The complication: E _overloads_
 both links, adding link properties (`lp0`/`lp1`), so the per-subtype physical layouts differ.
 
 **Representative:** `should validate D link data`
 
 **EdgeQL:**
+
 ```edgeql
 SELECT D {
   num,
@@ -7174,6 +7601,7 @@ ORDER BY .num;
 ```
 
 **ESDL:**
+
 ```esdl
 type C { required property val -> str { constraint exclusive } }
 
@@ -7197,6 +7625,7 @@ column set and arity** (so the link-property columns E adds must appear as `NULL
 and F branches), then the `__type__` filter prunes to `'default::D'`, then the shape sub-selects join
 each link's junction table to the `C` target for `val`. By analogy to the passing single-link +
 multi-link shape idiom:
+
 ```sql
 SELECT a0."id" AS "id", a0."__source_type" AS "__source_type", a0."num" AS "num",
        -- single_link (single -> json_extract($[0])):
@@ -7224,19 +7653,18 @@ FROM (
 WHERE a0."__source_type" = 'default::D'        -- .__type__.name = 'default::D'
 ORDER BY a0."num" ASC
 ```
+
 (The sibling tests `should validate E link data` and `should validate F link data` — each selecting a
 single concrete type — PASS, confirming the per-link shape/junction idiom above is correct; only the
 polymorphic base-type union is broken.)
 
 **Why it fails today:** prepare-time error
 `SELECTs to the left and right of UNION ALL do not have the same number of result columns`. The
-polymorphic `SELECT D` builds a `UNION ALL` over `{D, E, F}` but emits a *different column count per
-branch* — E's overloaded links carry link-property columns (`lp0`/`lp1`) that the D and F branches do
+polymorphic `SELECT D` builds a `UNION ALL` over `{D, E, F}` but emits a _different column count per
+branch_ — E's overloaded links carry link-property columns (`lp0`/`lp1`) that the D and F branches do
 not project, and those extra columns are not back-filled as `NULL` placeholders to equalize arity.
-Compounding it, the `.__type__.name = 'default::D'` predicate is applied *after* the union rather than
+Compounding it, the `.__type__.name = 'default::D'` predicate is applied _after_ the union rather than
 pruning the E/F branches up front, so the mismatched-arity union is still constructed and fails when
 SQLite prepares it.
 
-
 ---
-

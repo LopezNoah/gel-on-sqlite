@@ -77,6 +77,6 @@ shim neutralizes dev-only `process.env.DBG_*` reads. Result is self-contained
   interpreter-fallback (multi-query) path, access-policy reads, scripts, and
   `FOR` return a clean `AsyncUnsupportedError`. Those need the Tier-2 interleaved
   core.
-- DO SQL is synchronous, so a DO could in principle run the *full* sync engine
+- DO SQL is synchronous, so a DO could in principle run the _full_ sync engine
   (writes included) — pending a bundle-safe `engine.ts`. A larger follow-up.
 - `dist/`, `seed.sqlite`, `seed.sql`, and `.wrangler/` are git-ignored.

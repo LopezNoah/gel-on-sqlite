@@ -172,10 +172,7 @@ export const err = <E>(error: E): Result<never, E> => ({ ok: false, error });
  * engine bugs keep propagating so they cannot hide inside probe call sites.
  * Pass captureAll: true for boundaries that must not throw at all.
  */
-export const tryResult = <T>(
-  fn: () => T,
-  opts?: { captureAll?: boolean },
-): Result<T> => {
+export const tryResult = <T>(fn: () => T, opts?: { captureAll?: boolean }): Result<T> => {
   try {
     return ok(fn());
   } catch (e) {

@@ -1,11 +1,14 @@
 import { gelLRSpec } from "./generated_gel_lr_spec.js";
 import { tokenizeWithStarts, type Token } from "./tokenizer.js";
 
-type LRAction = { kind: "shift"; state: number }
+type LRAction =
+  | { kind: "shift"; state: number }
   | { kind: "reduce"; production: number; count: number; nonterminal: number };
 type LRInputTerminal = { id: number; name: string; text: string; start: number; end: number };
 export type GelCSTNode = GelCSTEmpty | GelCSTTerminal | GelCSTProduction;
-export interface GelCSTEmpty { kind: "empty" }
+export interface GelCSTEmpty {
+  kind: "empty";
+}
 export interface GelCSTTerminal {
   kind: "terminal";
   terminal: string;
@@ -27,17 +30,23 @@ const multiwordTokens = [...gelLRSpec.multiwordTokens].sort((a, b) => b.length -
 const actions = gelLRSpec.actions.map((state) => {
   const row = new Map<number, LRAction>();
   for (const [terminal, operation, a, b, c] of state) {
-    row.set(terminal, operation === 0
-      ? { kind: "shift", state: a }
-      : { kind: "reduce", production: a, count: b ?? 0, nonterminal: c ?? 0 });
+    row.set(
+      terminal,
+      operation === 0
+        ? { kind: "shift", state: a }
+        : { kind: "reduce", production: a, count: b ?? 0, nonterminal: c ?? 0 },
+    );
   }
   return row;
 });
-const gotos = gelLRSpec.gotos.map((state) => new Map<number, number>(
-  state.map(([symbol, target]) => [symbol, target] as [number, number]),
-));
+const gotos = gelLRSpec.gotos.map(
+  (state) =>
+    new Map<number, number>(state.map(([symbol, target]) => [symbol, target] as [number, number])),
+);
 const epsilonId = terminalIds.get("<e>");
-const inlines = new Map<number, number>(gelLRSpec.inlines.map(([id, index]) => [id, index] as [number, number]));
+const inlines = new Map<number, number>(
+  gelLRSpec.inlines.map(([id, index]) => [id, index] as [number, number]),
+);
 
 function terminalName(token: Token): string | undefined {
   if (token.kind === "eof") return "EOI";
@@ -49,21 +58,55 @@ function terminalName(token: Token): string | undefined {
     const value = token.lexeme.replace(/_/g, "");
     const big = value.endsWith("n");
     const nonInteger = /[.eE]/.test(big ? value.slice(0, -1) : value);
-    return big ? nonInteger ? "NFCONST" : "NICONST" : nonInteger ? "FCONST" : "ICONST";
+    return big ? (nonInteger ? "NFCONST" : "NICONST") : nonInteger ? "FCONST" : "ICONST";
   }
   const fixed: Partial<Record<Token["kind"], string>> = {
-    string: "SCONST", bytes_string: "BCONST", parameter: "PARAMETER",
-    parameter_and_type: "PARAMETERANDTYPE", substitution: "SUBSTITUTION",
-    str_interp_start: "STRINTERPSTART", str_interp_cont: "STRINTERPCONT",
-    str_interp_end: "STRINTERPEND", backward_link: ".<", optional_link: ".?>",
-    coloncolon: "::", assign: ":=", add_assign: "+=", sub_assign: "-=",
-    floor_div: "//", concat: "++", coalesce: "??", distinct_from: "?!=",
-    not_distinct_from: "?=", not_equals: "!=", lparen: "(", rparen: ")",
-    lbrace: "{", rbrace: "}", lbracket: "[", rbracket: "]", comma: ",",
-    colon: ":", semi: ";", dot: ".", plus: "+", minus: "-", star: "*",
-    double_splat: "**", slash: "/", modulo: "%", pow: "^", pipe: "|",
-    ampersand: "&", equals: "=", lt: "<", lte: "<=", gt: ">", gte: ">=",
-    at: "@", arrow: "->",
+    string: "SCONST",
+    bytes_string: "BCONST",
+    parameter: "PARAMETER",
+    parameter_and_type: "PARAMETERANDTYPE",
+    substitution: "SUBSTITUTION",
+    str_interp_start: "STRINTERPSTART",
+    str_interp_cont: "STRINTERPCONT",
+    str_interp_end: "STRINTERPEND",
+    backward_link: ".<",
+    optional_link: ".?>",
+    coloncolon: "::",
+    assign: ":=",
+    add_assign: "+=",
+    sub_assign: "-=",
+    floor_div: "//",
+    concat: "++",
+    coalesce: "??",
+    distinct_from: "?!=",
+    not_distinct_from: "?=",
+    not_equals: "!=",
+    lparen: "(",
+    rparen: ")",
+    lbrace: "{",
+    rbrace: "}",
+    lbracket: "[",
+    rbracket: "]",
+    comma: ",",
+    colon: ":",
+    semi: ";",
+    dot: ".",
+    plus: "+",
+    minus: "-",
+    star: "*",
+    double_splat: "**",
+    slash: "/",
+    modulo: "%",
+    pow: "^",
+    pipe: "|",
+    ampersand: "&",
+    equals: "=",
+    lt: "<",
+    lte: "<=",
+    gt: ">",
+    gte: ">=",
+    at: "@",
+    arrow: "->",
   };
   return fixed[token.kind];
 }
@@ -96,8 +139,12 @@ function tokensForBlock(source: string): LRInputTerminal[] | undefined {
       }
     }
     const token = tokens[i];
-    if (!phrase && token.kind === "number" && result[result.length - 1]?.name === "."
-        && /^\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)+$/.test(token.lexeme)) {
+    if (
+      !phrase &&
+      token.kind === "number" &&
+      result[result.length - 1]?.name === "." &&
+      /^\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)+$/.test(token.lexeme)
+    ) {
       const integerId = terminalIds.get("ICONST");
       if (integerId === undefined) return undefined;
       const segments = token.lexeme.split(".");
@@ -116,7 +163,12 @@ function tokensForBlock(source: string): LRInputTerminal[] | undefined {
     const name = phrase ?? terminalName(token);
     if (name === undefined) return undefined;
     const last = phrase ? tokens[i + phraseLength - 1] : token;
-    const text = phrase ? tokens.slice(i, i + phraseLength).map((part) => part.lexeme).join(" ") : token.lexeme;
+    const text = phrase
+      ? tokens
+          .slice(i, i + phraseLength)
+          .map((part) => part.lexeme)
+          .join(" ")
+      : token.lexeme;
     if (!add(name, text, token.offset, last.offset + last.lexeme.length)) return undefined;
     i += phrase ? phraseLength : 1;
   }
@@ -165,10 +217,14 @@ function runGelLR(source: string, materializeCST: boolean): GelCSTNode | boolean
       if (!action) return false;
       if (action.kind === "shift") {
         const shifted = epsilon
-          ? { id: epsilonId!, name: "<e>", text: "", start: token.start, end: token.start }
+          ? { id: epsilonId, name: "<e>", text: "", start: token.start, end: token.start }
           : token;
-        const node: GelCSTNode = { kind: "terminal", terminal: shifted.name, text: shifted.text,
-          span: { start: shifted.start, end: shifted.end } };
+        const node: GelCSTNode = {
+          kind: "terminal",
+          terminal: shifted.name,
+          text: shifted.text,
+          span: { start: shifted.start, end: shifted.end },
+        };
         stack.push({ state: action.state, ...(materializeCST ? { node } : {}) });
         // Epsilon transitions are table actions, not input consumption.
         if (epsilon) continue;
@@ -182,18 +238,27 @@ function runGelLR(source: string, materializeCST: boolean): GelCSTNode | boolean
         const inlineIndex = inlines.get(action.production);
         if (inlineIndex !== undefined) {
           const inlineNode = args[inlineIndex] ?? { kind: "empty" as const };
-          node = inlineNode.kind === "production"
-            ? { ...inlineNode, inlinedIds: [...(inlineNode.inlinedIds ?? []), action.production] }
-            : inlineNode;
+          node =
+            inlineNode.kind === "production"
+              ? { ...inlineNode, inlinedIds: [...(inlineNode.inlinedIds ?? []), action.production] }
+              : inlineNode;
         } else {
-          const spans = args.flatMap((arg) => arg.kind === "empty" || !arg.span ? [] : [arg.span]);
-          const span = spans.length ? {
-            start: Math.min(...spans.map((item) => item.start)),
-            end: Math.max(...spans.map((item) => item.end)),
-          } : undefined;
-          node = { kind: "production", id: action.production,
-            name: gelLRSpec.productionNames[action.production] as [string, string], args,
-            ...(span ? { span } : {}) };
+          const spans = args.flatMap((arg) =>
+            arg.kind === "empty" || !arg.span ? [] : [arg.span],
+          );
+          const span = spans.length
+            ? {
+                start: Math.min(...spans.map((item) => item.start)),
+                end: Math.max(...spans.map((item) => item.end)),
+              }
+            : undefined;
+          node = {
+            kind: "production",
+            id: action.production,
+            name: gelLRSpec.productionNames[action.production] as [string, string],
+            args,
+            ...(span ? { span } : {}),
+          };
         }
       }
       const next = gotos[stack[stack.length - 1].state]?.get(action.nonterminal);

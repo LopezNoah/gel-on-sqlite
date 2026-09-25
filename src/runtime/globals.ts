@@ -7,7 +7,13 @@
 // back into — the SQL-precompute probe (ADR 0012) and security-context
 // normalization — are injected via `GlobalsDeps`, so the module imports no
 // engine runtime (no-cycle discipline; the shared TYPES come type-only).
-import type { ConfigureStatement, DDLStatement, FreeObjectExpr, SelectExprStatement, Statement } from "../edgeql/ast.js";
+import type {
+  ConfigureStatement,
+  DDLStatement,
+  FreeObjectExpr,
+  SelectExprStatement,
+  Statement,
+} from "../edgeql/ast.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { ScalarValue } from "../types.js";
 import type { CompileContext } from "../compiler/service.js";
@@ -28,8 +34,11 @@ export interface GlobalsDeps {
 }
 
 const isScalarValue = (value: unknown): value is ScalarValue =>
-  value === null || typeof value === "string" || typeof value === "number"
-  || typeof value === "boolean" || typeof value === "bigint";
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "number" ||
+  typeof value === "boolean" ||
+  typeof value === "bigint";
 
 // Per-connection (schema-snapshot-scoped) values for session globals,
 // keyed by the global's unqualified name. Computed globals cache their
@@ -64,7 +73,9 @@ const evaluateGlobalExpr = (
     expr,
     pos: { line: 1, column: 1 },
   } as unknown as SelectExprStatement;
-  const rows = tryRunSingleSqlRows(db, schema, stmtAst as unknown as Statement, context, { globals: context.globals });
+  const rows = tryRunSingleSqlRows(db, schema, stmtAst as unknown as Statement, context, {
+    globals: context.globals,
+  });
   if (!rows || rows.length === 0) return undefined;
   const first = rows[0];
   return first === null || isScalarValue(first) ? (first as ScalarValue) : undefined;
@@ -86,10 +97,20 @@ export const applyCreateGlobalDDL = (
   // it lives in the statement's WITH-module or the script default module.
   const qualified = name.includes("::") ? name : `${ast.withModule ?? defaultModule}::${name}`;
   const [moduleName, shortName] = qualified.split("::");
-  schema.addGlobal({ module: moduleName, name: shortName, exprText: ast.value ? "<computed>" : undefined });
+  schema.addGlobal({
+    module: moduleName,
+    name: shortName,
+    exprText: ast.value ? "<computed>" : undefined,
+  });
   const values = globalValuesFor(schema);
   if (ast.value) {
-    const evaluated = evaluateGlobalExpr(db, schema, ast.value, normalizeSecurityContext(DEFAULT_SECURITY_CONTEXT), deps);
+    const evaluated = evaluateGlobalExpr(
+      db,
+      schema,
+      ast.value,
+      normalizeSecurityContext(DEFAULT_SECURITY_CONTEXT),
+      deps,
+    );
     if (evaluated === undefined) values.delete(shortName);
     else values.set(shortName, evaluated);
   } else {
@@ -107,7 +128,9 @@ export const applySessionGlobal = (
   context: SecurityContext,
   deps: GlobalsDeps,
 ): void => {
-  const name = ast.target.includes("::") ? ast.target.split("::").at(-1)! : ast.target;
+  const name = ast.target.includes("::")
+    ? (ast.target.split("::").at(-1) ?? ast.target)
+    : ast.target;
   const values = globalValuesFor(schema);
   if (ast.operation === "reset") {
     values.delete(name);
@@ -125,7 +148,10 @@ export const applySessionGlobal = (
 // Merges the per-schema session-global values into a context's `globals` map.
 // Caller-supplied globals win over stored defaults (so explicit query-time
 // globals can still override). Returns a new context; the original is unchanged.
-export const withSessionGlobals = (schema: SchemaSnapshot, context: SecurityContext): SecurityContext => {
+export const withSessionGlobals = (
+  schema: SchemaSnapshot,
+  context: SecurityContext,
+): SecurityContext => {
   const stored = globalValuesBySchema.get(schema);
   if (!stored || stored.size === 0) return context;
   const merged: Record<string, ScalarValue> = {};

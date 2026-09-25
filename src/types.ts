@@ -309,7 +309,13 @@ export interface MutationRewriteDef {
   onUpdate?: MutationRewriteExpr;
 }
 
-export type AccessPolicyOperation = "select" | "insert" | "update_read" | "update_write" | "delete" | "all";
+export type AccessPolicyOperation =
+  | "select"
+  | "insert"
+  | "update_read"
+  | "update_write"
+  | "delete"
+  | "all";
 
 export type AccessPolicyCondition =
   | {

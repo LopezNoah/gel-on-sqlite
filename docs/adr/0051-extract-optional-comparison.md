@@ -1,7 +1,7 @@
 # Extract the set-level nullable-operator algebra into optional_comparison.ts
 
 A round-10 architecture review carded `gel_ir_compiler.ts` (13.8k lines, the
-largest module and the least directly tested) as having cohesive *leaf*
+largest module and the least directly tested) as having cohesive _leaf_
 algebras buried in it with no name and no test surface. The set-level
 nullable-operator lowering is one: EdgeQL's `??` set-level coalesce and
 `?=` / `?!=` optional comparison, which lower by distributing nullability
@@ -13,7 +13,7 @@ correlated multi-link probe). It lived as four module-private arrows —
 end-to-end.
 
 **Finding (the candidate over-claimed cleanness — verify before extracting):**
-the four functions are *not* a free-standing leaf. They are mutually recursive
+the four functions are _not_ a free-standing leaf. They are mutually recursive
 with the value/predicate/source dispatchers (`compileValueSetSQL`,
 `compilePredicateSetSQL`, `compileSelectSource`, `compilePolymorphicSource`,
 `compileScalarSelectSQL`) and reach ~9 pure collectors/helpers
@@ -28,8 +28,8 @@ reaching back through the **existing** `SqlLoweringContext` seam (ADR 0006) —
 the same indirection `function_lowering.ts` / `group_lowering.ts` already use to
 live as separate modules despite calling the dispatchers. The five dispatchers
 were already on the context; the ten pure helpers were added to it (the context
-is already a documented grab-bag of dispatchers *and* helpers, so this is the
-established idiom, not a new mechanism). The helper *definitions* did not move,
+is already a documented grab-bag of dispatchers _and_ helpers, so this is the
+established idiom, not a new mechanism). The helper _definitions_ did not move,
 so no other call site changed and no transitive dep-closure had to be chased.
 Each moved function takes `deps: SqlLoweringContext` as its last parameter and
 **destructures it at the top**, so the bodies are byte-identical to the inline

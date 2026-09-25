@@ -132,9 +132,7 @@ describe("Client transactions", () => {
 describe("raw mode (harness pipeline)", () => {
   it("bypasses the codec", async () => {
     const raw = Client.fromParts(h.db, h.schema, { rawResults: true });
-    const value = await raw.queryRequiredSingle<string>(
-      'select <datetime>"2021-01-01T00:00:00Z";',
-    );
+    const value = await raw.queryRequiredSingle<string>('select <datetime>"2021-01-01T00:00:00Z";');
     expect(typeof value).toBe("string");
   });
 });

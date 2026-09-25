@@ -24,14 +24,16 @@ describe("findBindingRoot", () => {
 });
 
 describe("coIteratedBinding", () => {
-  const envWith = (entries: Record<string, unknown>): Map<string, unknown> => new Map(Object.entries(entries));
+  const envWith = (entries: Record<string, unknown>): Map<string, unknown> =>
+    new Map(Object.entries(entries));
 
   it("detects two operands walking the same set-valued binding", () => {
     const env = envWith({ x: [1, 2, 3] });
     expect(coIteratedBinding(ref("x"), ref("x"), env)).toEqual({ root: "x", rows: [1, 2, 3] });
     // through wrappers too: `I.a ?!= I.b`
-    expect(coIteratedBinding(field(ref("I")), field(ref("I")), envWith({ I: [{ id: "1" }] })))
-      .toEqual({ root: "I", rows: [{ id: "1" }] });
+    expect(
+      coIteratedBinding(field(ref("I")), field(ref("I")), envWith({ I: [{ id: "1" }] })),
+    ).toEqual({ root: "I", rows: [{ id: "1" }] });
   });
 
   it("returns null when the roots differ", () => {

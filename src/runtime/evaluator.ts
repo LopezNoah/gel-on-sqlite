@@ -26,7 +26,12 @@ import { parseEdgeQL } from "../edgeql/parser.js";
 import { AppError } from "../errors.js";
 import type { SQLiteDatabase } from "./database.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
-import { normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable, type SchemaSnapshot } from "../schema/schema.js";
+import {
+  normalizeLinkTargetNames,
+  qualifiedTypeName,
+  usesLinkTable,
+  type SchemaSnapshot,
+} from "../schema/schema.js";
 import { resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import type { ScalarValue } from "../types.js";
 import { coIteratedBinding } from "./co_iteration.js";
@@ -86,8 +91,18 @@ export const runSelectExprEvaluation = (
     for (let offset = 0; offset < missing.length; offset += batchSize) {
       const batch = missing.slice(offset, offset + batchSize);
       const placeholders = batch.map(() => "?").join(", ");
-      const loaded = db.prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} IN (${placeholders})`).all(...batch) as Record<string, unknown>[];
-      const found = new Map(loaded.filter((row): row is Record<string, unknown> & { id: string } => typeof row.id === "string").map((row) => [row.id, row]));
+      const loaded = db
+        .prepare(
+          `SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} IN (${placeholders})`,
+        )
+        .all(...batch) as Record<string, unknown>[];
+      const found = new Map(
+        loaded
+          .filter(
+            (row): row is Record<string, unknown> & { id: string } => typeof row.id === "string",
+          )
+          .map((row) => [row.id, row]),
+      );
       for (const id of batch) {
         const row = found.get(id);
         rowCache.set(`${table}:${id}`, row);
@@ -110,7 +125,11 @@ export const runSelectExprEvaluation = (
     for (let offset = 0; offset < missing.length; offset += batchSize) {
       const batch = missing.slice(offset, offset + batchSize);
       const placeholders = batch.map(() => "?").join(", ");
-      const loaded = db.prepare(`SELECT ${quoteIdent("source")}, ${quoteIdent("target")} FROM ${quoteIdent(table)} WHERE ${quoteIdent("source")} IN (${placeholders})`).all(...batch) as Array<{ source?: unknown; target?: unknown }>;
+      const loaded = db
+        .prepare(
+          `SELECT ${quoteIdent("source")}, ${quoteIdent("target")} FROM ${quoteIdent(table)} WHERE ${quoteIdent("source")} IN (${placeholders})`,
+        )
+        .all(...batch) as Array<{ source?: unknown; target?: unknown }>;
       const found = new Map<string, string[]>();
       for (const row of loaded) {
         if (typeof row.source !== "string" || typeof row.target !== "string") continue;
@@ -163,15 +182,37 @@ export const runSelectExprEvaluation = (
       if (!linkDef) return undefined;
       const sourceType = schema.getType(currentType);
       if (!sourceType) return undefined;
-      const targetTypeNames = normalizeLinkTargetNames(linkDef.link.targetType, sourceType.module ?? "default");
-      const targetTypes = targetTypeNames.flatMap((name) => schema.listConcreteTypesAssignableTo(name));
+      const targetTypeNames = normalizeLinkTargetNames(
+        linkDef.link.targetType,
+        sourceType.module ?? "default",
+      );
+      const targetTypes = targetTypeNames.flatMap((name) =>
+        schema.listConcreteTypesAssignableTo(name),
+      );
       const targetIdsBySource = usesLinkTable(linkDef.link)
-        ? loadLinkTargets(linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, linkDef.link)), linkDef.link), currentRows.map((r) => r.id).filter((id): id is string => typeof id === "string"))
-        : new Map(currentRows.map((r) => [r.id as string, typeof r[`${linkDef.link.name}_id`] === "string" ? [r[`${linkDef.link.name}_id`] as string] : []]));
+        ? loadLinkTargets(
+            linkTableName(
+              qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, linkDef.link)),
+              linkDef.link,
+            ),
+            currentRows.map((r) => r.id).filter((id): id is string => typeof id === "string"),
+          )
+        : new Map(
+            currentRows.map((r) => [
+              r.id as string,
+              typeof r[`${linkDef.link.name}_id`] === "string"
+                ? [r[`${linkDef.link.name}_id`] as string]
+                : [],
+            ]),
+          );
       const targetIds = [...targetIdsBySource.values()].flat();
       const targets = new Map<string, Record<string, unknown>>();
       for (const targetType of targetTypes) {
-        for (const [id, target] of loadRowsById(tableNameForType(qualifiedTypeName(targetType)), targetIds)) targets.set(id, target);
+        for (const [id, target] of loadRowsById(
+          tableNameForType(qualifiedTypeName(targetType)),
+          targetIds,
+        ))
+          targets.set(id, target);
       }
       for (const source of currentRows) {
         if (typeof source.id !== "string") continue;
@@ -191,15 +232,26 @@ export const runSelectExprEvaluation = (
     return currentRows.map((r) => r[tail]);
   };
 
-  const evalFilter = (row: Record<string, unknown>, filter: SelectStatement["filter"], env: EvalEnv, sourceTypeName?: string): boolean => {
+  const evalFilter = (
+    row: Record<string, unknown>,
+    filter: SelectStatement["filter"],
+    env: EvalEnv,
+    sourceTypeName?: string,
+  ): boolean => {
     if (!filter) {
       return true;
     }
     if (filter.kind === "and") {
-      return evalFilter(row, filter.left, env, sourceTypeName) && evalFilter(row, filter.right, env, sourceTypeName);
+      return (
+        evalFilter(row, filter.left, env, sourceTypeName) &&
+        evalFilter(row, filter.right, env, sourceTypeName)
+      );
     }
     if (filter.kind === "or") {
-      return evalFilter(row, filter.left, env, sourceTypeName) || evalFilter(row, filter.right, env, sourceTypeName);
+      return (
+        evalFilter(row, filter.left, env, sourceTypeName) ||
+        evalFilter(row, filter.right, env, sourceTypeName)
+      );
     }
     if (filter.kind === "not") {
       return !evalFilter(row, filter.expr, env, sourceTypeName);
@@ -221,12 +273,18 @@ export const runSelectExprEvaluation = (
     }
     const right = evalFilterValue(filter.value, env);
     if (Array.isArray(left)) {
-      return left.some((item) => runtimeAliasPredicateMatches(item, filter.op, right as ScalarValue));
+      return left.some((item) =>
+        runtimeAliasPredicateMatches(item, filter.op, right as ScalarValue),
+      );
     }
     return runtimeAliasPredicateMatches(left, filter.op, right as ScalarValue);
   };
 
-  const evalComputedExpr = (computed: ComputedExpr, row: Record<string, unknown>, env: EvalEnv): unknown => {
+  const evalComputedExpr = (
+    computed: ComputedExpr,
+    row: Record<string, unknown>,
+    env: EvalEnv,
+  ): unknown => {
     if (computed.kind === "literal") return computed.value;
     if (computed.kind === "field_ref") return row[computed.field] ?? null;
     if (computed.kind === "type_name") {
@@ -260,15 +318,24 @@ export const runSelectExprEvaluation = (
   const exprIsTupleValue = (expr: FreeObjectExpr | ComputedExpr): boolean => {
     if (expr.kind === "tuple") return true;
     if (expr.kind === "select_expr") return exprIsTupleValue(expr.expr);
-    if (expr.kind === "coalesce") return exprIsTupleValue(expr.left) || exprIsTupleValue(expr.right);
+    if (expr.kind === "coalesce")
+      return exprIsTupleValue(expr.left) || exprIsTupleValue(expr.right);
     if (expr.kind === "field_access" && expr.expr.kind === "select") {
-      const typeName = qualifyRuntimeTypeName(expr.expr.typeName, expr.expr.clauses._withModule ?? ast.withModule ?? "default");
+      const typeName = qualifyRuntimeTypeName(
+        expr.expr.typeName,
+        expr.expr.clauses._withModule ?? ast.withModule ?? "default",
+      );
       return findFieldDef(schema, typeName, expr.field)?.collection?.kind === "tuple";
     }
     return false;
   };
 
-  const materializeShapeOnRow = (row: Record<string, unknown>, typeName: string, shape: ShapeElement[], env: EvalEnv): Record<string, unknown> => {
+  const materializeShapeOnRow = (
+    row: Record<string, unknown>,
+    typeName: string,
+    shape: ShapeElement[],
+    env: EvalEnv,
+  ): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
     const childEnv = new Map(env);
     childEnv.set("__source__", row);
@@ -301,7 +368,10 @@ export const runSelectExprEvaluation = (
       case "select_expr":
         return evalExpr(expr.expr, env);
       case "subquery":
-        return evalExpr({ kind: "select", typeName: expr.typeName, shape: expr.shape, clauses: expr.clauses }, env);
+        return evalExpr(
+          { kind: "select", typeName: expr.typeName, shape: expr.shape, clauses: expr.clauses },
+          env,
+        );
       case "type_intersection":
         return evalTypeNarrowing(expr, env, typeNarrowingDeps);
       case "field_suffix_math":
@@ -313,31 +383,39 @@ export const runSelectExprEvaluation = (
       case "set_expr":
         return expr.values.flatMap((value) => {
           const evaluated = evalExpr(value, env);
-          return Array.isArray(evaluated) && !exprIsTupleValue(value) && value.kind !== "array_literal_expr" ? evaluated : [evaluated];
+          return Array.isArray(evaluated) &&
+            !exprIsTupleValue(value) &&
+            value.kind !== "array_literal_expr"
+            ? evaluated
+            : [evaluated];
         });
-      case "array_literal_expr":
-        {
-          const evaluated = expr.values.map((value) => ({
+      case "array_literal_expr": {
+        const evaluated = expr.values
+          .map((value) => ({
             source: value,
             value: evalExpr(value, env),
-          })).map((entry) => ({
+          }))
+          .map((entry) => ({
             ...entry,
-            setLike: Array.isArray(entry.value) && !exprIsTupleValue(entry.source) && entry.source.kind !== "array_literal_expr",
+            setLike:
+              Array.isArray(entry.value) &&
+              !exprIsTupleValue(entry.source) &&
+              entry.source.kind !== "array_literal_expr",
           }));
-          if (!evaluated.some((entry) => entry.setLike)) return evaluated.map((entry) => entry.value);
-          const sets = evaluated.map((entry) => {
-            if (!entry.setLike) return [entry.value];
-            return [...(entry.value as unknown[])].sort((a, b) => String(a).localeCompare(String(b)));
-          });
-          return sets.reduce<unknown[][]>(
-            (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
-            [[]],
-          );
-        }
+        if (!evaluated.some((entry) => entry.setLike)) return evaluated.map((entry) => entry.value);
+        const sets = evaluated.map((entry) => {
+          if (!entry.setLike) return [entry.value];
+          return [...(entry.value as unknown[])].sort((a, b) => String(a).localeCompare(String(b)));
+        });
+        return sets.reduce<unknown[][]>(
+          (rows, items) => rows.flatMap((row) => items.map((item) => [...row, item])),
+          [[]],
+        );
+      }
       case "unary": {
         const value = evalExpr(expr.expr, env);
         const apply = (item: unknown): ScalarValue => {
-          if (expr.op === "not") return !(item);
+          if (expr.op === "not") return !item;
           return -Number(item);
         };
         return Array.isArray(value) ? value.map(apply) : apply(value);
@@ -347,12 +425,15 @@ export const runSelectExprEvaluation = (
           return env.get(expr.name);
         }
         if (schema.getType(qualifyRuntimeTypeName(expr.name))) {
-          return evalExpr({
-            kind: "select",
-            typeName: expr.name,
-            shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
-            clauses: {},
-          }, env);
+          return evalExpr(
+            {
+              kind: "select",
+              typeName: expr.name,
+              shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
+              clauses: {},
+            },
+            env,
+          );
         }
         const alias = schema.getAlias(qualifiedRuntimeAliasName(expr.name));
         if (alias?.values) {
@@ -369,17 +450,33 @@ export const runSelectExprEvaluation = (
       case "path": {
         const value = env.get(expr.head);
         if (value === undefined && schema.getType(qualifyRuntimeTypeName(expr.head))) {
-          return evalExpr({
-            kind: "field_access",
-            expr: { kind: "select", typeName: expr.head, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} },
-            field: expr.tail,
-            optional: false,
-          }, env);
+          return evalExpr(
+            {
+              kind: "field_access",
+              expr: {
+                kind: "select",
+                typeName: expr.head,
+                shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
+                clauses: {},
+              },
+              field: expr.tail,
+              optional: false,
+            },
+            env,
+          );
         }
         if (Array.isArray(value)) {
           const nextEnv = new Map(env);
           nextEnv.set("__path_tmp", value);
-          return evalExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__path_tmp" }, field: expr.tail, optional: false }, nextEnv);
+          return evalExpr(
+            {
+              kind: "field_access",
+              expr: { kind: "binding_ref", name: "__path_tmp" },
+              field: expr.tail,
+              optional: false,
+            },
+            nextEnv,
+          );
         }
         if (value && typeof value === "object" && !Array.isArray(value)) {
           const row = value as Record<string, unknown>;
@@ -388,7 +485,15 @@ export const runSelectExprEvaluation = (
           }
           const nextEnv = new Map(env);
           nextEnv.set("__path_tmp", value);
-          return evalExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__path_tmp" }, field: expr.tail, optional: false }, nextEnv);
+          return evalExpr(
+            {
+              kind: "field_access",
+              expr: { kind: "binding_ref", name: "__path_tmp" },
+              field: expr.tail,
+              optional: false,
+            },
+            nextEnv,
+          );
         }
         return null;
       }
@@ -396,10 +501,18 @@ export const runSelectExprEvaluation = (
         return env.get("__current__") ?? null;
       }
       case "backlink_path": {
-        return resolveBacklinkRowsForSubject(db, schema, env.get("__current__"), expr.link, expr.sourceType);
+        return resolveBacklinkRowsForSubject(
+          db,
+          schema,
+          env.get("__current__"),
+          expr.link,
+          expr.sourceType,
+        );
       }
       case "tuple": {
-        const bindingPath = (value: FreeObjectExpr): { name: string; path: number[] } | undefined => {
+        const bindingPath = (
+          value: FreeObjectExpr,
+        ): { name: string; path: number[] } | undefined => {
           if (value.kind === "binding_ref") return { name: value.name, path: [] };
           if (value.kind === "index_access") {
             const inner = bindingPath(value.expr);
@@ -431,17 +544,31 @@ export const runSelectExprEvaluation = (
           if (e.kind === "select") {
             // Only treat the bare `Issue`-style select as an LCP scope, not
             // a filtered subquery — those scope to a distinct subset.
-            const hasClauses = e.clauses?.filter || e.clauses?.orderBy
-              || e.clauses?.limit !== undefined || e.clauses?.offset !== undefined;
+            const hasClauses =
+              e.clauses?.filter ||
+              e.clauses?.orderBy ||
+              e.clauses?.limit !== undefined ||
+              e.clauses?.offset !== undefined;
             if (hasClauses) return null;
             return e.typeName;
           }
           if (e.kind === "field_access") return findSelectScope(e.expr);
-          if (e.kind === "coalesce" || e.kind === "compare" || e.kind === "math" || e.kind === "and" || e.kind === "or") {
+          if (
+            e.kind === "coalesce" ||
+            e.kind === "compare" ||
+            e.kind === "math" ||
+            e.kind === "and" ||
+            e.kind === "or"
+          ) {
             return findSelectScope(e.left) ?? findSelectScope(e.right);
           }
           if (e.kind === "select_expr_subquery") return findSelectScope(e.expr);
-          if (e.kind === "cast" || e.kind === "not" || e.kind === "distinct" || e.kind === "exists") {
+          if (
+            e.kind === "cast" ||
+            e.kind === "not" ||
+            e.kind === "distinct" ||
+            e.kind === "exists"
+          ) {
             return findSelectScope(e.expr);
           }
           if (e.kind === "tuple" || e.kind === "set_expr" || e.kind === "array_literal_expr") {
@@ -456,8 +583,8 @@ export const runSelectExprEvaluation = (
 
         const slotScopes = expr.values.map(findSelectScope);
         const firstScope = slotScopes.find((s) => s !== null);
-        const sharesScope = Boolean(firstScope)
-          && slotScopes.every((s) => s === null || s === firstScope);
+        const sharesScope =
+          Boolean(firstScope) && slotScopes.every((s) => s === null || s === firstScope);
         if (firstScope && sharesScope) {
           const shortName = firstScope.split("::").at(-1) ?? firstScope;
           const scopedSource = env.has(firstScope)
@@ -465,17 +592,23 @@ export const runSelectExprEvaluation = (
             : env.has(shortName)
               ? env.get(shortName)
               : undefined;
-          const sourceRows = scopedSource === undefined
-            ? evalExpr({
-                kind: "select",
-                typeName: firstScope,
-                shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
-                clauses: {},
-              }, env)
-            : scopedSource;
+          const sourceRows =
+            scopedSource === undefined
+              ? evalExpr(
+                  {
+                    kind: "select",
+                    typeName: firstScope,
+                    shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
+                    clauses: {},
+                  },
+                  env,
+                )
+              : scopedSource;
           const rows = Array.isArray(sourceRows)
             ? sourceRows
-            : sourceRows === null || sourceRows === undefined ? [] : [sourceRows];
+            : sourceRows === null || sourceRows === undefined
+              ? []
+              : [sourceRows];
           if (rows.length > 0) {
             const allRows: unknown[][] = [];
             for (const sourceRow of rows) {
@@ -512,7 +645,11 @@ export const runSelectExprEvaluation = (
           value: evalExpr(value, env),
           tupleLike: exprIsTupleValue(value) || value.kind === "array_literal_expr",
         }));
-        if (evaluated.some((entry) => (entry.value === null || entry.value === undefined) && !entry.tupleLike)) {
+        if (
+          evaluated.some(
+            (entry) => (entry.value === null || entry.value === undefined) && !entry.tupleLike,
+          )
+        ) {
           return null;
         }
         const anyArray = evaluated.some((entry) => Array.isArray(entry.value) && !entry.tupleLike);
@@ -534,7 +671,15 @@ export const runSelectExprEvaluation = (
         if (first.kind === "object_ref") {
           value = env.has(first.name)
             ? env.get(first.name)
-            : evalExpr({ kind: "select", typeName: first.name, shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }], clauses: {} }, env);
+            : evalExpr(
+                {
+                  kind: "select",
+                  typeName: first.name,
+                  shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
+                  clauses: {},
+                },
+                env,
+              );
           rest = expr.steps.slice(1);
         } else {
           value = env.get("__current__") ?? null;
@@ -546,11 +691,15 @@ export const runSelectExprEvaluation = (
           if (typeof sourceType !== "string") return false;
           const matchName = (name: string): boolean => {
             const qualified = qualifyRuntimeTypeName(name);
-            return sourceType === qualified || schema.concreteTypeNamesUnder(qualified).includes(sourceType);
+            return (
+              sourceType === qualified ||
+              schema.concreteTypeNamesUnder(qualified).includes(sourceType)
+            );
           };
           if (typeExpr.kind === "type_name") return matchName(typeExpr.name);
           if (typeExpr.kind === "type_of") return false;
-          if (typeExpr.kind === "type_union") return matchesType(row, typeExpr.left) || matchesType(row, typeExpr.right);
+          if (typeExpr.kind === "type_union")
+            return matchesType(row, typeExpr.left) || matchesType(row, typeExpr.right);
           return matchesType(row, typeExpr.left) && matchesType(row, typeExpr.right);
         };
         for (const step of rest) {
@@ -563,7 +712,15 @@ export const runSelectExprEvaluation = (
           if (step.kind === "ptr") {
             const nextEnv = new Map(env);
             nextEnv.set("__path_tmp", value);
-            value = evalExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__path_tmp" }, field: step.name, optional: step.optional }, nextEnv);
+            value = evalExpr(
+              {
+                kind: "field_access",
+                expr: { kind: "binding_ref", name: "__path_tmp" },
+                field: step.name,
+                optional: step.optional,
+              },
+              nextEnv,
+            );
           }
         }
         return value;
@@ -571,12 +728,20 @@ export const runSelectExprEvaluation = (
       case "index_access": {
         const value = evalExpr(expr.expr, env);
         const rawIndex = expr.indexExpr ? evalExpr(expr.indexExpr, env) : expr.index;
-        const indexPath = Array.isArray(rawIndex) ? rawIndex.filter((item): item is number => Number.isInteger(item)) : Number.isInteger(rawIndex) ? [rawIndex as number] : [];
+        const indexPath = Array.isArray(rawIndex)
+          ? rawIndex.filter((item): item is number => Number.isInteger(item))
+          : Number.isInteger(rawIndex)
+            ? [rawIndex as number]
+            : [];
         // The reference EdgeQL diagnostic uses a category prefix specific to the
         // source kind: "array index", "string index", or "JSON index".
         const indexErrorCategory = (item: unknown): string => {
           if (typeof item === "string") return "string";
-          if (expr.expr.kind === "function_call" && (expr.expr.call.name === "to_json" || expr.expr.call.name.endsWith("::to_json"))) return "JSON";
+          if (
+            expr.expr.kind === "function_call" &&
+            (expr.expr.call.name === "to_json" || expr.expr.call.name.endsWith("::to_json"))
+          )
+            return "JSON";
           if (Array.isArray(item)) return "array";
           return "array";
         };
@@ -619,24 +784,35 @@ export const runSelectExprEvaluation = (
           if (indexPath.length > 1) {
             return indexPath.flatMap((index) => {
               const item = readOneIndex(value, index);
-              return Array.isArray(item) && expr.expr.kind === "array_literal_expr" ? item : item == null ? [] : [item];
+              return Array.isArray(item) && expr.expr.kind === "array_literal_expr"
+                ? item
+                : item == null
+                  ? []
+                  : [item];
             });
           }
           if (value.length > 0 && Array.isArray(value[0])) {
-            const sourceIsSetOfTuples = expr.expr.kind === "tuple"
-              && expr.expr.values.some((slot) => {
+            const sourceIsSetOfTuples =
+              expr.expr.kind === "tuple" &&
+              expr.expr.values.some((slot) => {
                 const slotValue = evalExpr(slot, env);
-                return Array.isArray(slotValue) && !exprIsTupleValue(slot) && slot.kind !== "array_literal_expr";
+                return (
+                  Array.isArray(slotValue) &&
+                  !exprIsTupleValue(slot) &&
+                  slot.kind !== "array_literal_expr"
+                );
               });
             if (sourceIsSetOfTuples) {
-              return value.map((tup) => Array.isArray(tup) ? readIndex(tup) : tup);
+              return value.map((tup) => (Array.isArray(tup) ? readIndex(tup) : tup));
             }
             // `array_literal_expr[N]` is array indexing: the source IS an
             // array (single value), and the result is its Nth element — even
             // if that element is itself a tuple/array. Distinguish from a
             // set-of-tuples expression where `.N` would project per-row.
             if (expr.expr.kind === "array_literal_expr") return readIndex(value);
-            return (exprIsTupleValue(expr.expr) || expr.expr.kind === "index_access") ? readIndex(value) : value.map((tup) => Array.isArray(tup) ? readIndex(tup) : tup);
+            return exprIsTupleValue(expr.expr) || expr.expr.kind === "index_access"
+              ? readIndex(value)
+              : value.map((tup) => (Array.isArray(tup) ? readIndex(tup) : tup));
           }
           // For scalar arrays the discriminator is the source IR kind:
           //   - `binding_ref`, `current_item`, `index_access` carry a SINGLE
@@ -645,9 +821,11 @@ export const runSelectExprEvaluation = (
           //   - `path_steps`, `field_access` (over a select) produce a SET —
           //     `[N]` applies element-wise (e.g. `X.name[0]` → first char of
           //     each name).
-          if (expr.expr.kind === "binding_ref"
-            || expr.expr.kind === "current_item"
-            || expr.expr.kind === "index_access") {
+          if (
+            expr.expr.kind === "binding_ref" ||
+            expr.expr.kind === "current_item" ||
+            expr.expr.kind === "index_access"
+          ) {
             return readIndex(value);
           }
           return value.map(readIndex);
@@ -658,14 +836,24 @@ export const runSelectExprEvaluation = (
         const value = evalExpr(expr.expr, env);
         const startValue = expr.startExpr ? evalExpr(expr.startExpr, env) : expr.start;
         const endValue = expr.endExpr ? evalExpr(expr.endExpr, env) : expr.end;
-        const starts = Array.isArray(startValue) ? startValue.filter((item): item is number => Number.isInteger(item)) : [startValue].filter((item): item is number => Number.isInteger(item));
-        const ends = Array.isArray(endValue) ? endValue.filter((item): item is number => Number.isInteger(item)) : [endValue].filter((item): item is number => Number.isInteger(item));
-        const sliceOne = (source: unknown, start: number | undefined, end: number | undefined): unknown => {
+        const starts = Array.isArray(startValue)
+          ? startValue.filter((item): item is number => Number.isInteger(item))
+          : [startValue].filter((item): item is number => Number.isInteger(item));
+        const ends = Array.isArray(endValue)
+          ? endValue.filter((item): item is number => Number.isInteger(item))
+          : [endValue].filter((item): item is number => Number.isInteger(item));
+        const sliceOne = (
+          source: unknown,
+          start: number | undefined,
+          end: number | undefined,
+        ): unknown => {
           if (!Array.isArray(source) && typeof source !== "string") return null;
           return source.slice(start, end);
         };
         if (starts.length > 0) {
-          return starts.map((start) => sliceOne(value, start, ends[0])).filter((item) => item !== null);
+          return starts
+            .map((start) => sliceOne(value, start, ends[0]))
+            .filter((item) => item !== null);
         }
         return sliceOne(value, undefined, ends[0]);
       }
@@ -677,9 +865,12 @@ export const runSelectExprEvaluation = (
             return null;
           }
           const row = item as Record<string, unknown>;
-          const sourceTypeName = typeof row.__source_type === "string" ? row.__source_type : undefined;
+          const sourceTypeName =
+            typeof row.__source_type === "string" ? row.__source_type : undefined;
           if (Object.prototype.hasOwnProperty.call(row, fieldName)) {
-            return sourceTypeName ? materializeFieldValue(schema, sourceTypeName, fieldName, row[fieldName]) : row[fieldName] ?? null;
+            return sourceTypeName
+              ? materializeFieldValue(schema, sourceTypeName, fieldName, row[fieldName])
+              : (row[fieldName] ?? null);
           }
           if (sourceTypeName && !fieldName.startsWith("@") && typeof row.id === "string") {
             const linkDef = findRuntimeLinkDef(schema, sourceTypeName, fieldName);
@@ -689,7 +880,10 @@ export const runSelectExprEvaluation = (
               if (usesTable && sourceType) {
                 const owner = resolveLinkStorageOwner(schema, sourceType, linkDef.link);
                 const linkTable = linkTableName(qualifiedTypeName(owner), linkDef.link);
-                const targetTypeNames = normalizeLinkTargetNames(linkDef.link.targetType, sourceType.module ?? "default");
+                const targetTypeNames = normalizeLinkTargetNames(
+                  linkDef.link.targetType,
+                  sourceType.module ?? "default",
+                );
                 const candidates = targetTypeNames.flatMap((targetTypeName) => {
                   const concrete = schema.listConcreteTypesAssignableTo(targetTypeName);
                   if (concrete.length > 0) return concrete;
@@ -700,11 +894,16 @@ export const runSelectExprEvaluation = (
                 for (const concrete of candidates) {
                   const concreteName = qualifiedTypeName(concrete);
                   const concreteTable = tableNameForType(concreteName);
-                  const rows = db.prepare(
-                    `SELECT t.*, j.* FROM ${quoteIdent(concreteTable)} t JOIN ${quoteIdent(linkTable)} j ON j.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE j.${quoteIdent("source")} = ?`
-                  ).all(row.id) as Record<string, unknown>[];
+                  const rows = db
+                    .prepare(
+                      `SELECT t.*, j.* FROM ${quoteIdent(concreteTable)} t JOIN ${quoteIdent(linkTable)} j ON j.${quoteIdent("target")} = t.${quoteIdent("id")} WHERE j.${quoteIdent("source")} = ?`,
+                    )
+                    .all(row.id) as Record<string, unknown>[];
                   for (const linkRow of rows) {
-                    const merged: Record<string, unknown> = { ...linkRow, __source_type: concreteName };
+                    const merged: Record<string, unknown> = {
+                      ...linkRow,
+                      __source_type: concreteName,
+                    };
                     for (const property of linkDef.link.properties ?? []) {
                       merged[`@${property.name}`] = linkRow[property.name] ?? null;
                     }
@@ -719,13 +918,19 @@ export const runSelectExprEvaluation = (
                 if (typeof targetId !== "string") return null;
                 const targetTypeName = qualifyRuntimeTypeName(linkDef.link.targetType);
                 const targetTable = tableNameForType(targetTypeName);
-                const loaded = db.prepare(`SELECT * FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent("id")} = ?`).all(targetId)[0] as Record<string, unknown> | undefined;
+                const loaded = db
+                  .prepare(`SELECT * FROM ${quoteIdent(targetTable)} WHERE ${quoteIdent("id")} = ?`)
+                  .all(targetId)[0] as Record<string, unknown> | undefined;
                 return loaded ? { ...loaded, __source_type: targetTypeName } : null;
               }
             }
           }
           const computed = sourceTypeName
-            ? schema.getType(sourceTypeName)?.computeds?.find((candidate) => candidate.kind === "property" && candidate.name === fieldName)
+            ? schema
+                .getType(sourceTypeName)
+                ?.computeds?.find(
+                  (candidate) => candidate.kind === "property" && candidate.name === fieldName,
+                )
             : undefined;
           if (computed?.kind === "property" && computed.expr.kind === "literal") {
             return computed.expr.value;
@@ -738,33 +943,48 @@ export const runSelectExprEvaluation = (
             const aggregateField = aggregateExpr.field;
             const sourceEnv = new Map(env);
             sourceEnv.set("__computed_source__", row);
-            const linked = evalExpr({
-              kind: "field_access",
-              expr: { kind: "binding_ref", name: "__computed_source__" },
-              field: aggregateExpr.link,
-              optional: false,
-            }, sourceEnv);
+            const linked = evalExpr(
+              {
+                kind: "field_access",
+                expr: { kind: "binding_ref", name: "__computed_source__" },
+                field: aggregateExpr.link,
+                optional: false,
+              },
+              sourceEnv,
+            );
             const linkItems = Array.isArray(linked)
               ? linked
-              : linked === null || linked === undefined ? [] : [linked];
+              : linked === null || linked === undefined
+                ? []
+                : [linked];
             if (aggregateField === undefined) {
               // Fieldless `count(.link)`: aggregate over the link target
               // rows themselves, matching the SQL path's
               // COUNT(DISTINCT target). Only `count` is produced fieldless
               // upstream (sdl_adapter's detectCountOfLink); numeric
               // aggregates over object rows reduce to the empty set.
-              return evaluateRuntimeAggregate(aggregateExpr.functionName, dedupeRowsById(linkItems));
+              return evaluateRuntimeAggregate(
+                aggregateExpr.functionName,
+                dedupeRowsById(linkItems),
+              );
             }
             const values = linkItems.flatMap((item) => {
               const linkEnv = new Map(env);
               linkEnv.set("__computed_link__", item);
-              const value = evalExpr({
-                kind: "field_access",
-                expr: { kind: "binding_ref", name: "__computed_link__" },
-                field: aggregateField,
-                optional: false,
-              }, linkEnv);
-              return Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+              const value = evalExpr(
+                {
+                  kind: "field_access",
+                  expr: { kind: "binding_ref", name: "__computed_link__" },
+                  field: aggregateField,
+                  optional: false,
+                },
+                linkEnv,
+              );
+              return Array.isArray(value)
+                ? value
+                : value === null || value === undefined
+                  ? []
+                  : [value];
             });
             return evaluateRuntimeAggregate(aggregateExpr.functionName, values);
           }
@@ -780,9 +1000,16 @@ export const runSelectExprEvaluation = (
           // EdgeQL paths return DISTINCT objects (by id). When the result
           // items are all id-bearing rows, dedupe so cross-product joins
           // collapse to set semantics.
-          if (out.length > 1
-            && out.every((item) => item && typeof item === "object" && !Array.isArray(item)
-              && typeof (item as { id?: unknown }).id === "string")) {
+          if (
+            out.length > 1 &&
+            out.every(
+              (item) =>
+                item &&
+                typeof item === "object" &&
+                !Array.isArray(item) &&
+                typeof (item as { id?: unknown }).id === "string",
+            )
+          ) {
             return dedupeRowsById(out);
           }
           return out;
@@ -803,7 +1030,8 @@ export const runSelectExprEvaluation = (
             // that distinction so user-function overload resolution can
             // accept `array<int64>` / tuple parameter types correctly.
             if (Array.isArray(value)) {
-              if (arg.expr.kind === "array_literal_expr") return { kind: "array", values: value as ScalarValue[] };
+              if (arg.expr.kind === "array_literal_expr")
+                return { kind: "array", values: value as ScalarValue[] };
               return { kind: "set", values: value as ScalarValue[] };
             }
             return value as ScalarValue;
@@ -813,14 +1041,18 @@ export const runSelectExprEvaluation = (
           if (arg.kind === "array_literal") return { kind: "array", values: [...arg.values] };
           if (arg.kind === "binding_ref") {
             const value = evalExpr({ kind: "binding_ref", name: arg.name }, env);
-            return Array.isArray(value) ? { kind: "set", values: value as ScalarValue[] } : value as ScalarValue;
+            return Array.isArray(value)
+              ? { kind: "set", values: value as ScalarValue[] }
+              : (value as ScalarValue);
           }
           if (arg.kind === "function_call") {
             const value = evalExpr({ kind: "function_call", call: arg.call }, env);
-            return Array.isArray(value) ? { kind: "set", values: value as ScalarValue[] } : value as ScalarValue;
+            return Array.isArray(value)
+              ? { kind: "set", values: value as ScalarValue[] }
+              : (value as ScalarValue);
           }
           if (arg.kind === "field_ref") {
-            return env.get(arg.field) as ScalarValue ?? null;
+            return (env.get(arg.field) as ScalarValue) ?? null;
           }
           return null;
         });
@@ -829,20 +1061,31 @@ export const runSelectExprEvaluation = (
         // alone). E.g. `opt_test(false, Issue.time_estimate)` — when an Issue
         // has no time_estimate the runtime sees `null`, but the static type
         // is `int64`, which picks the right overload's body.
-        const staticTypes = expr.call.args.map((arg) => inferStaticArgType(arg, schema, ast.withModule ?? "default"));
+        const staticTypes = expr.call.args.map((arg) =>
+          inferStaticArgType(arg, schema, ast.withModule ?? "default"),
+        );
         // EdgeQL empty-set propagation: when a UDF exists by name+arity but
         // no overload accepts the runtime args because some non-OPTIONAL
         // parameter received an empty set, the whole call evaluates to an
         // empty set (not scalar null, which the top-level set wrapping
         // would otherwise turn into a one-row `[null]` result).
         const dividerIdx = qualifiedName.lastIndexOf("::");
-        const fnModule = dividerIdx >= 0 ? qualifiedName.slice(0, dividerIdx) : (ast.withModule ?? "default");
+        const fnModule =
+          dividerIdx >= 0 ? qualifiedName.slice(0, dividerIdx) : (ast.withModule ?? "default");
         const fnName = dividerIdx >= 0 ? qualifiedName.slice(dividerIdx + 2) : qualifiedName;
         const anyEmpty = args.some((arg) => {
           if (arg === null || arg === undefined) return true;
-          return typeof arg === "object" && "kind" in arg && arg.kind === "set" && arg.values.length === 0;
+          return (
+            typeof arg === "object" &&
+            "kind" in arg &&
+            arg.kind === "set" &&
+            arg.values.length === 0
+          );
         });
-        if (anyEmpty && schema.listFunctions().some((f) => f.module === fnModule && f.name === fnName)) {
+        if (
+          anyEmpty &&
+          schema.listFunctions().some((f) => f.module === fnModule && f.name === fnName)
+        ) {
           if (!resolveUserFunctionOverload(schema, fnModule, fnName, args, staticTypes)) {
             return [];
           }
@@ -858,8 +1101,13 @@ export const runSelectExprEvaluation = (
             : [iteratorValue];
         const isSetProducing = (body: FreeObjectExpr): boolean => {
           if (body.kind === "select_expr_subquery") {
-            if ((body.filter || body.orderBy || body.limit !== undefined || body.offset !== undefined)
-              && !exprIsTupleValue(body.expr)) {
+            if (
+              (body.filter ||
+                body.orderBy ||
+                body.limit !== undefined ||
+                body.offset !== undefined) &&
+              !exprIsTupleValue(body.expr)
+            ) {
               return true;
             }
             return isSetProducing(body.expr);
@@ -883,7 +1131,11 @@ export const runSelectExprEvaluation = (
           if (!flatten) {
             return bodyValue === null || bodyValue === undefined ? [] : [bodyValue];
           }
-          return Array.isArray(bodyValue) ? bodyValue : bodyValue === null || bodyValue === undefined ? [] : [bodyValue];
+          return Array.isArray(bodyValue)
+            ? bodyValue
+            : bodyValue === null || bodyValue === undefined
+              ? []
+              : [bodyValue];
         });
       }
       case "free_object_constructor": {
@@ -898,14 +1150,22 @@ export const runSelectExprEvaluation = (
           const ln = Number(l);
           const rn = Number(r);
           switch (expr.op) {
-            case "+": return ln + rn;
-            case "-": return ln - rn;
-            case "*": return ln * rn;
-            case "/": return normalizeRuntimeFloat(ln / rn);
-            case "//": return Math.floor(ln / rn);
-            case "%": return ln % rn;
-            case "^": return Math.pow(ln, rn);
-            default: return null;
+            case "+":
+              return ln + rn;
+            case "-":
+              return ln - rn;
+            case "*":
+              return ln * rn;
+            case "/":
+              return normalizeRuntimeFloat(ln / rn);
+            case "//":
+              return Math.floor(ln / rn);
+            case "%":
+              return ln % rn;
+            case "^":
+              return Math.pow(ln, rn);
+            default:
+              return null;
           }
         };
         // EdgeQL co-iteration: when both sides walk a binding currently
@@ -922,10 +1182,7 @@ export const runSelectExprEvaluation = (
             rowEnv.set(coBinding.root, row);
             const l = evalExpr(expr.left, rowEnv);
             const r = evalExpr(expr.right, rowEnv);
-            const value = applyMath(
-              Array.isArray(l) ? l[0] : l,
-              Array.isArray(r) ? r[0] : r,
-            );
+            const value = applyMath(Array.isArray(l) ? l[0] : l, Array.isArray(r) ? r[0] : r);
             if (value !== null) rows.push(value);
           }
           return rows;
@@ -960,8 +1217,13 @@ export const runSelectExprEvaluation = (
           if (coBinding && coBinding.rows.length > 0) {
             const lcpIsEmpty = (v: unknown): boolean =>
               v === null || v === undefined || (Array.isArray(v) && v.length === 0);
-            const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-              && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
+            const comparable = (v: unknown): unknown =>
+              v &&
+              typeof v === "object" &&
+              !Array.isArray(v) &&
+              typeof (v as { id?: unknown }).id === "string"
+                ? (v as { id: string }).id
+                : v;
             const out: boolean[] = [];
             for (const row of coBinding.rows) {
               const subEnv = new Map(env);
@@ -1024,8 +1286,13 @@ export const runSelectExprEvaluation = (
           const rItems = Array.isArray(right) ? right : [right];
           // Compare by id for object rows so distinct JS instances of the
           // same row equate; fall back to value equality for scalars.
-          const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-            && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
+          const comparable = (v: unknown): unknown =>
+            v &&
+            typeof v === "object" &&
+            !Array.isArray(v) &&
+            typeof (v as { id?: unknown }).id === "string"
+              ? (v as { id: string }).id
+              : v;
           const out: boolean[] = [];
           for (const l of lItems) {
             for (const r of rItems) {
@@ -1033,7 +1300,7 @@ export const runSelectExprEvaluation = (
               out.push(expr.op === "?=" ? eq : !eq);
             }
           }
-          return (Array.isArray(left) || Array.isArray(right)) ? out : out[0] ?? false;
+          return Array.isArray(left) || Array.isArray(right) ? out : (out[0] ?? false);
         }
         const compareOne = (l: unknown, r: unknown): boolean => {
           if (expr.op === "=") return l === r;
@@ -1053,8 +1320,10 @@ export const runSelectExprEvaluation = (
         const leftIsSet = Array.isArray(left);
         const rightIsSet = Array.isArray(right);
         // EdgeQL: any binary op with an empty-set operand produces empty set.
-        if ((leftIsSet && (left as unknown[]).length === 0)
-          || (rightIsSet && (right as unknown[]).length === 0)) {
+        if (
+          (leftIsSet && (left as unknown[]).length === 0) ||
+          (rightIsSet && (right as unknown[]).length === 0)
+        ) {
           return [];
         }
         if (!leftIsSet && !rightIsSet) {
@@ -1077,11 +1346,20 @@ export const runSelectExprEvaluation = (
         // emit one boolean per `left` element.
         const left = evalExpr(expr.left, env);
         const right = evalExpr(expr.right, env);
-        const rightItems = Array.isArray(right) ? right : right === null || right === undefined ? [] : [right];
+        const rightItems = Array.isArray(right)
+          ? right
+          : right === null || right === undefined
+            ? []
+            : [right];
         const leftIsSet = Array.isArray(left);
         const leftItems = leftIsSet ? left : [left];
-        const comparable = (v: unknown): unknown => (v && typeof v === "object" && !Array.isArray(v)
-          && typeof (v as { id?: unknown }).id === "string") ? (v as { id: string }).id : v;
+        const comparable = (v: unknown): unknown =>
+          v &&
+          typeof v === "object" &&
+          !Array.isArray(v) &&
+          typeof (v as { id?: unknown }).id === "string"
+            ? (v as { id: string }).id
+            : v;
         const checkOne = (item: unknown): boolean => {
           const target = comparable(item);
           const has = rightItems.some((candidate) => comparable(candidate) === target);
@@ -1113,7 +1391,7 @@ export const runSelectExprEvaluation = (
         return leftItems.flatMap((l) => rightItems.map((r) => Boolean(l) || Boolean(r)));
       }
       case "not":
-        return !(evalExpr(expr.expr, env));
+        return !evalExpr(expr.expr, env);
       case "coalesce": {
         // LCP iteration: when both sides root in the same WITH binding (e.g.
         // `WITH X := {Priority, Status} SELECT X[IS Priority].name ??
@@ -1142,8 +1420,8 @@ export const runSelectExprEvaluation = (
               const subEnv = new Map(env);
               subEnv.set(leftRoot, [row]);
               const lv = evalExpr(expr.left, subEnv);
-              const lEmpty = lv === null || lv === undefined
-                || (Array.isArray(lv) && lv.length === 0);
+              const lEmpty =
+                lv === null || lv === undefined || (Array.isArray(lv) && lv.length === 0);
               const branch = lEmpty ? evalExpr(expr.right, subEnv) : lv;
               if (branch === null || branch === undefined) continue;
               if (Array.isArray(branch)) {
@@ -1158,9 +1436,8 @@ export const runSelectExprEvaluation = (
           }
         }
         const left = evalExpr(expr.left, env);
-        const isEmpty = left === null
-          || left === undefined
-          || (Array.isArray(left) && left.length === 0);
+        const isEmpty =
+          left === null || left === undefined || (Array.isArray(left) && left.length === 0);
         if (!isEmpty) return left;
         return evalExpr(expr.right, env);
       }
@@ -1173,8 +1450,11 @@ export const runSelectExprEvaluation = (
         const findScope = (e: FreeObjectExpr): string | null => {
           if (!e || typeof e !== "object") return null;
           if (e.kind === "select") {
-            const hasClauses = e.clauses?.filter || e.clauses?.orderBy
-              || e.clauses?.limit !== undefined || e.clauses?.offset !== undefined;
+            const hasClauses =
+              e.clauses?.filter ||
+              e.clauses?.orderBy ||
+              e.clauses?.limit !== undefined ||
+              e.clauses?.offset !== undefined;
             if (hasClauses) return null;
             return e.typeName;
           }
@@ -1183,7 +1463,10 @@ export const runSelectExprEvaluation = (
           if (e.kind === "select_expr_subquery") return findScope(e.expr);
           if (e.kind === "coalesce") return findScope(e.left) ?? findScope(e.right);
           if (e.kind === "concat") {
-            for (const p of e.parts) { const s = findScope(p); if (s) return s; }
+            for (const p of e.parts) {
+              const s = findScope(p);
+              if (s) return s;
+            }
             return null;
           }
           if (e.kind === "function_call") {
@@ -1208,18 +1491,22 @@ export const runSelectExprEvaluation = (
         // subquery), so falling back to the cartesian path is safer than
         // picking the wrong scope.
         const firstScope = partScopes[0];
-        const sharesScope = firstScope !== null
-          && partScopes.every((s) => s === firstScope);
+        const sharesScope = firstScope !== null && partScopes.every((s) => s === firstScope);
         if (firstScope && sharesScope && !env.has(firstScope) && !env.has("__current__")) {
-          const sourceRows = evalExpr({
-            kind: "select",
-            typeName: firstScope,
-            shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
-            clauses: {},
-          }, env);
+          const sourceRows = evalExpr(
+            {
+              kind: "select",
+              typeName: firstScope,
+              shape: [{ kind: "splat", depth: 1, operation: "assign", origin: "explicit" }],
+              clauses: {},
+            },
+            env,
+          );
           const rows = Array.isArray(sourceRows)
             ? sourceRows
-            : sourceRows === null || sourceRows === undefined ? [] : [sourceRows];
+            : sourceRows === null || sourceRows === undefined
+              ? []
+              : [sourceRows];
           if (rows.length > 0) {
             const out: unknown[] = [];
             for (const sourceRow of rows) {
@@ -1231,11 +1518,17 @@ export const runSelectExprEvaluation = (
               for (const part of expr.parts) {
                 const partValue = evalExpr(part, rowEnv);
                 const partItems = Array.isArray(partValue) ? partValue : [partValue];
-                if (partItems.length === 0) { suppressed = true; break; }
+                if (partItems.length === 0) {
+                  suppressed = true;
+                  break;
+                }
                 const next: string[] = [];
                 for (const left of accums) {
                   for (const right of partItems) {
-                    if (right === null || right === undefined) { suppressed = true; break; }
+                    if (right === null || right === undefined) {
+                      suppressed = true;
+                      break;
+                    }
                     next.push(`${left}${String(right)}`);
                   }
                   if (suppressed) break;
@@ -1271,10 +1564,20 @@ export const runSelectExprEvaluation = (
         const clausesOrderBy = expr.clauses.orderBy;
         if (clausesOrderBy) {
           const direction = clausesOrderBy.direction === "desc" ? -1 : 1;
-          rows.sort((a, b) => String(a[clausesOrderBy.field] ?? "").localeCompare(String(b[clausesOrderBy.field] ?? "")) * direction);
+          rows.sort(
+            (a, b) =>
+              String(a[clausesOrderBy.field] ?? "").localeCompare(
+                String(b[clausesOrderBy.field] ?? ""),
+              ) * direction,
+          );
         }
         rows = applyLimitOffset(rows, expr.clauses.limit);
-        if (expr.shape && expr.shape.some((el) => el.kind === "computed" || (el.kind === "field" && el.origin !== "default"))) {
+        if (
+          expr.shape &&
+          expr.shape.some(
+            (el) => el.kind === "computed" || (el.kind === "field" && el.origin !== "default"),
+          )
+        ) {
           return rows.map((row) => materializeShapeOnRow(row, sourceType, expr.shape, env));
         }
         return rows;
@@ -1300,7 +1603,12 @@ export const runSelectExprEvaluation = (
         if (value === undefined) {
           return undefined;
         }
-        if (!expr.orderBy && !expr.filter && expr.limit === undefined && expr.offset === undefined) {
+        if (
+          !expr.orderBy &&
+          !expr.filter &&
+          expr.limit === undefined &&
+          expr.offset === undefined
+        ) {
           return value;
         }
         let rows = Array.isArray(value) ? [...value] : [value];
@@ -1331,7 +1639,11 @@ export const runSelectExprEvaluation = (
             const right = evalExpr(orderByClause.expr, rightEnv);
             const leftEnumIndex = typeof left === "string" ? enumOrder?.get(left) : undefined;
             const rightEnumIndex = typeof right === "string" ? enumOrder?.get(right) : undefined;
-            if (leftEnumIndex !== undefined && rightEnumIndex !== undefined && leftEnumIndex !== rightEnumIndex) {
+            if (
+              leftEnumIndex !== undefined &&
+              rightEnumIndex !== undefined &&
+              leftEnumIndex !== rightEnumIndex
+            ) {
               return (leftEnumIndex < rightEnumIndex ? -1 : 1) * direction;
             }
             return String(left ?? "").localeCompare(String(right ?? "")) * direction;
@@ -1364,7 +1676,9 @@ export const runSelectExprEvaluation = (
           if (e.kind === "current_item") return ":__current__";
           return undefined;
         };
-        const baseAsTupleIteration = (e: FreeObjectExpr): { tuplesPath: FreeObjectExpr; index: number } | undefined => {
+        const baseAsTupleIteration = (
+          e: FreeObjectExpr,
+        ): { tuplesPath: FreeObjectExpr; index: number } | undefined => {
           if (e.kind === "index_access") {
             return { tuplesPath: e.expr, index: e.index };
           }
@@ -1372,25 +1686,34 @@ export const runSelectExprEvaluation = (
         };
         const tupleIter = baseAsTupleIteration(expr.expr);
         if (tupleIter) {
-          const stripBindingsToCurrent = (e: FreeObjectExpr | undefined): FreeObjectExpr | undefined => {
+          const stripBindingsToCurrent = (
+            e: FreeObjectExpr | undefined,
+          ): FreeObjectExpr | undefined => {
             if (!e || typeof e !== "object") return e;
             if (e.kind === "binding_ref" && env.get(e.name) !== undefined) {
               return { kind: "current_item" } as FreeObjectExpr;
             }
-            if (e.kind === "field_access") return { ...e, expr: stripBindingsToCurrent(e.expr) as FreeObjectExpr };
-            if (e.kind === "index_access") return { ...e, expr: stripBindingsToCurrent(e.expr) as FreeObjectExpr };
+            if (e.kind === "field_access")
+              return { ...e, expr: stripBindingsToCurrent(e.expr) as FreeObjectExpr };
+            if (e.kind === "index_access")
+              return { ...e, expr: stripBindingsToCurrent(e.expr) as FreeObjectExpr };
             return e;
           };
           const tuplePathExpr = stripBindingsToCurrent(tupleIter.tuplesPath) as FreeObjectExpr;
           const tupleBasePath = exprAsPath(tuplePathExpr);
           const tuples = evalExpr(tupleIter.tuplesPath, env);
-          const tupleList: unknown[] = Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples];
+          const tupleList: unknown[] = Array.isArray(tuples)
+            ? tuples
+            : tuples == null
+              ? []
+              : [tuples];
           const onlyTupleRows = tupleList.length > 0 && tupleList.every((t) => Array.isArray(t));
           if (onlyTupleRows && tupleBasePath) {
             const out: Record<string, unknown>[] = [];
             for (const tuple of tupleList as unknown[][]) {
               const subjectValue = tuple[tupleIter.index];
-              if (!subjectValue || typeof subjectValue !== "object" || Array.isArray(subjectValue)) continue;
+              if (!subjectValue || typeof subjectValue !== "object" || Array.isArray(subjectValue))
+                continue;
               const subjectRow = subjectValue as Record<string, unknown>;
               const childEnv = new Map(env);
               childEnv.set("__current__", subjectRow);
@@ -1402,14 +1725,18 @@ export const runSelectExprEvaluation = (
                   if (element.expr.kind === "field_ref") {
                     projected[element.name] = subjectRow[element.expr.field] ?? null;
                   } else {
-                    const unwrappedExpr = element.expr.kind === "select_expr"
-                      ? element.expr.expr
-                      : element.expr as FreeObjectExpr;
-                    const normalizedElemExpr = stripBindingsToCurrent(unwrappedExpr) as FreeObjectExpr;
+                    const unwrappedExpr =
+                      element.expr.kind === "select_expr"
+                        ? element.expr.expr
+                        : (element.expr as FreeObjectExpr);
+                    const normalizedElemExpr = stripBindingsToCurrent(
+                      unwrappedExpr,
+                    ) as FreeObjectExpr;
                     const elemPath = exprAsPath(normalizedElemExpr);
-                    const tupleIndexMatch = elemPath && elemPath.startsWith(`${tupleBasePath}[`) && elemPath.endsWith("]")
-                      ? Number(elemPath.slice(tupleBasePath.length + 1, -1))
-                      : undefined;
+                    const tupleIndexMatch =
+                      elemPath && elemPath.startsWith(`${tupleBasePath}[`) && elemPath.endsWith("]")
+                        ? Number(elemPath.slice(tupleBasePath.length + 1, -1))
+                        : undefined;
                     if (tupleIndexMatch !== undefined && !Number.isNaN(tupleIndexMatch)) {
                       projected[element.name] = tuple[tupleIndexMatch] ?? null;
                     } else {
@@ -1424,14 +1751,25 @@ export const runSelectExprEvaluation = (
           }
         }
         const value = evalExpr(expr.expr, env);
-        let items = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+        let items = Array.isArray(value)
+          ? value
+          : value === null || value === undefined
+            ? []
+            : [value];
         // EdgeQL paths return DISTINCT objects (by id). When the shape source
         // is a field_access path (e.g. `Issue.owner`), dedupe the items so the
         // projected shape isn't multiplied by the join's source cardinality.
-        if (expr.expr.kind === "field_access"
-          && items.length > 1
-          && items.every((item) => item && typeof item === "object" && !Array.isArray(item)
-            && typeof (item as { id?: unknown }).id === "string")) {
+        if (
+          expr.expr.kind === "field_access" &&
+          items.length > 1 &&
+          items.every(
+            (item) =>
+              item &&
+              typeof item === "object" &&
+              !Array.isArray(item) &&
+              typeof (item as { id?: unknown }).id === "string",
+          )
+        ) {
           const seen = new Set<string>();
           const deduped: unknown[] = [];
           for (const item of items) {
@@ -1447,9 +1785,8 @@ export const runSelectExprEvaluation = (
         // sees the current row through the original binding name. Without this,
         // `X[IS …].name` in `foo := X[IS Priority].name ?? X[IS Status].name`
         // reads the entire binding for every row.
-        const shapeBindingName = expr.expr.kind === "binding_ref" && env.has(expr.expr.name)
-          ? expr.expr.name
-          : undefined;
+        const shapeBindingName =
+          expr.expr.kind === "binding_ref" && env.has(expr.expr.name) ? expr.expr.name : undefined;
         const projectOne = (item: unknown): Record<string, unknown> => {
           if (!item || typeof item !== "object" || Array.isArray(item)) return {};
           const row = item as Record<string, unknown>;
@@ -1486,26 +1823,36 @@ export const runSelectExprEvaluation = (
               }
             } else if (element.kind === "link") {
               const linkValue = row[element.name];
-              const linkItems = Array.isArray(linkValue) ? linkValue : linkValue == null ? [] : [linkValue];
-              const projected = linkItems.map((linkItem) => {
-                if (!linkItem || typeof linkItem !== "object" || Array.isArray(linkItem)) return null;
-                const linkRow = linkItem as Record<string, unknown>;
-                const inner: Record<string, unknown> = {};
-                for (const innerEl of element.shape) {
-                  if (innerEl.kind === "field") {
-                    inner[innerEl.name] = linkRow[innerEl.name] ?? null;
-                  } else if (innerEl.kind === "computed") {
-                    if (innerEl.expr.kind === "field_ref") {
-                      inner[innerEl.name] = linkRow[innerEl.expr.field] ?? null;
-                    } else {
-                      const linkChildEnv = new Map(childEnv);
-                      linkChildEnv.set("__current__", linkRow);
-                      inner[innerEl.name] = evalExpr(innerEl.expr as FreeObjectExpr, linkChildEnv);
+              const linkItems = Array.isArray(linkValue)
+                ? linkValue
+                : linkValue == null
+                  ? []
+                  : [linkValue];
+              const projected = linkItems
+                .map((linkItem) => {
+                  if (!linkItem || typeof linkItem !== "object" || Array.isArray(linkItem))
+                    return null;
+                  const linkRow = linkItem as Record<string, unknown>;
+                  const inner: Record<string, unknown> = {};
+                  for (const innerEl of element.shape) {
+                    if (innerEl.kind === "field") {
+                      inner[innerEl.name] = linkRow[innerEl.name] ?? null;
+                    } else if (innerEl.kind === "computed") {
+                      if (innerEl.expr.kind === "field_ref") {
+                        inner[innerEl.name] = linkRow[innerEl.expr.field] ?? null;
+                      } else {
+                        const linkChildEnv = new Map(childEnv);
+                        linkChildEnv.set("__current__", linkRow);
+                        inner[innerEl.name] = evalExpr(
+                          innerEl.expr as FreeObjectExpr,
+                          linkChildEnv,
+                        );
+                      }
                     }
                   }
-                }
-                return inner;
-              }).filter((entry): entry is Record<string, unknown> => entry !== null);
+                  return inner;
+                })
+                .filter((entry): entry is Record<string, unknown> => entry !== null);
               const wantsMulti = Array.isArray(linkValue) && linkValue.length > 1;
               out[element.name] = wantsMulti ? projected : (projected[0] ?? null);
             }
@@ -1540,7 +1887,9 @@ export const runSelectExprEvaluation = (
   const enumOrderForCast = (castType: string): Map<string, number> | undefined => {
     const typeDef = schema.getType(qualifyRuntimeTypeName(castType));
     const values = typeDef?.fields.flatMap((field) => field.enumValues ?? []) ?? [];
-    return values.length > 0 ? new Map(values.map((value, index) => [value, index] as const)) : undefined;
+    return values.length > 0
+      ? new Map(values.map((value, index) => [value, index] as const))
+      : undefined;
   };
 
   const initialEnv = new Map<string, unknown>();
@@ -1556,7 +1905,15 @@ export const runSelectExprEvaluation = (
       case "parameter":
         return context.globals?.[value.name] ?? null;
       case "subquery":
-        return evalExpr({ kind: "select", typeName: value.query.typeName, shape: value.query.shape, clauses: value.query.clauses }, env);
+        return evalExpr(
+          {
+            kind: "select",
+            typeName: value.query.typeName,
+            shape: value.query.shape,
+            clauses: value.query.clauses,
+          },
+          env,
+        );
       case "subquery_statement":
         return executeMutationBinding(db, schema, value.statement, context);
       case "subquery_expr": {
@@ -1566,16 +1923,31 @@ export const runSelectExprEvaluation = (
         }
         if (innerSelectExpr.kind === "select") {
           const projected = evalExpr(value.expr, env);
-          const base = evalExpr({
-            ...innerSelectExpr,
-            shape: [{ kind: "field", name: "id", operation: "assign", origin: "default" }],
-          }, env);
-          const baseItems = Array.isArray(base) ? base : base === null || base === undefined ? [] : [base];
-          const projectedItems = Array.isArray(projected) ? projected : projected === null || projected === undefined ? [] : [projected];
+          const base = evalExpr(
+            {
+              ...innerSelectExpr,
+              shape: [{ kind: "field", name: "id", operation: "assign", origin: "default" }],
+            },
+            env,
+          );
+          const baseItems = Array.isArray(base)
+            ? base
+            : base === null || base === undefined
+              ? []
+              : [base];
+          const projectedItems = Array.isArray(projected)
+            ? projected
+            : projected === null || projected === undefined
+              ? []
+              : [projected];
           return projectedItems.map((item, index) => {
             const baseItem = baseItems[index];
-            return baseItem && typeof baseItem === "object" && !Array.isArray(baseItem)
-              && item && typeof item === "object" && !Array.isArray(item)
+            return baseItem &&
+              typeof baseItem === "object" &&
+              !Array.isArray(baseItem) &&
+              item &&
+              typeof item === "object" &&
+              !Array.isArray(item)
               ? { ...(baseItem as Record<string, unknown>), ...(item as Record<string, unknown>) }
               : item;
           });
@@ -1583,12 +1955,24 @@ export const runSelectExprEvaluation = (
         if (value.expr.kind === "shape_projection") {
           const base = evalExpr(value.expr.expr, env);
           const projected = evalExpr(value.expr, env);
-          const baseItems = Array.isArray(base) ? base : base === null || base === undefined ? [] : [base];
-          const projectedItems = Array.isArray(projected) ? projected : projected === null || projected === undefined ? [] : [projected];
+          const baseItems = Array.isArray(base)
+            ? base
+            : base === null || base === undefined
+              ? []
+              : [base];
+          const projectedItems = Array.isArray(projected)
+            ? projected
+            : projected === null || projected === undefined
+              ? []
+              : [projected];
           return projectedItems.map((item, index) => {
             const baseItem = baseItems[index];
-            return baseItem && typeof baseItem === "object" && !Array.isArray(baseItem)
-              && item && typeof item === "object" && !Array.isArray(item)
+            return baseItem &&
+              typeof baseItem === "object" &&
+              !Array.isArray(baseItem) &&
+              item &&
+              typeof item === "object" &&
+              !Array.isArray(item)
               ? { ...(baseItem as Record<string, unknown>), ...(item as Record<string, unknown>) }
               : item;
           });
@@ -1598,11 +1982,22 @@ export const runSelectExprEvaluation = (
       case "enum_path":
         return value.member;
       case "path":
-        return evalExpr({ kind: "path", head: value.head, tail: value.tail, steps: value.steps }, env);
+        return evalExpr(
+          { kind: "path", head: value.head, tail: value.tail, steps: value.steps },
+          env,
+        );
       case "path_chain":
         return evalExpr({ kind: "path_chain", parts: value.parts, steps: value.steps }, env);
       case "backlink_path":
-        return evalExpr({ kind: "backlink_path", link: value.link, sourceType: value.sourceType, sourceTypeExpr: value.sourceTypeExpr }, env);
+        return evalExpr(
+          {
+            kind: "backlink_path",
+            link: value.link,
+            sourceType: value.sourceType,
+            sourceTypeExpr: value.sourceTypeExpr,
+          },
+          env,
+        );
     }
   };
   for (const binding of ast.with ?? []) {
@@ -1624,18 +2019,24 @@ export const runSelectExprEvaluation = (
     }
     return out;
   };
-  const finalShape = ast.expr.kind === "shape_projection"
-    ? ast.expr.shape
-    : ast.expr.kind === "select_expr_subquery" && ast.expr.expr.kind === "shape_projection"
-      ? ast.expr.expr.shape
-      : undefined;
-  const currentBinding = ast.expr.kind === "binding_ref"
-    ? ast.expr.name
-    : ast.expr.kind === "select_expr_subquery" && ast.expr.alias
-      ? ast.expr.alias
-      : undefined;
-  const topIsArrayAgg = ast.expr.kind === "function_call"
-    && ((ast.expr.call.name.includes("::") ? ast.expr.call.name.split("::").at(-1) : ast.expr.call.name)?.toLowerCase() === "array_agg");
+  const finalShape =
+    ast.expr.kind === "shape_projection"
+      ? ast.expr.shape
+      : ast.expr.kind === "select_expr_subquery" && ast.expr.expr.kind === "shape_projection"
+        ? ast.expr.expr.shape
+        : undefined;
+  const currentBinding =
+    ast.expr.kind === "binding_ref"
+      ? ast.expr.name
+      : ast.expr.kind === "select_expr_subquery" && ast.expr.alias
+        ? ast.expr.alias
+        : undefined;
+  const topIsArrayAgg =
+    ast.expr.kind === "function_call" &&
+    (ast.expr.call.name.includes("::")
+      ? ast.expr.call.name.split("::").at(-1)
+      : ast.expr.call.name
+    )?.toLowerCase() === "array_agg";
   const rows = Array.isArray(value) ? (topIsArrayAgg ? [value] : value) : [value];
   if (ast.orderBy) {
     type OrderKey = { expr: FreeObjectExpr; direction: number; enumOrder?: Map<string, number> };
@@ -1645,11 +2046,12 @@ export const runSelectExprEvaluation = (
       orderKeys.push({
         expr: cursor.expr,
         direction: cursor.direction === "desc" ? -1 : 1,
-        enumOrder: cursor.expr.kind === "cast"
-          ? enumOrderForCast(cursor.expr.castType)
-          : cursor.expr.kind === "binding_ref"
-            ? enumOrderForRows(rows)
-            : undefined,
+        enumOrder:
+          cursor.expr.kind === "cast"
+            ? enumOrderForCast(cursor.expr.castType)
+            : cursor.expr.kind === "binding_ref"
+              ? enumOrderForRows(rows)
+              : undefined,
       });
       cursor = cursor.then;
     }
@@ -1664,17 +2066,28 @@ export const runSelectExprEvaluation = (
       leftEnv.set("__current__", a as Record<string, unknown>);
       rightEnv.set("__current__", b as Record<string, unknown>);
       for (const key of orderKeys) {
-        const tupleBindingIndex = key.expr.kind === "binding_ref"
-          && ast.expr.kind === "tuple"
-          && ast.expr.values[0]?.kind === "binding_ref"
-          && ast.expr.values[0].name === key.expr.name
-          ? 0
-          : undefined;
-        const left = tupleBindingIndex !== undefined && Array.isArray(a) ? a[tupleBindingIndex] : evalExpr(key.expr, leftEnv);
-        const right = tupleBindingIndex !== undefined && Array.isArray(b) ? b[tupleBindingIndex] : evalExpr(key.expr, rightEnv);
+        const tupleBindingIndex =
+          key.expr.kind === "binding_ref" &&
+          ast.expr.kind === "tuple" &&
+          ast.expr.values[0]?.kind === "binding_ref" &&
+          ast.expr.values[0].name === key.expr.name
+            ? 0
+            : undefined;
+        const left =
+          tupleBindingIndex !== undefined && Array.isArray(a)
+            ? a[tupleBindingIndex]
+            : evalExpr(key.expr, leftEnv);
+        const right =
+          tupleBindingIndex !== undefined && Array.isArray(b)
+            ? b[tupleBindingIndex]
+            : evalExpr(key.expr, rightEnv);
         const leftEnumIndex = typeof left === "string" ? key.enumOrder?.get(left) : undefined;
         const rightEnumIndex = typeof right === "string" ? key.enumOrder?.get(right) : undefined;
-        if (leftEnumIndex !== undefined && rightEnumIndex !== undefined && leftEnumIndex !== rightEnumIndex) {
+        if (
+          leftEnumIndex !== undefined &&
+          rightEnumIndex !== undefined &&
+          leftEnumIndex !== rightEnumIndex
+        ) {
           return (leftEnumIndex < rightEnumIndex ? -1 : 1) * key.direction;
         }
         if (typeof left === "number" && typeof right === "number") {

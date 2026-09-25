@@ -5,11 +5,7 @@
 // `runtime/engine.ts`, `runtime/default_resolution.ts`, and
 // `compiler/inference.ts`. See `docs/adr/0043`.
 
-export type {
-  RuntimeFunctionArg,
-  StdlibVolatility,
-  StdlibFunctionDef,
-} from "./registry.js";
+export type { RuntimeFunctionArg, StdlibVolatility, StdlibFunctionDef } from "./registry.js";
 
 export {
   resolveStdlibFunction,

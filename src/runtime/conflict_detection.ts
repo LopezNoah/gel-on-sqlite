@@ -137,17 +137,30 @@ export const exclusiveChecksFor = (
   // ── Field-level single-property exclusive constraints ──
   for (const field of typeDef.fields) {
     if (field.name === "id") continue;
-    const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
+    const constraints =
+      (
+        field as {
+          constraints?: Array<{
+            name: string;
+            delegated?: boolean;
+            onExpr?: string;
+            exceptExpr?: string;
+          }>;
+        }
+      ).constraints ?? [];
     const excl = constraints.find(constraintIsExclusiveLike);
     if (!excl) continue;
     // Locate the topmost ancestor declaring the same field constraint to find
     // the shared-table owner + whether it's inherited.
     let owner = typeDef;
     for (const anc of ancestors) {
-      const ancField = anc.fields.find((f) => f.name === field.name) as { constraints?: Array<{ name: string }> } | undefined;
+      const ancField = anc.fields.find((f) => f.name === field.name) as
+        | { constraints?: Array<{ name: string }> }
+        | undefined;
       if (ancField?.constraints?.some(constraintIsExclusiveLike)) owner = anc;
     }
-    const lower = excl.onExpr !== undefined && /str_lower\s*\(\s*__subject__\s*\)/.test(excl.onExpr);
+    const lower =
+      excl.onExpr !== undefined && /str_lower\s*\(\s*__subject__\s*\)/.test(excl.onExpr);
     checks.push({
       fields: [field.name],
       columns: [field.name],
@@ -185,7 +198,14 @@ export const exclusiveChecksFor = (
         tables.add(tableNameForType(qualifiedTypeName(concrete)));
       }
       tables.add(tableNameForType(qualifiedTypeName(typeDef)));
-      checks.push({ fields, columns, lower, tables: [...tables], fromParent: parent, exceptColumn: exceptColumnFrom((tc as { exceptExpr?: string }).exceptExpr) });
+      checks.push({
+        fields,
+        columns,
+        lower,
+        tables: [...tables],
+        fromParent: parent,
+        exceptColumn: exceptColumnFrom((tc as { exceptExpr?: string }).exceptExpr),
+      });
     }
   };
   collectTypeConstraints(typeDef, false);
@@ -250,14 +270,22 @@ export const runExclusiveConflictProbe = (
   if (plan.kind === "multi") {
     for (const tbl of plan.tables) {
       const linkTbl = `${tbl}__${plan.multiProp.toLowerCase()}`;
-      const exists = db.prepare(`PRAGMA table_info(${quoteIdent(linkTbl)})`).all() as Array<{ name: string }>;
+      const exists = db.prepare(`PRAGMA table_info(${quoteIdent(linkTbl)})`).all() as Array<{
+        name: string;
+      }>;
       if (exists.length === 0) continue;
-      const valueCol = exists.some((c) => c.name === "value") ? "value" : exists.some((c) => c.name === "target") ? "target" : undefined;
+      const valueCol = exists.some((c) => c.name === "value")
+        ? "value"
+        : exists.some((c) => c.name === "target")
+          ? "target"
+          : undefined;
       const srcCol = exists.some((c) => c.name === "source") ? "source" : "src";
       if (!valueCol) continue;
       const placeholders = plan.items.map(() => "?").join(", ");
       const row = db
-        .prepare(`SELECT ${quoteIdent(srcCol)} AS ${quoteIdent("id")} FROM ${quoteIdent(linkTbl)} WHERE ${quoteIdent(valueCol)} IN (${placeholders}) LIMIT 1`)
+        .prepare(
+          `SELECT ${quoteIdent(srcCol)} AS ${quoteIdent("id")} FROM ${quoteIdent(linkTbl)} WHERE ${quoteIdent(valueCol)} IN (${placeholders}) LIMIT 1`,
+        )
         .all(...plan.items)[0] as { id?: unknown } | undefined;
       if (typeof row?.id === "string") return row.id;
     }
@@ -265,13 +293,19 @@ export const runExclusiveConflictProbe = (
   }
 
   for (const tbl of plan.tables) {
-    const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+    const cols = (
+      db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>
+    ).map((c) => c.name);
     if (!plan.columns.every((c) => cols.includes(c))) continue;
     const wheres = plan.columns
-      .map((col) => (plan.lower ? `lower(${quoteIdent(col)}) = lower(?)` : `${quoteIdent(col)} = ?`))
+      .map((col) =>
+        plan.lower ? `lower(${quoteIdent(col)}) = lower(?)` : `${quoteIdent(col)} = ?`,
+      )
       .join(" AND ");
     const row = db
-      .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)} WHERE ${wheres} LIMIT 1`)
+      .prepare(
+        `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)} WHERE ${wheres} LIMIT 1`,
+      )
       .all(...(plan.values as ScalarValue[]))[0] as { id?: unknown } | undefined;
     if (typeof row?.id === "string") return row.id;
   }
@@ -291,14 +325,19 @@ export const conflictIsAgainstSameStatementRow = (
   statementInsertedIds: Set<string> | undefined,
 ): boolean => {
   if (!statementInsertedIds || statementInsertedIds.size === 0) return false;
-  const checks = exclusiveChecksFor(schema, subjectType, undefined)
-    .filter((c) => c.fields.includes(violatedProperty));
+  const checks = exclusiveChecksFor(schema, subjectType, undefined).filter((c) =>
+    c.fields.includes(violatedProperty),
+  );
   for (const check of checks) {
     for (const tbl of check.tables) {
-      const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+      const cols = (
+        db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>
+      ).map((c) => c.name);
       if (check.multiProp) continue;
       if (!check.columns.every((c) => cols.includes(c))) continue;
-      const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)}`).all() as Array<{ id?: unknown }>;
+      const rows = db
+        .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tbl)}`)
+        .all() as Array<{ id?: unknown }>;
       for (const row of rows) {
         if (typeof row.id === "string" && statementInsertedIds.has(row.id)) return true;
       }
@@ -310,14 +349,30 @@ export const conflictIsAgainstSameStatementRow = (
 // Recursively scan an INSERT value expression for volatile function calls
 // (`random`, `datetime_current`, …) so UNLESS CONFLICT ON can reject a volatile
 // conflict target (test _16b).
-const VOLATILE_FUNCTION_NAMES = new Set(["random", "datetime_current", "datetime_of_transaction", "uuid_generate_v1mc", "uuid_generate_v4", "sequence_next"]);
+const VOLATILE_FUNCTION_NAMES = new Set([
+  "random",
+  "datetime_current",
+  "datetime_of_transaction",
+  "uuid_generate_v1mc",
+  "uuid_generate_v4",
+  "sequence_next",
+]);
 export const insertValueIsVolatile = (node: unknown): boolean => {
   if (Array.isArray(node)) return node.some(insertValueIsVolatile);
   if (node === null || typeof node !== "object") return false;
-  const n = node as Record<string, unknown> & { kind?: string; name?: unknown; call?: { name?: unknown } };
-  const fnName = typeof n.name === "string" ? n.name : typeof n.call?.name === "string" ? n.call.name : undefined;
+  const n = node as Record<string, unknown> & {
+    kind?: string;
+    name?: unknown;
+    call?: { name?: unknown };
+  };
+  const fnName =
+    typeof n.name === "string"
+      ? n.name
+      : typeof n.call?.name === "string"
+        ? n.call.name
+        : undefined;
   if ((n.kind === "function_call" || n.kind === "func_call" || n.kind === "call") && fnName) {
-    const short = fnName.includes("::") ? fnName.split("::").pop()! : fnName;
+    const short = fnName.includes("::") ? (fnName.split("::").pop() ?? fnName) : fnName;
     if (VOLATILE_FUNCTION_NAMES.has(short)) return true;
   }
   for (const value of Object.values(n)) {

@@ -17,15 +17,21 @@ const { parseDeclarativeSchema } = await import(path.join(ROOT, "src/schema/sdl_
 const { parseEdgeQL } = await import(path.join(ROOT, "src/edgeql/parser.ts"));
 const { getCompilerService } = await import(path.join(ROOT, "src/compiler/service.ts"));
 
-const loadSchema = (name) => fs.readFileSync(path.join(ROOT, "tests", "schemas", `${name}.esdl`), "utf8");
-const buildSchema = (name) => schemaSnapshotFromDeclarative(parseDeclarativeSchema(loadSchema(name), { legacySyntaxCompat: true }));
+const loadSchema = (name) =>
+  fs.readFileSync(path.join(ROOT, "tests", "schemas", `${name}.esdl`), "utf8");
+const buildSchema = (name) =>
+  schemaSnapshotFromDeclarative(
+    parseDeclarativeSchema(loadSchema(name), { legacySyntaxCompat: true }),
+  );
 
 const time = (label, n, fn) => {
   for (let i = 0; i < 50; i++) fn(i);
   const t0 = performance.now();
   for (let i = 0; i < n; i++) fn(i);
   const t1 = performance.now();
-  console.log(`  ${label.padEnd(40)} ${((t1 - t0) / n).toFixed(4)} ms/op   (${(t1 - t0).toFixed(0)}ms)`);
+  console.log(
+    `  ${label.padEnd(40)} ${((t1 - t0) / n).toFixed(4)} ms/op   (${(t1 - t0).toFixed(0)}ms)`,
+  );
 };
 
 const svc = getCompilerService();
@@ -38,8 +44,12 @@ for (const [schemaName, query] of [
   const stmt = parseEdgeQL(query);
   console.log(`\n=== ${schemaName}: ${query} ===`);
   // MISS: clear the cache each iteration -> full compile every time.
-  time("compile MISS (full lowering)", ITER, () => { svc.clear(); svc.compile(schema, stmt); });
+  time("compile MISS (full lowering)", ITER, () => {
+    svc.clear();
+    svc.compile(schema, stmt);
+  });
   // HIT: warm once, then repeat -> measures clone-to-return only.
-  svc.clear(); svc.compile(schema, stmt);
+  svc.clear();
+  svc.compile(schema, stmt);
   time("compile HIT  (cached)", ITER, () => svc.compile(schema, stmt));
 }

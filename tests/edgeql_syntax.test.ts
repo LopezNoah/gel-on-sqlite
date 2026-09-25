@@ -25,40 +25,52 @@ describe("TestEdgeQLParser", () => {
   });
 
   it("test_edgeql_syntax_empty_04", () => {
-    expect(() => tryParse(`;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_empty_05", () => {
-    expect(() => tryParse(`;# only comment
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`;# only comment
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_empty_06", () => {
-    expect(() => tryParse(`        ;
+    expect(() =>
+      tryParse(`        ;
         # only comment
         ;
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_case_01", () => {
-    expect(() => tryParse(`Select 1;
+    expect(() =>
+      tryParse(`Select 1;
 select 1;
 SELECT 1;
-SeLeCT 1;`)).not.toThrow();
+SeLeCT 1;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_omit_semicolon_01", () => {
-    expect(() => tryParse(`        SELECT 1
+    expect(() =>
+      tryParse(`        SELECT 1
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_omit_semicolon_02", () => {
-    expect(() => tryParse(`        SELECT 2;
+    expect(() =>
+      tryParse(`        SELECT 2;
         SELECT 1
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_nonstatement_02 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -66,7 +78,9 @@ SeLeCT 1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_number_too_large", () => {
-    expect(() => tryParse(`SELECT 111111111111111111111111111111111111111111111111111111;`)).toThrow();
+    expect(() =>
+      tryParse(`SELECT 111111111111111111111111111111111111111111111111111111;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_float_number_too_large", () => {
@@ -82,37 +96,48 @@ SeLeCT 1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_float_number_too_small_03", () => {
-    expect(() => tryParse(`SELECT 0.0000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000001;`)).toThrow();
+    expect(() =>
+      tryParse(
+        `SELECT 0.0000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000000000000000_0000000000_0000000000_00000000001;`,
+      ),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_constants_01", () => {
-    expect(() => tryParse(`SELECT 0;
+    expect(() =>
+      tryParse(`SELECT 0;
 SELECT 1;
 SELECT +7;
 SELECT -7;
 SELECT 551;
-SELECT 1_024;`)).not.toThrow();
+SELECT 1_024;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_02", () => {
-    expect(() => tryParse(`        SELECT 'a1';
+    expect(() =>
+      tryParse(`        SELECT 'a1';
         SELECT "a1";;;;;;;;;;;;
         SELECT r'a1';
         SELECT r"a1";
         SELECT $$a1$$;
         SELECT $qwe$a1$qwe$;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_03", () => {
-    expect(() => tryParse(`SELECT 3.5432;
+    expect(() =>
+      tryParse(`SELECT 3.5432;
 SELECT +3.5432;
-SELECT -3.5432;`)).not.toThrow();
+SELECT -3.5432;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_04 [parser-gap: [not supported] numeric litera]", () => {
-    expect(() => tryParse(`        SELECT 354.32;
+    expect(() =>
+      tryParse(`        SELECT 354.32;
         SELECT 35400000000000.32;
         SELECT 35400000000000000000.32;
         SELECT 3.5432e20;
@@ -123,20 +148,25 @@ SELECT -3.5432;`)).not.toThrow();
         SELECT 2_354.32e-20;
         SELECT 0e-999;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_05", () => {
-    expect(() => tryParse(`SELECT TRUE;
-SELECT FALSE;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT TRUE;
+SELECT FALSE;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_06", () => {
-    expect(() => tryParse(`SELECT $1;
+    expect(() =>
+      tryParse(`SELECT $1;
 SELECT $123;
 SELECT $somevar;
 SELECT $select;
-SELECT (($SELECT + $TRUE) + $WITH);`)).not.toThrow();
+SELECT (($SELECT + $TRUE) + $WITH);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_07", () => {
@@ -152,8 +182,10 @@ SELECT (($SELECT + $TRUE) + $WITH);`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_10 [parser-gap: Unsupported escape sequence ']", () => {
-    expect(() => tryParse(`        SELECT b'1\\t\\n1' + b"2\\x00";
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT b'1\\t\\n1' + b"2\\x00";
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_11", () => {
@@ -169,9 +201,11 @@ SELECT (($SELECT + $TRUE) + $WITH);`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_14 [parser-gap: Unterminated string literal]", () => {
-    expect(() => tryParse(`        SELECT b'aa
+    expect(() =>
+      tryParse(`        SELECT b'aa
 aa';
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_15", () => {
@@ -187,9 +221,11 @@ aa';
   });
 
   it("test_edgeql_syntax_constants_18 [parser-gap: Unterminated string literal]", () => {
-    expect(() => tryParse(`        SELECT 'aa
+    expect(() =>
+      tryParse(`        SELECT 'aa
         aa';
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_19", () => {
@@ -201,13 +237,17 @@ aa';
   });
 
   it("test_edgeql_syntax_constants_21", () => {
-    expect(() => tryParse(`        SELECT '\\'"\\\\\\'\\""\\\\x\\\\u';
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT '\\'"\\\\\\'\\""\\\\x\\\\u';
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_22", () => {
-    expect(() => tryParse(`        SELECT to_json('{"defaultValue": "\\\\"SMALLEST\\\\""}');
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT to_json('{"defaultValue": "\\\\"SMALLEST\\\\""}');
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_23", () => {
@@ -247,16 +287,20 @@ aa';
   });
 
   it("test_edgeql_syntax_constants_31 [parser-gap: Unsupported escape sequence ']", () => {
-    expect(() => tryParse(`        SELECT 'aa\\
+    expect(() =>
+      tryParse(`        SELECT 'aa\\
                 bb \\
                 aa';
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_32", () => {
-    expect(() => tryParse(`SELECT 'aa\\
+    expect(() =>
+      tryParse(`SELECT 'aa\\
         bb \\
-        aa\\';`)).toThrow();
+        aa\\';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_constants_33", () => {
@@ -268,13 +312,17 @@ aa';
   });
 
   it("test_edgeql_syntax_constants_35", () => {
-    expect(() => tryParse(`        SELECT r"\\n\\w\\d";
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT r"\\n\\w\\d";
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_36", () => {
-    expect(() => tryParse(`        SELECT $aa$\\n\\w\\d$aa$;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT $aa$\\n\\w\\d$aa$;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_37", () => {
@@ -282,13 +330,17 @@ aa';
   });
 
   it("test_edgeql_syntax_constants_38", () => {
-    expect(() => tryParse(`        SELECT "\\n";
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT "\\n";
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_39 [parser-gap: Unsupported escape sequence ']", () => {
-    expect(() => tryParse(`        SELECT '\\x1F\\x01\\x6e';
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT '\\x1F\\x01\\x6e';
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_40", () => {
@@ -304,7 +356,8 @@ aa';
   });
 
   it("test_edgeql_syntax_constants_43", () => {
-    expect(() => tryParse(`        SELECT -0n;
+    expect(() =>
+      tryParse(`        SELECT -0n;
         SELECT 0n;
         SELECT 1n;
         SELECT -1n;
@@ -321,7 +374,8 @@ aa';
         SELECT 3.543_2e-20n;
         SELECT 354.32e-20n;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_constants_44", () => {
@@ -329,10 +383,12 @@ aa';
   });
 
   it("test_edgeql_syntax_constants_45", () => {
-    expect(() => tryParse(`        SELECT 123e+100n;
+    expect(() =>
+      tryParse(`        SELECT 123e+100n;
         SELECT 123e100n;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_01", () => {
@@ -344,30 +400,37 @@ aa';
   });
 
   it("test_edgeql_syntax_ops_03", () => {
-    expect(() => tryParse(`SELECT (40 <= 2);
-SELECT (40 >= 2);`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT (40 <= 2);
+SELECT (40 >= 2);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_04", () => {
-    expect(() => tryParse(`        SELECT 1 + 2;
+    expect(() =>
+      tryParse(`        SELECT 1 + 2;
         SELECT (1 + 2);
         SELECT (1) + 2;
         SELECT (((1) + (2)));
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_05", () => {
-    expect(() => tryParse(`        SELECT User.age + 2;
+    expect(() =>
+      tryParse(`        SELECT User.age + 2;
         SELECT (User.age + 2);
         SELECT (User.age) + 2;
         SELECT (((User.age) + (2)));
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_06", () => {
-    expect(() => tryParse(`SELECT (40 + 2);
+    expect(() =>
+      tryParse(`SELECT (40 + 2);
 SELECT (40 - 2);
 SELECT (40 * 2);
 SELECT (40 / 2);
@@ -378,7 +441,8 @@ SELECT (40 > 2);
 SELECT (40 <= 2);
 SELECT (40 >= 2);
 SELECT (40 = 2);
-SELECT (40 != 2);`)).not.toThrow();
+SELECT (40 != 2);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_07", () => {
@@ -386,7 +450,8 @@ SELECT (40 != 2);`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_08", () => {
-    expect(() => tryParse(`SELECT (User.age + 2);
+    expect(() =>
+      tryParse(`SELECT (User.age + 2);
 SELECT (User.age - 2);
 SELECT (User.age * 2);
 SELECT (User.age / 2);
@@ -397,25 +462,32 @@ SELECT (User.age > 2);
 SELECT (User.age <= 2);
 SELECT (User.age >= 2);
 SELECT (User.age = 2);
-SELECT (User.age != 2);`)).not.toThrow();
+SELECT (User.age != 2);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_09", () => {
-    expect(() => tryParse(`SELECT (Foo.foo AND Foo.bar);
+    expect(() =>
+      tryParse(`SELECT (Foo.foo AND Foo.bar);
 SELECT (Foo.foo OR Foo.bar);
-SELECT NOT (Foo.foo);`)).not.toThrow();
+SELECT NOT (Foo.foo);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_10", () => {
-    expect(() => tryParse(`SELECT (User.name IN {'Alice', 'Bob'});
-SELECT (User.name NOT IN {'Alice', 'Bob'});`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT (User.name IN {'Alice', 'Bob'});
+SELECT (User.name NOT IN {'Alice', 'Bob'});`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_11 [parser-gap: Expected ')' after parenthes]", () => {
-    expect(() => tryParse(`SELECT (User.name LIKE 'Al%');
+    expect(() =>
+      tryParse(`SELECT (User.name LIKE 'Al%');
 SELECT (User.name ILIKE 'al%');
 SELECT (User.name NOT LIKE 'Al%');
-SELECT (User.name NOT ILIKE 'al%');`)).not.toThrow();
+SELECT (User.name NOT ILIKE 'al%');`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_12", () => {
@@ -423,44 +495,54 @@ SELECT (User.name NOT ILIKE 'al%');`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_14", () => {
-    expect(() => tryParse(`        SELECT -1 + 2 * 3 - 5 - 6 / 2 > 0 OR 25 % 4 = 3 AND 42 IN {12, 42, 14};
+    expect(() =>
+      tryParse(`        SELECT -1 + 2 * 3 - 5 - 6 / 2 > 0 OR 25 % 4 = 3 AND 42 IN {12, 42, 14};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_15", () => {
-    expect(() => tryParse(`        SELECT
+    expect(() =>
+      tryParse(`        SELECT
             ((-1 + 2) * 3 - (5 - 6) / 2 > 0 OR 25 % 4 = 3)
             AND 42 IN {12, 42, 14};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_16", () => {
-    expect(() => tryParse(`SELECT (42 IF foo ELSE 24);
+    expect(() =>
+      tryParse(`SELECT (42 IF foo ELSE 24);
 SELECT (
     42 IF Foo.bar ELSE
     (
         43 IF Foo.baz ELSE
         44
     )
-);`)).not.toThrow();
+);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_17", () => {
-    expect(() => tryParse(`        SELECT 42 IF Foo.bar ELSE
+    expect(() =>
+      tryParse(`        SELECT 42 IF Foo.bar ELSE
                43 IF Foo.baz ELSE
                44;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_18", () => {
-    expect(() => tryParse(`        SELECT 40 + 2 IF Foo.bar ELSE
+    expect(() =>
+      tryParse(`        SELECT 40 + 2 IF Foo.bar ELSE
                40 + 3 IF Foo.baz ELSE
                40 + 4;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_19", () => {
@@ -480,27 +562,33 @@ SELECT (
   });
 
   it("test_edgeql_syntax_ops_23", () => {
-    expect(() => tryParse(`SELECT (Foo.a ?= Foo.b);
-SELECT (Foo.b ?!= Foo.b);`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT (Foo.a ?= Foo.b);
+SELECT (Foo.b ?!= Foo.b);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_24", () => {
-    expect(() => tryParse(`SELECT (User.name IS std::str);
+    expect(() =>
+      tryParse(`SELECT (User.name IS std::str);
 SELECT (User IS SystemUser);
 SELECT (User.name IS NOT std::str);
 SELECT (User IS NOT SystemUser);
 
 SELECT (User.name IS (array<int>));
-SELECT (User.name IS (tuple<int, str, array<str>>));`)).not.toThrow();
+SELECT (User.name IS (tuple<int, str, array<str>>));`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_25", () => {
-    expect(() => tryParse(`        SELECT User IS SystemUser | Foo;
+    expect(() =>
+      tryParse(`        SELECT User IS SystemUser | Foo;
         SELECT User IS SystemUser & Foo;
         SELECT User IS SystemUser & Foo | Bar;
         SELECT User IS SystemUser & Foo | Bar | (array<int>);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_26", () => {
@@ -508,14 +596,16 @@ SELECT (User.name IS (tuple<int, str, array<str>>));`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_27", () => {
-    expect(() => tryParse(`        WITH x := {'b', 'a', 't'}
+    expect(() =>
+      tryParse(`        WITH x := {'b', 'a', 't'}
         SELECT
             IF x = 'a' THEN 1 ELSE
             IF x = 'b' THEN 10 ELSE
             IF x = 'c' THEN 100 ELSE
             0;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_28", () => {
@@ -527,8 +617,10 @@ SELECT (User.name IS (tuple<int, str, array<str>>));`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_30", () => {
-    expect(() => tryParse(`        SELECT (a < b) > c;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT (a < b) > c;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ops_31", () => {
@@ -556,16 +648,19 @@ SELECT (User.name IS (tuple<int, str, array<str>>));`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_list_01", () => {
-    expect(() => tryParse(`SELECT (some_list_fn())[2];
+    expect(() =>
+      tryParse(`SELECT (some_list_fn())[2];
 SELECT (some_list_fn())[2:4];
 SELECT (some_list_fn())[2:];
 SELECT (some_list_fn())[:4];
 SELECT (some_list_fn())[-1:];
-SELECT (some_list_fn())[:-1];`)).not.toThrow();
+SELECT (some_list_fn())[:-1];`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_name_01", () => {
-    expect(() => tryParse(`        SELECT bar;
+    expect(() =>
+      tryParse(`        SELECT bar;
         SELECT \`bar\`;
         SELECT foo::bar;
         SELECT foo::\`bar\`;
@@ -574,49 +669,58 @@ SELECT (some_list_fn())[:-1];`)).not.toThrow();
         SELECT \`foo\`\`bar\`;
         SELECT \`foo\`::\`bar\`\`\`;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_name_02", () => {
-    expect(() => tryParse(`        SELECT (bar);
+    expect(() =>
+      tryParse(`        SELECT (bar);
         SELECT (\`bar\`);
         SELECT (foo::bar);
         SELECT (foo::\`bar\`);
         SELECT (\`foo\`::bar);
         SELECT (\`foo\`::\`bar\`);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_name_03", () => {
-    expect(() => tryParse(`        SELECT (action);
+    expect(() =>
+      tryParse(`        SELECT (action);
         SELECT (\`action\`);
         SELECT (event::action);
         SELECT (event::\`action\`);
         SELECT (\`event\`::action);
         SELECT (\`event\`::\`action\`);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_name_04", () => {
-    expect(() => tryParse(`        SELECT (event::select);
+    expect(() =>
+      tryParse(`        SELECT (event::select);
         SELECT (event::\`select\`);
         SELECT (\`event\`::select);
         SELECT (\`event\`::\`select\`);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_name_05", () => {
-    expect(() => tryParse(`        SELECT foo.bar;
+    expect(() =>
+      tryParse(`        SELECT foo.bar;
         SELECT \`foo.bar\`;
         SELECT \`foo.bar\`::spam;
         SELECT \`foo.bar\`::spam.ham;
         SELECT \`foo.bar\`::\`spam.ham\`;
         SELECT (foo).bar;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_name_06", () => {
@@ -628,13 +732,17 @@ SELECT (some_list_fn())[:-1];`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_name_08", () => {
-    expect(() => tryParse(`SELECT (event::if);
-SELECT (if::event);`)).toThrow();
+    expect(() =>
+      tryParse(`SELECT (event::if);
+SELECT (if::event);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_name_09", () => {
-    expect(() => tryParse(`SELECT (event::select);
-SELECT (select::event);`)).toThrow();
+    expect(() =>
+      tryParse(`SELECT (event::select);
+SELECT (select::event);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_name_10", () => {
@@ -714,18 +822,22 @@ SELECT (select::event);`)).toThrow();
   });
 
   it("test_edgeql_syntax_shape_01", () => {
-    expect(() => tryParse(`        SELECT Foo {bar};
+    expect(() =>
+      tryParse(`        SELECT Foo {bar};
         SELECT (Foo) {bar};
         SELECT (((Foo))) {bar};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_02", () => {
-    expect(() => tryParse(`        SELECT Foo {bar};
+    expect(() =>
+      tryParse(`        SELECT Foo {bar};
         SELECT Foo {@bar};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_03", () => {
@@ -737,86 +849,106 @@ SELECT (select::event);`)).toThrow();
   });
 
   it("test_edgeql_syntax_shape_05", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     \`@foo\`:= 42
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_06", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar,
     \`@foo\`:= 42
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_07", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar: {
         baz,
         boo
     },
     \`@foo\`:= 42
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_08", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar: {
         baz,
         \`@boo\`
     },
     \`@foo\`:= 42
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_09", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar: {
         baz,
         boo
     } FILTER \`@spam\` = 'bad',
     \`@foo\`:= 42
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_10", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar: {
         baz,
         boo
     } FILTER spam = 'bad',
     \`@foo\`:= 42
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_11", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     __type__.name
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_12", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     __type__: {
         name,
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_13", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     __type__: {
         name,
         description,
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_14", () => {
-    expect(() => tryParse(`SELECT {
+    expect(() =>
+      tryParse(`SELECT {
     name := 'foo',
     description := 'bar'
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_15", () => {
@@ -828,7 +960,8 @@ SELECT (select::event);`)).toThrow();
   });
 
   it("test_edgeql_syntax_shape_19 [parser-gap: Expected ')' to close filter]", () => {
-    expect(() => tryParse(`            SELECT
+    expect(() =>
+      tryParse(`            SELECT
                 Issue {
                     number
                 }
@@ -842,39 +975,48 @@ SELECT (select::event);`)).toThrow();
             FILTER
                 (((Issue)).number) = '1';
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_20", () => {
-    expect(() => tryParse(`INSERT Foo{
+    expect(() =>
+      tryParse(`INSERT Foo{
     bar: {
         @weight,
         # this syntax may be valid in the future
         [IS BarLink]@special,
     }
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_21", () => {
-    expect(() => tryParse(`INSERT Foo{
+    expect(() =>
+      tryParse(`INSERT Foo{
     bar := 'some_string_val' {
         @weight := 3
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_23", () => {
-    expect(() => tryParse(`SELECT 'Foo' {
+    expect(() =>
+      tryParse(`SELECT 'Foo' {
     bar := 42
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_24 [parser-gap: Unexpected tokens after statem]", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     spam
 } {
     bar := 42
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_25", () => {
@@ -882,79 +1024,98 @@ SELECT (select::event);`)).toThrow();
   });
 
   it("test_edgeql_syntax_shape_26", () => {
-    expect(() => tryParse(`SELECT Issue{
+    expect(() =>
+      tryParse(`SELECT Issue{
     name,
     related_to *,
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_27", () => {
-    expect(() => tryParse(`SELECT Issue{
+    expect(() =>
+      tryParse(`SELECT Issue{
     name,
     related_to *5,
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_28", () => {
-    expect(() => tryParse(`SELECT Issue{
+    expect(() =>
+      tryParse(`SELECT Issue{
     name,
     related_to *-1,
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_29", () => {
-    expect(() => tryParse(`SELECT Issue{
+    expect(() =>
+      tryParse(`SELECT Issue{
     name,
     related_to *$var,
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_30 [parser-gap: Duplicate shape type filter]", () => {
-    expect(() => tryParse(`SELECT Named {
+    expect(() =>
+      tryParse(`SELECT Named {
     [IS Issue].references[IS File]: {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_32", () => {
-    expect(() => tryParse(`SELECT User{
+    expect(() =>
+      tryParse(`SELECT User{
     name,
     owned := User.<owner[IS LogEntry] {
         body
     },
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_33", () => {
-    expect(() => tryParse(`SELECT User {
+    expect(() =>
+      tryParse(`SELECT User {
     name,
     groups: {
         name,
     } FILTER (.name = 'admin')
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_34", () => {
-    expect(() => tryParse(`SELECT User{
+    expect(() =>
+      tryParse(`SELECT User{
     name,
     owned := User.<owner[IS LogEntry] {
         body
     },
-} FILTER (.<owner.body = 'foo');`)).not.toThrow();
+} FILTER (.<owner.body = 'foo');`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_35", () => {
-    expect(() => tryParse(`SELECT User {
+    expect(() =>
+      tryParse(`SELECT User {
     name,
     groups: {
         name,
     } FILTER (@special = True)
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_36", () => {
-    expect(() => tryParse(`        SELECT User {
+    expect(() =>
+      tryParse(`        SELECT User {
             name,
             groups: {
                 name,
@@ -963,204 +1124,255 @@ SELECT (select::event);`)).toThrow();
             }
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_37", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     foo FILTER (foo > 3),
     bar ORDER BY bar DESC,
     baz OFFSET 1 LIMIT 3,
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_38 [parser-gap: Expected ',' between shape e]", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     spam: {
         @foo FILTER (foo > 3),
         @bar ORDER BY bar DESC,
         @baz OFFSET 1 LIMIT 3,
     },
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_39", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     foo := Foo {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_40", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     multi foo := Foo {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_41", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     single foo := Foo {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_42", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     required multi foo := Foo {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_43", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     required single foo := Foo {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_43a", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     optional multi foo := Foo {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_43b", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     optional single foo := Foo {
         name
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_44", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     required blah foo := Foo {
         name
     }
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_45", () => {
     // Accept the legacy `link {}` shape form alongside the modern
     // `link: {}` form. Upstream EdgeQL rejects this; sqlite-ts deliberately
     // mirrors the dump fixtures which still use the colon-less variant.
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     foo {}
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_46", () => {
     // Same as shape_45: the colon-less nested shape is intentionally
     // supported. See the parser change in parseShapeEntry / link branch.
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     foo {
         bar
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_47", () => {
-    expect(() => tryParse(`UPDATE Foo
+    expect(() =>
+      tryParse(`UPDATE Foo
 SET {
     foo += Bar
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_48", () => {
-    expect(() => tryParse(`UPDATE Foo
+    expect(() =>
+      tryParse(`UPDATE Foo
 SET {
     foo -= Bar
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_49", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     id
     name
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_50", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar: {
         id
     }
     name
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_51", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar := .id
     name
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_52", () => {
-    expect(() => tryParse(`SELECT Foo {
+    expect(() =>
+      tryParse(`SELECT Foo {
     bar: {
         @linkprop
         name
     }
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_53", () => {
-    expect(() => tryParse(`INSERT Foo {
+    expect(() =>
+      tryParse(`INSERT Foo {
     bar: Bar {
         val := 1
     }
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_54", () => {
-    expect(() => tryParse(`SELECT (1 Foo {
+    expect(() =>
+      tryParse(`SELECT (1 Foo {
     foo
     bar
-});`)).toThrow();
+});`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_55", () => {
-    expect(() => tryParse(`SELECT (Foo {
+    expect(() =>
+      tryParse(`SELECT (Foo {
     foo
     bar
-} 2);`)).toThrow();
+} 2);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_56", () => {
-    expect(() => tryParse(`SELECT [1 Foo {
+    expect(() =>
+      tryParse(`SELECT [1 Foo {
     foo
     bar := .foo + 1
-}.bar];`)).toThrow();
+}.bar];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_57", () => {
-    expect(() => tryParse(`SELECT [Foo {
+    expect(() =>
+      tryParse(`SELECT [Foo {
     foo
     bar := .foo + 1
-}.bar 2];`)).toThrow();
+}.bar 2];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_58", () => {
-    expect(() => tryParse(`SELECT somefunc(1 Foo {
+    expect(() =>
+      tryParse(`SELECT somefunc(1 Foo {
     foo
     bar
-});`)).toThrow();
+});`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_59", () => {
-    expect(() => tryParse(`SELECT somefunc(Foo {
+    expect(() =>
+      tryParse(`SELECT somefunc(Foo {
     foo
     bar
-} 2);`)).toThrow();
+} 2);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_shape_60", () => {
@@ -1180,107 +1392,134 @@ SET {
   });
 
   it("test_edgeql_syntax_shape_64", () => {
-    expect(() => tryParse(`        SELECT sys::Branch{};
+    expect(() =>
+      tryParse(`        SELECT sys::Branch{};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_65", () => {
-    expect(() => tryParse(`select Foo{union};
+    expect(() =>
+      tryParse(`select Foo{union};
 select Foo{except};
-select Foo{intersect};`)).not.toThrow();
+select Foo{intersect};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_66", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     bar: {
         @union,
         @except,
         @intersect,
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_67", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     [is Bar].union,
     [is Bar].except,
     [is Bar].intersect,
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_68", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     union := 1,
     except := 1,
     intersect := 1
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_69", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     required union := 1,
     required except := 1,
     required intersect := 1
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_70", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     optional union := 1,
     optional except := 1,
     optional intersect := 1
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_71", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     single union := 1,
     single except := 1,
     single intersect := 1
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_72", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     multi union := 1,
     multi except := 1,
     multi intersect := 1
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_73", () => {
-    expect(() => tryParse(`        select Foo {
+    expect(() =>
+      tryParse(`        select Foo {
             x := select Card { ** } filter .element = 'Air',
             y := select User { ** } filter .name = 'Alice',
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_74", () => {
-    expect(() => tryParse(`        select {
+    expect(() =>
+      tryParse(`        select {
             x := select Card { ** } filter .element = 'Air',
             y := select User { ** } filter .name = 'Alice',
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_splat_01", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     *
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_splat_02", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     **
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_splat_03", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     bar,
     **,
     baz,
@@ -1290,28 +1529,34 @@ select Foo{intersect};`)).not.toThrow();
         foo,
         **,
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_splat_04 [parser-gap: Expected ',' between shape e]", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     Type.*,
     Type.**,
     (Type | OtherType).*,
     (Type & OtherType).*,
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_splat_05 [parser-gap: Expected selected field or com]", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     [is Type].*,
     [is Type].**,
     [is (Type | Type2)].*,
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shape_splat_06 [parser-gap: Expected ',' between shape e]", () => {
-    expect(() => tryParse(`select Foo {
+    expect(() =>
+      tryParse(`select Foo {
     default::Foo[is Type].*,
     default::Foo[is Type].**,
     foo::Bar.*,
@@ -1321,57 +1566,71 @@ select Foo{intersect};`)).not.toThrow();
     sub: {
         (Foo & Bar)[is (Type | Type2)].*,
     },
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_struct_01", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     foo := 1,
     bar := 2
-);`)).not.toThrow();
+);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_struct_02", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     foo := (
         foobaz := 1,
         foobiz := 2,
     ),
     bar := 3
-);`)).not.toThrow();
+);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_struct_03", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     foo: 1,
     bar := 3
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_struct_04", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     foo: (
         bar: 42
     )
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_struct_05", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     foo: (
         'bar': 42
     )
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_struct_06", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     foo := ['bar']
-);`)).not.toThrow();
+);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_struct_07 [parser-gap: Expected 'select', 'insert]", () => {
-    expect(() => tryParse(`WITH
+    expect(() =>
+      tryParse(`WITH
     # unreserved keywords
     abort := 'abort',
     abstract := 'abstract',
@@ -1382,22 +1641,27 @@ select Foo{intersect};`)).not.toThrow();
     populate := 'populate',
     release := 'release',
     reset := 'reset'
-SELECT 1;`)).not.toThrow();
+SELECT 1;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_struct_08", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     # reserved keywords
     if := 1,
     select := 2
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_struct_09", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     # reserved keywords
     seLEct := 2
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_struct_10", () => {
@@ -1417,7 +1681,8 @@ SELECT 1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_01", () => {
-    expect(() => tryParse(`        SELECT Foo.bar;
+    expect(() =>
+      tryParse(`        SELECT Foo.bar;
         SELECT Foo.<bar;
         SELECT Foo.bar@spam;
         SELECT Foo.<bar@spam;
@@ -1425,18 +1690,21 @@ SELECT 1;`)).not.toThrow();
         SELECT Foo.<bar[IS Baz];
         SELECT Foo.<var[IS Baz][IS Spam].bar[IS Foo];
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_02", () => {
-    expect(() => tryParse(`        SELECT Foo.event;
+    expect(() =>
+      tryParse(`        SELECT Foo.event;
         SELECT Foo.<event;
         SELECT Foo.event@action;
         SELECT Foo.<event@action;
         SELECT Foo.event[IS Action];
         SELECT Foo.<event[IS Action];
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_03", () => {
@@ -1452,7 +1720,9 @@ SELECT 1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_06", () => {
-    expect(() => tryParse(`SELECT Foo.bar[IS To];  # unreserved keyword as type name`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT Foo.bar[IS To];  # unreserved keyword as type name`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_07", () => {
@@ -1464,32 +1734,42 @@ SELECT 1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_09", () => {
-    expect(() => tryParse(`        SELECT Foo.bar[2][IS Baz];
+    expect(() =>
+      tryParse(`        SELECT Foo.bar[2][IS Baz];
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_10", () => {
-    expect(() => tryParse(`        SELECT (Foo.bar)[2:4][IS Baz];
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT (Foo.bar)[2:4][IS Baz];
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_11", () => {
-    expect(() => tryParse(`        SELECT (Foo.bar)[2:][IS Baz];
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT (Foo.bar)[2:][IS Baz];
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_12", () => {
-    expect(() => tryParse(`        SELECT (Foo.bar)[:2][IS Baz];
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT (Foo.bar)[:2][IS Baz];
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_13", () => {
-    expect(() => tryParse(`        SELECT (Foo.bar)[IS Baz];
+    expect(() =>
+      tryParse(`        SELECT (Foo.bar)[IS Baz];
         SELECT Foo.bar[IS Baz];
         SELECT Foo.<bar[IS Baz];
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_14", () => {
@@ -1497,13 +1777,17 @@ SELECT 1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_15", () => {
-    expect(() => tryParse(`        SELECT (42).foo;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT (42).foo;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_16", () => {
-    expect(() => tryParse(`SELECT .foo;
-SELECT .<foo;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT .foo;
+SELECT .<foo;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_17", () => {
@@ -1519,18 +1803,22 @@ SELECT .<foo;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_20 [parser-gap: [not supported] bare top-level]", () => {
-    expect(() => tryParse(`SELECT __subject__;
-SELECT __source__;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT __subject__;
+SELECT __source__;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_21", () => {
-    expect(() => tryParse(`SELECT TUP.0;
+    expect(() =>
+      tryParse(`SELECT TUP.0;
 SELECT TUP.0.name;
 SELECT Foo.TUP.0.name;
 
 SELECT TUP.0.1;
 SELECT TUP.0.1.name;
-SELECT Foo.TUP.0.1.name;`)).not.toThrow();
+SELECT Foo.TUP.0.1.name;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_22 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -1546,17 +1834,21 @@ SELECT Foo.TUP.0.1.name;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_25", () => {
-    expect(() => tryParse(`SELECT Foo.bar[IS array<int>];
+    expect(() =>
+      tryParse(`SELECT Foo.bar[IS array<int>];
 SELECT Foo.bar[IS int64];
-SELECT Foo.bar[IS tuple<array<int>, str>];`)).not.toThrow();
+SELECT Foo.bar[IS tuple<array<int>, str>];`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_26", () => {
-    expect(() => tryParse(`SELECT TUP.0;
+    expect(() =>
+      tryParse(`SELECT TUP.0;
 SELECT TUP.0.name;
 SELECT TUP.0.1.name;
 SELECT TUP.0.1.n;
-SELECT Foo.TUP.0.name;`)).not.toThrow();
+SELECT Foo.TUP.0.name;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_27 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -1568,19 +1860,23 @@ SELECT Foo.TUP.0.name;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_29", () => {
-    expect(() => tryParse(`SELECT $0.0;
+    expect(() =>
+      tryParse(`SELECT $0.0;
 SELECT $0.0.name;
 SELECT $0.0.1.name;
 SELECT $0.0.1.n;
 SELECT $abc.0;
 SELECT $abc.0.name;
 SELECT $abc.0.1.name;
-SELECT $abc.0.1.n;`)).not.toThrow();
+SELECT $abc.0.1.n;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_30", () => {
-    expect(() => tryParse(`SELECT $1.1.1;
-SELECT $a.1.1;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT $1.1.1;
+SELECT $a.1.1;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_31", () => {
@@ -1588,40 +1884,52 @@ SELECT $a.1.1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_32 [parser-gap: Expected field name after '.']", () => {
-    expect(() => tryParse(`select Foo.union.except.intersect;
-select Foo.<union[is Foo].<except[is Foo].<intersect[is Foo];`)).not.toThrow();
+    expect(() =>
+      tryParse(`select Foo.union.except.intersect;
+select Foo.<union[is Foo].<except[is Foo].<intersect[is Foo];`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_33", () => {
-    expect(() => tryParse(`select Foo.bar@union;
+    expect(() =>
+      tryParse(`select Foo.bar@union;
 select Foo.bar@except;
-select Foo.bar@intersect;`)).not.toThrow();
+select Foo.bar@intersect;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_path_34 [parser-gap: Unexpected tokens after statem]", () => {
-    expect(() => tryParse(`        SELECT Foo.?>bar;
+    expect(() =>
+      tryParse(`        SELECT Foo.?>bar;
         SELECT Foo.?>bar@spam;
         SELECT Foo.?>bar[IS Baz];
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_type_interpretation_01", () => {
-    expect(() => tryParse(`SELECT Foo[IS Bar].spam;
-SELECT Foo[IS Bar].<ham;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT Foo[IS Bar].spam;
+SELECT Foo[IS Bar].<ham;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_type_interpretation_02", () => {
-    expect(() => tryParse(`        SELECT (Foo + Bar)[IS Spam].ham;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        SELECT (Foo + Bar)[IS Spam].ham;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_map_03", () => {
-    expect(() => tryParse(`SELECT [
+    expect(() =>
+      tryParse(`SELECT [
     'foo':= {
         bar := 42
     }
-];`)).toThrow();
+];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_map_05", () => {
@@ -1629,45 +1937,55 @@ SELECT Foo[IS Bar].<ham;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_sequence_01", () => {
-    expect(() => tryParse(`        SELECT (User.name);  # not a sequence
+    expect(() =>
+      tryParse(`        SELECT (User.name);  # not a sequence
         SELECT (User.name,);
         SELECT (User.name, User.age, 'comment');
         SELECT (User.name, User.age, 'comment',);
         SELECT (User.name != 'Alice', User.age < 42, 'comment');
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_array_01", () => {
-    expect(() => tryParse(`SELECT [1];
+    expect(() =>
+      tryParse(`SELECT [1];
 SELECT [1, 2, 3, 4, 5];
 SELECT [User.name, User.description];
-SELECT [User.name, User.description, 'filler'];`)).not.toThrow();
+SELECT [User.name, User.description, 'filler'];`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_array_02", () => {
-    expect(() => tryParse(`        SELECT [1, 2, 3, 4, 5][2];
+    expect(() =>
+      tryParse(`        SELECT [1, 2, 3, 4, 5][2];
         SELECT [1, 2, 3, 4, 5][2:4];
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_array_03", () => {
-    expect(() => tryParse(`SELECT ([1, 2, 3, 4, 5])[2];
+    expect(() =>
+      tryParse(`SELECT ([1, 2, 3, 4, 5])[2];
 SELECT ([1, 2, 3, 4, 5])[2:4];
 SELECT ([1, 2, 3, 4, 5])[2:];
 SELECT ([1, 2, 3, 4, 5])[:2];
 SELECT ([1, 2, 3, 4, 5])[2:-1];
 SELECT ([1, 2, 3, 4, 5])[-2:];
-SELECT ([1, 2, 3, 4, 5])[:-2];`)).not.toThrow();
+SELECT ([1, 2, 3, 4, 5])[:-2];`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_array_04", () => {
-    expect(() => tryParse(`SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[Bar.setting];
+    expect(() =>
+      tryParse(`SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[Bar.setting];
 SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[1:Bar.setting];
 SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[Bar.setting:];
 SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[:Bar.setting];
-SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[:-Bar.setting];`)).not.toThrow();
+SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[:-Bar.setting];`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_array_05", () => {
@@ -1675,41 +1993,53 @@ SELECT ([Foo.bar, Foo.baz, Foo.spam, Foo.ham])[:-Bar.setting];`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_array_06", () => {
-    expect(() => tryParse(`SELECT [
+    expect(() =>
+      tryParse(`SELECT [
     1
     User
-];`)).toThrow();
+];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_array_07", () => {
-    expect(() => tryParse(`SELECT [
+    expect(() =>
+      tryParse(`SELECT [
     User
     1
-];`)).toThrow();
+];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_array_08", () => {
-    expect(() => tryParse(`SELECT [
+    expect(() =>
+      tryParse(`SELECT [
     False
     True
-];`)).toThrow();
+];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_array_09", () => {
-    expect(() => tryParse(`SELECT [
+    expect(() =>
+      tryParse(`SELECT [
     'a'
     'b'
-];`)).toThrow();
+];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_array_10", () => {
-    expect(() => tryParse(`WITH x := 2
-SELECT [1, 2, 3][1 x];`)).toThrow();
+    expect(() =>
+      tryParse(`WITH x := 2
+SELECT [1, 2, 3][1 x];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_array_11", () => {
-    expect(() => tryParse(`WITH x := 2
-SELECT [1, 2, 3][x 1];`)).toThrow();
+    expect(() =>
+      tryParse(`WITH x := 2
+SELECT [1, 2, 3][x 1];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_array_12", () => {
@@ -1729,17 +2059,21 @@ SELECT [1, 2, 3][x 1];`)).toThrow();
   });
 
   it("test_edgeql_syntax_cast_02", () => {
-    expect(() => tryParse(`        SELECT <float64> (((SELECT User.age)));
+    expect(() =>
+      tryParse(`        SELECT <float64> (((SELECT User.age)));
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_cast_03", () => {
-    expect(() => tryParse(`SELECT
+    expect(() =>
+      tryParse(`SELECT
     <User {name, description}> [
         'name' -> 'Alice',
         'description' -> 'sample'
-    ];`)).toThrow();
+    ];`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_cast_04", () => {
@@ -1747,28 +2081,36 @@ SELECT [1, 2, 3][x 1];`)).toThrow();
   });
 
   it("test_edgeql_syntax_cast_05", () => {
-    expect(() => tryParse(`SELECT <array<int64>>$1;
+    expect(() =>
+      tryParse(`SELECT <array<int64>>$1;
 SELECT <std::array<std::str>>$1;
-SELECT <optional std::array<std::str>>$1;`)).not.toThrow();
+SELECT <optional std::array<std::str>>$1;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_cast_07", () => {
-    expect(() => tryParse(`SELECT <tuple<Foo, int, str>>$1;
-SELECT <std::tuple<obj: Foo, count: int, name: str>>$1;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT <tuple<Foo, int, str>>$1;
+SELECT <std::tuple<obj: Foo, count: int, name: str>>$1;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_cast_08", () => {
-    expect(() => tryParse(`        SELECT <array<int64,>>$1;
+    expect(() =>
+      tryParse(`        SELECT <array<int64,>>$1;
         SELECT <std::array<std::str,>>$1;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_cast_09", () => {
-    expect(() => tryParse(`        SELECT <tuple<Foo, int, str,>>$1;
+    expect(() =>
+      tryParse(`        SELECT <tuple<Foo, int, str,>>$1;
         SELECT <std::tuple<obj: Foo, count: int, name: str,>>$1;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_cast_10", () => {
@@ -1776,7 +2118,8 @@ SELECT <std::tuple<obj: Foo, count: int, name: str>>$1;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_with_01 [parser-gap: Expected 'select', 'insert]", () => {
-    expect(() => tryParse(`        WITH
+    expect(() =>
+      tryParse(`        WITH
             extra AS MODULE lib.extra,
             foo := Bar.foo,
             baz := (SELECT extra::Foo.baz)
@@ -1785,32 +2128,41 @@ SELECT <std::tuple<obj: Foo, count: int, name: str>>$1;`)).not.toThrow();
             ham := baz
         } FILTER (foo = 'special');
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_with_02", () => {
-    expect(() => tryParse(`WITH
+    expect(() =>
+      tryParse(`WITH
     foo := Bar.foo,
     baz := (SELECT Foo.baz)
-COMMIT;`)).toThrow();
+COMMIT;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_with_03", () => {
-    expect(() => tryParse(`WITH MODULE welp
-CREATE DATABASE sample;`)).toThrow();
+    expect(() =>
+      tryParse(`WITH MODULE welp
+CREATE DATABASE sample;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_with_04", () => {
-    expect(() => tryParse(`WITH MODULE welp
-DROP DATABASE sample;`)).toThrow();
+    expect(() =>
+      tryParse(`WITH MODULE welp
+DROP DATABASE sample;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_with_06 [parser-gap: Expected module name after 'm]", () => {
-    expect(() => tryParse(`        WITH MODULE abstract SELECT Foo;
+    expect(() =>
+      tryParse(`        WITH MODULE abstract SELECT Foo;
         WITH MODULE all SELECT Foo;
         WITH MODULE all.abstract.bar SELECT Foo;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_with_07", () => {
@@ -1822,7 +2174,8 @@ DROP DATABASE sample;`)).toThrow();
   });
 
   it("test_edgeql_syntax_with_09", () => {
-    expect(() => tryParse(`        WITH MODULE foo, SELECT Bar;
+    expect(() =>
+      tryParse(`        WITH MODULE foo, SELECT Bar;
         WITH
             MODULE foo,
             x := {1, 2, 3},
@@ -1832,7 +2185,8 @@ DROP DATABASE sample;`)).toThrow();
             MODULE foo,
         SELECT Bar;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_with_10", () => {
@@ -1848,19 +2202,25 @@ DROP DATABASE sample;`)).toThrow();
   });
 
   it("test_edgeql_syntax_with_13", () => {
-    expect(() => tryParse(`        with x := select Card filter .element = 'Air' select x;
+    expect(() =>
+      tryParse(`        with x := select Card filter .element = 'Air' select x;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_detached_01", () => {
-    expect(() => tryParse(`WITH F := DETACHED Foo
-SELECT F;`)).not.toThrow();
+    expect(() =>
+      tryParse(`WITH F := DETACHED Foo
+SELECT F;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_detached_02", () => {
-    expect(() => tryParse(`WITH F := DETACHED (SELECT Foo FILTER Bar)
-SELECT F;`)).not.toThrow();
+    expect(() =>
+      tryParse(`WITH F := DETACHED (SELECT Foo FILTER Bar)
+SELECT F;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_detached_03", () => {
@@ -1868,19 +2228,24 @@ SELECT F;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_detached_04", () => {
-    expect(() => tryParse(`        SELECT DETACHED Foo.bar;
+    expect(() =>
+      tryParse(`        SELECT DETACHED Foo.bar;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_detached_05", () => {
-    expect(() => tryParse(`        SELECT DETACHED mod::Foo.bar;
+    expect(() =>
+      tryParse(`        SELECT DETACHED mod::Foo.bar;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_01", () => {
-    expect(() => tryParse(`SELECT 42;
+    expect(() =>
+      tryParse(`SELECT 42;
 SELECT User{name};
 SELECT User{name}
     FILTER (User.age > 42);
@@ -1891,38 +2256,46 @@ SELECT User{name}
 SELECT User{name}
     LIMIT 5;
 SELECT User{name}
-    OFFSET 2 LIMIT 5;`)).not.toThrow();
+    OFFSET 2 LIMIT 5;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_02", () => {
-    expect(() => tryParse(`        SELECT User{name} ORDER BY User.name;
+    expect(() =>
+      tryParse(`        SELECT User{name} ORDER BY User.name;
         SELECT User{name} ORDER BY User.name ASC;
         SELECT User{name} ORDER BY User.name DESC;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_03", () => {
-    expect(() => tryParse(`        SELECT User{name, age} ORDER BY User.name THEN User.age;
+    expect(() =>
+      tryParse(`        SELECT User{name, age} ORDER BY User.name THEN User.age;
         SELECT User{name, age} ORDER BY User.name THEN User.age DESC;
         SELECT User{name, age} ORDER BY User.name ASC THEN User.age DESC;
         SELECT User{name, age} ORDER BY User.name DESC THEN User.age ASC;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_04", () => {
-    expect(() => tryParse(`SELECT
+    expect(() =>
+      tryParse(`SELECT
     User.name
 FILTER
     (User.age > 42)
 ORDER BY
     User.name ASC
-OFFSET 2 LIMIT 5;`)).not.toThrow();
+OFFSET 2 LIMIT 5;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_05", () => {
-    expect(() => tryParse(`SELECT 42;
+    expect(() =>
+      tryParse(`SELECT 42;
 SELECT User{name};
 SELECT User{name}
     FILTER (User.age > 42);
@@ -1933,17 +2306,20 @@ SELECT User{name}
 SELECT User{name}
     LIMIT 5;
 SELECT User{name}
-    OFFSET 2 LIMIT 5;`)).not.toThrow();
+    OFFSET 2 LIMIT 5;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_06", () => {
-    expect(() => tryParse(`SELECT
+    expect(() =>
+      tryParse(`SELECT
     User.name
 FILTER
     (User.age > 42)
 ORDER BY
     User.name ASC
-OFFSET 2 LIMIT 5;`)).not.toThrow();
+OFFSET 2 LIMIT 5;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_07", () => {
@@ -1951,34 +2327,44 @@ OFFSET 2 LIMIT 5;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_08", () => {
-    expect(() => tryParse(`SELECT User{name} ORDER BY User.name ASC;
+    expect(() =>
+      tryParse(`SELECT User{name} ORDER BY User.name ASC;
 SELECT User{name} ORDER BY User.name ASC;
 SELECT User{name} OFFSET 2;
 SELECT User{name} LIMIT 2;
-SELECT User{name} OFFSET 2 LIMIT 5;`)).not.toThrow();
+SELECT User{name} OFFSET 2 LIMIT 5;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_09", () => {
-    expect(() => tryParse(`SELECT Issue {name} ORDER BY Issue.priority.name ASC EMPTY FIRST;
-SELECT Issue {name} ORDER BY Issue.priority.name DESC EMPTY LAST;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT Issue {name} ORDER BY Issue.priority.name ASC EMPTY FIRST;
+SELECT Issue {name} ORDER BY Issue.priority.name DESC EMPTY LAST;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_10", () => {
-    expect(() => tryParse(`SELECT User.name OFFSET $1;
+    expect(() =>
+      tryParse(`SELECT User.name OFFSET $1;
 SELECT User.name LIMIT $2;
-SELECT User.name OFFSET $1 LIMIT $2;`)).not.toThrow();
+SELECT User.name OFFSET $1 LIMIT $2;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_11", () => {
-    expect(() => tryParse(`SELECT User.name OFFSET Foo.bar;
+    expect(() =>
+      tryParse(`SELECT User.name OFFSET Foo.bar;
 SELECT User.name LIMIT (Foo.bar * 10);
-SELECT User.name OFFSET Foo.bar LIMIT (Foo.bar * 10);`)).not.toThrow();
+SELECT User.name OFFSET Foo.bar LIMIT (Foo.bar * 10);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_select_12", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     SELECT Foo bar
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_select_13 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -1990,43 +2376,54 @@ SELECT User.name OFFSET Foo.bar LIMIT (Foo.bar * 10);`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_01", () => {
-    expect(() => tryParse(`GROUP User
-BY .name;`)).not.toThrow();
+    expect(() =>
+      tryParse(`GROUP User
+BY .name;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_02", () => {
-    expect(() => tryParse(`# define and mask aliases
+    expect(() =>
+      tryParse(`# define and mask aliases
 WITH
     _1 := User
 GROUP _2 := _1
 USING _ :=  _2.name
-BY _;`)).not.toThrow();
+BY _;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_03", () => {
-    expect(() => tryParse(`GROUP User := User
+    expect(() =>
+      tryParse(`GROUP User := User
 USING G :=  User.name
-BY G;`)).not.toThrow();
+BY G;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_04", () => {
-    expect(() => tryParse(`GROUP F := User.friends
-BY .name;`)).not.toThrow();
+    expect(() =>
+      tryParse(`GROUP F := User.friends
+BY .name;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_05", () => {
-    expect(() => tryParse(`GROUP
+    expect(() =>
+      tryParse(`GROUP
     User
 USING
     G1 := User.name,
     G2 := User.age,
     G3 := User.rank,
     G4 := User.status
-BY G1, G2, G3, G4;`)).not.toThrow();
+BY G1, G2, G3, G4;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_06", () => {
-    expect(() => tryParse(`        GROUP
+    expect(() =>
+      tryParse(`        GROUP
             User
         BY
             .name,
@@ -2041,11 +2438,13 @@ BY G1, G2, G3, G4;`)).not.toThrow();
             .rank,
             .status,;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_07", () => {
-    expect(() => tryParse(`        GROUP
+    expect(() =>
+      tryParse(`        GROUP
             User
         USING
             letter := (.name)[0],
@@ -2055,11 +2454,13 @@ BY G1, G2, G3, G4;`)).not.toThrow();
             .rank,
             .status;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_08", () => {
-    expect(() => tryParse(`        GROUP
+    expect(() =>
+      tryParse(`        GROUP
             User
         USING
             letter := (.name)[0]
@@ -2070,11 +2471,13 @@ BY G1, G2, G3, G4;`)).not.toThrow();
             letter := (.name)[0]
         BY {letter, .age, ROLLUP(.rank, .status),};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_09", () => {
-    expect(() => tryParse(`        GROUP
+    expect(() =>
+      tryParse(`        GROUP
             User
         USING
             letter := (.name)[0]
@@ -2085,11 +2488,13 @@ BY G1, G2, G3, G4;`)).not.toThrow();
             letter := (.name)[0]
         BY CUBE(letter, .age, .rank, .status,);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_10", () => {
-    expect(() => tryParse(`        GROUP
+    expect(() =>
+      tryParse(`        GROUP
             User
         USING
             letter := (.name)[0]
@@ -2100,18 +2505,22 @@ BY G1, G2, G3, G4;`)).not.toThrow();
             letter := (.name)[0]
         BY {letter, {.age, CUBE(.rank, .status,)},};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_11 [parser-gap: Expected '.field' or USING a]", () => {
-    expect(() => tryParse(`GROUP
+    expect(() =>
+      tryParse(`GROUP
     User
 BY
-    (.name, .age);`)).not.toThrow();
+    (.name, .age);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_12", () => {
-    expect(() => tryParse(`        GROUP
+    expect(() =>
+      tryParse(`        GROUP
             User
         BY
             {(.name, .age), (.rank, .status)};
@@ -2120,11 +2529,13 @@ BY
         BY
             {(.name, .age), (.rank, .status),};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_group_13 [parser-gap: Expected '.field' or USING a]", () => {
-    expect(() => tryParse(`        GROUP
+    expect(() =>
+      tryParse(`        GROUP
             User
         BY
             ROLLUP((.name, .age), (.rank, .status));
@@ -2133,7 +2544,8 @@ BY
         BY
             ROLLUP((.name, .age), (.rank, .status),);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_01", () => {
@@ -2149,18 +2561,22 @@ BY
   });
 
   it("test_edgeql_syntax_set_04", () => {
-    expect(() => tryParse(`        SELECT 2 * (1 UNION 2 UNION 1);
+    expect(() =>
+      tryParse(`        SELECT 2 * (1 UNION 2 UNION 1);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_05", () => {
-    expect(() => tryParse(`SELECT {};
+    expect(() =>
+      tryParse(`SELECT {};
 SELECT {1};
 SELECT {1, 2};
 SELECT {1, 2, {}, {1, 3}};
 SELECT {Foo.bar, Foo.baz};
-SELECT {Foo.bar, Foo.baz}.spam;`)).not.toThrow();
+SELECT {Foo.bar, Foo.baz}.spam;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_06", () => {
@@ -2172,15 +2588,19 @@ SELECT {Foo.bar, Foo.baz}.spam;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_08", () => {
-    expect(() => tryParse(`        SELECT 1 EXCEPT 2 EXCEPT 3;
+    expect(() =>
+      tryParse(`        SELECT 1 EXCEPT 2 EXCEPT 3;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_09", () => {
-    expect(() => tryParse(`        SELECT 1 EXCEPT 2 UNION 3;
+    expect(() =>
+      tryParse(`        SELECT 1 EXCEPT 2 UNION 3;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_10", () => {
@@ -2188,33 +2608,43 @@ SELECT {Foo.bar, Foo.baz}.spam;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_11", () => {
-    expect(() => tryParse(`        SELECT 1 INTERSECT 2 INTERSECT 3;
+    expect(() =>
+      tryParse(`        SELECT 1 INTERSECT 2 INTERSECT 3;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_12", () => {
-    expect(() => tryParse(`        SELECT 1 UNION 2 INTERSECT 3;
+    expect(() =>
+      tryParse(`        SELECT 1 UNION 2 INTERSECT 3;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_13", () => {
-    expect(() => tryParse(`        SELECT 1 INTERSECT 2 EXCEPT 3 INTERSECT 4 UNION 5;
+    expect(() =>
+      tryParse(`        SELECT 1 INTERSECT 2 EXCEPT 3 INTERSECT 4 UNION 5;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_01", () => {
-    expect(() => tryParse(`INSERT Foo;
+    expect(() =>
+      tryParse(`INSERT Foo;
 SELECT (INSERT Foo);
-SELECT (INSERT Foo) {bar};`)).not.toThrow();
+SELECT (INSERT Foo) {bar};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_02", () => {
-    expect(() => tryParse(`INSERT Foo{bar := 42};
+    expect(() =>
+      tryParse(`INSERT Foo{bar := 42};
 SELECT (INSERT Foo{bar := 42});
-SELECT (INSERT Foo{bar := 42}) {bar};`)).not.toThrow();
+SELECT (INSERT Foo{bar := 42}) {bar};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_03", () => {
@@ -2250,14 +2680,17 @@ SELECT (INSERT Foo{bar := 42}) {bar};`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_13", () => {
-    expect(() => tryParse(`INSERT Foo{
+    expect(() =>
+      tryParse(`INSERT Foo{
     bar := 42,
     baz := (SELECT Baz FILTER (Baz.spam = 'ham'))
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_15", () => {
-    expect(() => tryParse(`INSERT Foo{
+    expect(() =>
+      tryParse(`INSERT Foo{
     bar := 42,
     baz := 'spam' {
         @weight := 2,
@@ -2269,58 +2702,73 @@ INSERT Foo{
     baz := 24 {
         @weight := 2,
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_16", () => {
-    expect(() => tryParse(`INSERT Foo{
+    expect(() =>
+      tryParse(`INSERT Foo{
     bar := 42,
     baz: 'spam' {
         @weight := 2,
     }
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_insert_17", () => {
-    expect(() => tryParse(`INSERT Foo{
+    expect(() =>
+      tryParse(`INSERT Foo{
     bar := 42,
     baz := (
         SELECT Baz{
             @weight := 2
         } FILTER (Baz.spam = 'ham')
     )
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_18", () => {
-    expect(() => tryParse(`INSERT Foo {
+    expect(() =>
+      tryParse(`INSERT Foo {
     bar := 42,
-} UNLESS CONFLICT;`)).not.toThrow();
+} UNLESS CONFLICT;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_19", () => {
-    expect(() => tryParse(`INSERT Foo {
+    expect(() =>
+      tryParse(`INSERT Foo {
     bar := 42,
-} UNLESS CONFLICT ON .bar;`)).not.toThrow();
+} UNLESS CONFLICT ON .bar;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_20", () => {
-    expect(() => tryParse(`INSERT Foo {
+    expect(() =>
+      tryParse(`INSERT Foo {
     bar := 42,
 } UNLESS CONFLICT ON .bar
-ELSE (SELECT Foo);`)).not.toThrow();
+ELSE (SELECT Foo);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insert_21", () => {
-    expect(() => tryParse(`INSERT Foo {
+    expect(() =>
+      tryParse(`INSERT Foo {
     bar := 42,
-} UNLESS CONFLICT ELSE (SELECT Foo);`)).toThrow();
+} UNLESS CONFLICT ELSE (SELECT Foo);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_insert_22", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     INSERT Foo bar
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntex_insert_23", () => {
@@ -2344,29 +2792,37 @@ ELSE (SELECT Foo);`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_delete_05", () => {
-    expect(() => tryParse(`DELETE
+    expect(() =>
+      tryParse(`DELETE
     User.name
 FILTER
     (User.age > 42)
 ORDER BY
     User.name ASC
-OFFSET 2 LIMIT 5;`)).not.toThrow();
+OFFSET 2 LIMIT 5;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_delete_06", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     DELETE Foo bar
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_update_01", () => {
-    expect(() => tryParse(`UPDATE Foo SET {bar := 42};
-UPDATE Foo FILTER (Foo.bar = 24) SET {bar := 42};`)).not.toThrow();
+    expect(() =>
+      tryParse(`UPDATE Foo SET {bar := 42};
+UPDATE Foo FILTER (Foo.bar = 24) SET {bar := 42};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_update_02", () => {
-    expect(() => tryParse(`UPDATE Foo SET {bar := 42};
-UPDATE Foo FILTER (Foo.bar = 24) SET {bar := 42};`)).not.toThrow();
+    expect(() =>
+      tryParse(`UPDATE Foo SET {bar := 42};
+UPDATE Foo FILTER (Foo.bar = 24) SET {bar := 42};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_update_03", () => {
@@ -2378,7 +2834,8 @@ UPDATE Foo FILTER (Foo.bar = 24) SET {bar := 42};`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_update_07 [parser-gap: Expected assignment operator a]", () => {
-    expect(() => tryParse(`UPDATE Foo
+    expect(() =>
+      tryParse(`UPDATE Foo
 FILTER (Foo.bar = 24)
 SET {
     bar := 42,
@@ -2386,59 +2843,75 @@ SET {
     ham: {
         taste := 'yummy'
     }
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_update_08", () => {
-    expect(() => tryParse(`WITH x := (
+    expect(() =>
+      tryParse(`WITH x := (
     UPDATE Foo
     FILTER .bar bad = 24
     SET {
         bar := 42,
     };
 )
-SELECT x`)).toThrow();
+SELECT x`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_insertfor_01", () => {
-    expect(() => tryParse(`FOR name IN {'a', 'b', 'c'}
+    expect(() =>
+      tryParse(`FOR name IN {'a', 'b', 'c'}
 UNION (INSERT User{name := name});
 
 FOR name IN {'a', 'b', Foo.bar, Foo.baz}
-UNION (INSERT User{name := name});`)).not.toThrow();
+UNION (INSERT User{name := name});`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insertfor_02", () => {
-    expect(() => tryParse(`        FOR name IN {'a' UNION 'b' UNION 'c'}
+    expect(() =>
+      tryParse(`        FOR name IN {'a' UNION 'b' UNION 'c'}
         UNION (INSERT User{name := name});
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insertfor_03", () => {
-    expect(() => tryParse(`FOR name IN {(SELECT Foo.bar FILTER (Foo.bar.baz = TRUE))}
-UNION (INSERT Foo{name := name});`)).not.toThrow();
+    expect(() =>
+      tryParse(`FOR name IN {(SELECT Foo.bar FILTER (Foo.bar.baz = TRUE))}
+UNION (INSERT Foo{name := name});`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insertfor_04", () => {
-    expect(() => tryParse(`FOR bar IN {(INSERT Bar{name := 'bar'})}
-UNION (INSERT Foo{name := bar.name});`)).not.toThrow();
+    expect(() =>
+      tryParse(`FOR bar IN {(INSERT Bar{name := 'bar'})}
+UNION (INSERT Foo{name := bar.name});`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insertfor_05", () => {
-    expect(() => tryParse(`FOR bar IN {(DELETE Bar)}
-UNION (INSERT Foo{name := bar.name});`)).not.toThrow();
+    expect(() =>
+      tryParse(`FOR bar IN {(DELETE Bar)}
+UNION (INSERT Foo{name := bar.name});`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_insertfor_06", () => {
-    expect(() => tryParse(`FOR bar IN {(
+    expect(() =>
+      tryParse(`FOR bar IN {(
     UPDATE Bar SET {name := (name ++ 'bar')}
 )}
-UNION (INSERT Foo{name := bar.name});`)).not.toThrow();
+UNION (INSERT Foo{name := bar.name});`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_selectfor_01 [parser-gap: Expected ')' to close filter]", () => {
-    expect(() => tryParse(`FOR x IN {(('Alice', 'White') UNION ('Bob', 'Green'))}
+    expect(() =>
+      tryParse(`FOR x IN {(('Alice', 'White') UNION ('Bob', 'Green'))}
 UNION (
     SELECT User{first_tname, last_name, age}
     FILTER (
@@ -2446,7 +2919,8 @@ UNION (
         AND
         (.last_name = x.1)
     )
-);`)).not.toThrow();
+);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_selectfor_02", () => {
@@ -2454,22 +2928,28 @@ UNION (
   });
 
   it("test_edgeql_syntax_selectfor_03", () => {
-    expect(() => tryParse(`WITH x := (
+    expect(() =>
+      tryParse(`WITH x := (
     FOR s IN array_unpack([1, 2, 3]) UNION s
 )
-SELECT x;`)).not.toThrow();
+SELECT x;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_selectfor_04", () => {
-    expect(() => tryParse(`WITH x := (
+    expect(() =>
+      tryParse(`WITH x := (
     FOR s IN {array_unpack([1, 2, 3])} UNION s bad
 )
-SELECT x;`)).toThrow();
+SELECT x;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_selectfor_05", () => {
-    expect(() => tryParse(`FOR x IN {1, 2, 3}
-UNION y := (x + 2);`)).toThrow();
+    expect(() =>
+      tryParse(`FOR x IN {1, 2, 3}
+UNION y := (x + 2);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_selectfor_06 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
@@ -2529,7 +3009,8 @@ UNION y := (x + 2);`)).toThrow();
   });
 
   it("test_edgeql_syntax_deletefor_01 [parser-gap: Expected ')' to close filter]", () => {
-    expect(() => tryParse(`FOR x IN {(('Alice', 'White') UNION ('Bob', 'Green'))}
+    expect(() =>
+      tryParse(`FOR x IN {(('Alice', 'White') UNION ('Bob', 'Green'))}
 UNION (
     DELETE (
         SELECT User
@@ -2539,46 +3020,60 @@ UNION (
             (.last_name = x.1)
         )
     )
-);`)).not.toThrow();
+);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_updatefor_01 [parser-gap: Expected ')' to close filter]", () => {
-    expect(() => tryParse(`FOR x IN {((1, 'a') UNION (2, 'b'))}
-UNION (UPDATE Foo FILTER (Foo.id = x.0) SET {bar := x.1});`)).not.toThrow();
+    expect(() =>
+      tryParse(`FOR x IN {((1, 'a') UNION (2, 'b'))}
+UNION (UPDATE Foo FILTER (Foo.id = x.0) SET {bar := x.1});`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shorterfor_01", () => {
-    expect(() => tryParse(`FOR x IN {1}
-INSERT Foo { x := x };`)).not.toThrow();
+    expect(() =>
+      tryParse(`FOR x IN {1}
+INSERT Foo { x := x };`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_shorterfor_02", () => {
-    expect(() => tryParse(`FOR x IN 1
+    expect(() =>
+      tryParse(`FOR x IN 1
 WITH y := x
-INSERT Foo { y := y };`)).not.toThrow();
+INSERT Foo { y := y };`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_coalesce_01", () => {
-    expect(() => tryParse(`SELECT (a ?? x);
+    expect(() =>
+      tryParse(`SELECT (a ?? x);
 SELECT (a ?? x.a);
 SELECT (a ?? x.a[IS ABC]);
-SELECT ((a ?? x.a[IS ABC]@aaa) + 1);`)).not.toThrow();
+SELECT ((a ?? x.a[IS ABC]@aaa) + 1);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_01", () => {
-    expect(() => tryParse(`SELECT foo();
+    expect(() =>
+      tryParse(`SELECT foo();
 SELECT bar(User.name);
 SELECT baz(User.name, User.age);
-SELECT str_lower(User.name);`)).not.toThrow();
+SELECT str_lower(User.name);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_02", () => {
-    expect(() => tryParse(`SELECT str_lower(string := User.name);
-SELECT baz(age := User.age, of := User.name, \`select\` := 1);`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT str_lower(string := User.name);
+SELECT baz(age := User.age, of := User.name, \`select\` := 1);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_03", () => {
-    expect(() => tryParse(`SELECT some_agg(User.name ORDER BY User.age ASC);
+    expect(() =>
+      tryParse(`SELECT some_agg(User.name ORDER BY User.age ASC);
 SELECT some_agg(User.name
                 FILTER (strlen(User.name) > 2)
                 ORDER BY User.age DESC);
@@ -2590,11 +3085,13 @@ SELECT some_agg(
     User.name
     FILTER (strlen(User.name) > 2)
     ORDER BY User.age DESC THEN User.email ASC
-);`)).not.toThrow();
+);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_04", () => {
-    expect(() => tryParse(`SELECT some_agg(User.name) OVER (ORDER BY User.age ASC);
+    expect(() =>
+      tryParse(`SELECT some_agg(User.name) OVER (ORDER BY User.age ASC);
 SELECT some_agg(User.name) OVER (
     PARTITION BY strlen(User.name)
     ORDER BY User.age ASC);
@@ -2603,7 +3100,8 @@ SELECT some_agg(User.name) OVER (
     ORDER BY User.age ASC);
 SELECT some_agg(User.name) OVER (
     PARTITION BY User.email, User.age
-    ORDER BY User.age ASC THEN User.name ASC);`)).toThrow();
+    ORDER BY User.age ASC THEN User.name ASC);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_function_05", () => {
@@ -2623,12 +3121,14 @@ SELECT some_agg(User.name) OVER (
   });
 
   it("test_edgeql_syntax_function_09", () => {
-    expect(() => tryParse(`        SELECT bar(User.name,);
+    expect(() =>
+      tryParse(`        SELECT bar(User.name,);
         SELECT baz(User.name, User.age,);
         SELECT str_lower(string := User.name,);
         SELECT baz(age := User.age, of := User.name, \`select\` := 1,);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_10", () => {
@@ -2640,39 +3140,51 @@ SELECT some_agg(User.name) OVER (
   });
 
   it("test_edgeql_syntax_function_12", () => {
-    expect(() => tryParse(`        SELECT count(SELECT 1);
+    expect(() =>
+      tryParse(`        SELECT count(SELECT 1);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_13", () => {
-    expect(() => tryParse(`        SELECT count(INSERT Foo);
+    expect(() =>
+      tryParse(`        SELECT count(INSERT Foo);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_14", () => {
-    expect(() => tryParse(`        SELECT count(UPDATE Foo SET {bar := 1});
+    expect(() =>
+      tryParse(`        SELECT count(UPDATE Foo SET {bar := 1});
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_15", () => {
-    expect(() => tryParse(`        SELECT count(DELETE Foo);
+    expect(() =>
+      tryParse(`        SELECT count(DELETE Foo);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_16", () => {
-    expect(() => tryParse(`        SELECT count(FOR X IN {Foo} UNION X);
+    expect(() =>
+      tryParse(`        SELECT count(FOR X IN {Foo} UNION X);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_17", () => {
-    expect(() => tryParse(`        SELECT count(WITH X := 1 SELECT Foo FILTER .bar = X);
+    expect(() =>
+      tryParse(`        SELECT count(WITH X := 1 SELECT Foo FILTER .bar = X);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_18", () => {
@@ -2680,9 +3192,11 @@ SELECT some_agg(User.name) OVER (
   });
 
   it("test_edgeql_syntax_function_19", () => {
-    expect(() => tryParse(`        SELECT ((((count(SELECT 1)))));
+    expect(() =>
+      tryParse(`        SELECT ((((count(SELECT 1)))));
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_20", () => {
@@ -2694,9 +3208,11 @@ SELECT some_agg(User.name) OVER (
   });
 
   it("test_edgeql_syntax_function_22", () => {
-    expect(() => tryParse(`        SELECT count((((((((((SELECT 1))))))))));
+    expect(() =>
+      tryParse(`        SELECT count((((((((((SELECT 1))))))))));
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_function_23", () => {
@@ -2728,13 +3244,17 @@ SELECT some_agg(User.name) OVER (
   });
 
   it("test_edgeql_syntax_tuple_01", () => {
-    expect(() => tryParse(`SELECT ('foo', 42).0;
-SELECT ('foo', 42).1;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT ('foo', 42).0;
+SELECT ('foo', 42).1;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_02", () => {
-    expect(() => tryParse(`SELECT (name := 'foo', val := 42).name;
-SELECT (name := 'foo', val := 42).val;`)).not.toThrow();
+    expect(() =>
+      tryParse(`SELECT (name := 'foo', val := 42).name;
+SELECT (name := 'foo', val := 42).val;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_03", () => {
@@ -2742,31 +3262,39 @@ SELECT (name := 'foo', val := 42).val;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_04", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     1
     User
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_tuple_05", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     User
     1
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_tuple_06", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     False
     True
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_tuple_07", () => {
-    expect(() => tryParse(`SELECT (
+    expect(() =>
+      tryParse(`SELECT (
     'a'
     'b'
-);`)).toThrow();
+);`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_tuple_08", () => {
@@ -2798,9 +3326,11 @@ SELECT (name := 'foo', val := 42).val;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_15", () => {
-    expect(() => tryParse(`        SELECT (0, (((1, 2), 3)), 4);
+    expect(() =>
+      tryParse(`        SELECT (0, (((1, 2), 3)), 4);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_16", () => {
@@ -2808,24 +3338,30 @@ SELECT (name := 'foo', val := 42).val;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_17", () => {
-    expect(() => tryParse(`        SELECT ((((1, 2))));
+    expect(() =>
+      tryParse(`        SELECT ((((1, 2))));
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_18", () => {
-    expect(() => tryParse(`        SELECT (select Foo, delete Foo, update Foo set { x := 1 },
+    expect(() =>
+      tryParse(`        SELECT (select Foo, delete Foo, update Foo set { x := 1 },
                 for x in y select x);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_tuple_19", () => {
-    expect(() => tryParse(`        SELECT (x := select Foo, y := delete Foo,
+    expect(() =>
+      tryParse(`        SELECT (x := select Foo, y := delete Foo,
                 z := update Foo set { x := 1 },
                 w := for x in y select x);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_introspect_01", () => {
@@ -2849,10 +3385,12 @@ SELECT (name := 'foo', val := 42).val;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_database_01", () => {
-    expect(() => tryParse(`CREATE DATABASE mytestdb;
+    expect(() =>
+      tryParse(`CREATE DATABASE mytestdb;
 DROP DATABASE mytestdb;
 CREATE DATABASE \`mytest"db"\`;
-DROP DATABASE \`mytest"db"\`;`)).not.toThrow();
+DROP DATABASE \`mytest"db"\`;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_database_02", () => {
@@ -2864,24 +3402,30 @@ DROP DATABASE \`mytest"db"\`;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_database_04", () => {
-    expect(() => tryParse(`        CREATE DATABASE if;
+    expect(() =>
+      tryParse(`        CREATE DATABASE if;
         CREATE DATABASE abstract;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_database_05", () => {
-    expect(() => tryParse(`        DROP DATABASE if;
+    expect(() =>
+      tryParse(`        DROP DATABASE if;
         DROP DATABASE abstract;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_branch_01", () => {
-    expect(() => tryParse(`CREATE EMPTY BRANCH mytestdb;
+    expect(() =>
+      tryParse(`CREATE EMPTY BRANCH mytestdb;
 DROP BRANCH mytestdb;
 CREATE EMPTY BRANCH \`mytest"db"\`;
-DROP BRANCH \`mytest"db"\`;`)).not.toThrow();
+DROP BRANCH \`mytest"db"\`;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_branch_02", () => {
@@ -2893,22 +3437,28 @@ DROP BRANCH \`mytest"db"\`;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_branch_04", () => {
-    expect(() => tryParse(`        CREATE EMPTY BRANCH if;
+    expect(() =>
+      tryParse(`        CREATE EMPTY BRANCH if;
         CREATE EMPTY BRANCH abstract;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_branch_05", () => {
-    expect(() => tryParse(`        DROP BRANCH if;
+    expect(() =>
+      tryParse(`        DROP BRANCH if;
         DROP BRANCH abstract;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_branch_06", () => {
-    expect(() => tryParse(`CREATE SCHEMA BRANCH foo FROM bar;
-CREATE DATA BRANCH foo FROM bar;`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE SCHEMA BRANCH foo FROM bar;
+CREATE DATA BRANCH foo FROM bar;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_branch_07 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
@@ -2916,14 +3466,16 @@ CREATE DATA BRANCH foo FROM bar;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_role_01", () => {
-    expect(() => tryParse(`        CREATE ROLE username;
+    expect(() =>
+      tryParse(`        CREATE ROLE username;
         CREATE SUPERUSER ROLE username;
         CREATE ROLE abstract;
         CREATE ROLE \`mytest"role"\`;
         CREATE ROLE \`mytest"role"\`
             EXTENDING delegated, \`mytest"baserole"\`;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_role_02 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -2939,47 +3491,59 @@ CREATE DATA BRANCH foo FROM bar;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_role_05", () => {
-    expect(() => tryParse(`CREATE ROLE username EXTENDING generic {
+    expect(() =>
+      tryParse(`CREATE ROLE username EXTENDING generic {
     SET password := 'secret';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_role_06", () => {
-    expect(() => tryParse(`ALTER ROLE username {
+    expect(() =>
+      tryParse(`ALTER ROLE username {
     SET password := {};
     EXTENDING generic, morestuff;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_role_07", () => {
-    expect(() => tryParse(`ALTER ROLE username {
+    expect(() =>
+      tryParse(`ALTER ROLE username {
     RESET password;
     EXTENDING generic, morestuff;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_role_08", () => {
-    expect(() => tryParse(`CREATE ROLE username IF NOT EXISTS;
+    expect(() =>
+      tryParse(`CREATE ROLE username IF NOT EXISTS;
 CREATE SUPERUSER ROLE username IF NOT EXISTS;
 CREATE ROLE username EXTENDING generic IF NOT EXISTS;
 CREATE ROLE username EXTENDING generic IF NOT EXISTS {
     SET password := 'secret';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_delta_02", () => {
-    expect(() => tryParse(`START MIGRATION TO {type default::Foo;};
+    expect(() =>
+      tryParse(`START MIGRATION TO {type default::Foo;};
 ALTER MIGRATION m1231231231fd
     SET message := 'foo';
-COMMIT MIGRATION;`)).not.toThrow();
+COMMIT MIGRATION;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_delta_03", () => {
-    expect(() => tryParse(`START MIGRATION TO {
+    expect(() =>
+      tryParse(`START MIGRATION TO {
     module test {
         type Foo;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_delta_04 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -2987,97 +3551,125 @@ COMMIT MIGRATION;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_delta_05", () => {
-    expect(() => tryParse(`        START MIGRATION TO {
+    expect(() =>
+      tryParse(`        START MIGRATION TO {
             type test::Foo {
                 property bar -> str
             }
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_delta_06 [parser-gap: Unsupported DDL object kind ']", () => {
-    expect(() => tryParse(`POPULATE MIGRATION;
+    expect(() =>
+      tryParse(`POPULATE MIGRATION;
 ABORT MIGRATION;
 COMMIT MIGRATION;
 DESCRIBE CURRENT MIGRATION AS JSON;
-ALTER CURRENT MIGRATION REJECT PROPOSED;`)).not.toThrow();
+ALTER CURRENT MIGRATION REJECT PROPOSED;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_migration_rewrite_01", () => {
-    expect(() => tryParse(`START MIGRATION REWRITE;
+    expect(() =>
+      tryParse(`START MIGRATION REWRITE;
 ABORT MIGRATION REWRITE;
 COMMIT MIGRATION REWRITE;
-START MIGRATION TO COMMITTED SCHEMA;`)).not.toThrow();
+START MIGRATION TO COMMITTED SCHEMA;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_01", () => {
-    expect(() => tryParse(`        CREATE MIGRATION {};
+    expect(() =>
+      tryParse(`        CREATE MIGRATION {};
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_02", () => {
-    expect(() => tryParse(`CREATE MIGRATION { ;;; CREATE TYPE Foo ;;; CREATE TYPE Bar ;;; };`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE MIGRATION { ;;; CREATE TYPE Foo ;;; CREATE TYPE Bar ;;; };`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_03", () => {
-    expect(() => tryParse(`CREATE MIGRATION {
+    expect(() =>
+      tryParse(`CREATE MIGRATION {
     CREATE TYPE Foo;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_04", () => {
-    expect(() => tryParse(`        CREATE MIGRATION m123123123 {
+    expect(() =>
+      tryParse(`        CREATE MIGRATION m123123123 {
             CREATE TYPE Foo;
         };
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_05", () => {
-    expect(() => tryParse(`CREATE MIGRATION m123123123 ONTO m134134134 {
+    expect(() =>
+      tryParse(`CREATE MIGRATION m123123123 ONTO m134134134 {
     CREATE TYPE Foo;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_06", () => {
-    expect(() => tryParse(`CREATE APPLIED MIGRATION m123123123 ONTO m134134134 {
+    expect(() =>
+      tryParse(`CREATE APPLIED MIGRATION m123123123 ONTO m134134134 {
     CREATE TYPE Foo;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_07", () => {
-    expect(() => tryParse(`START MIGRATION TO {
+    expect(() =>
+      tryParse(`START MIGRATION TO {
     using extension graphql version '2.0';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_08", () => {
-    expect(() => tryParse(`START MIGRATION TO {
+    expect(() =>
+      tryParse(`START MIGRATION TO {
     using extension graphql;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_09 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`START MIGRATION TO {
+    expect(() =>
+      tryParse(`START MIGRATION TO {
     module foo {
         using extension graphql;
     }
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_10", () => {
-    expect(() => tryParse(`CREATE APPLIED MIGRATION m123123123 ONTO m134134134 {
+    expect(() =>
+      tryParse(`CREATE APPLIED MIGRATION m123123123 ONTO m134134134 {
     WITH MODULE x CREATE TYPE Foo;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_migration_11", () => {
-    expect(() => tryParse(`CREATE MIGRATION m123123123 ONTO m134134134 {
+    expect(() =>
+      tryParse(`CREATE MIGRATION m123123123 ONTO m134134134 {
     SET message := "test migration please ignore";
 
     CREATE TYPE Foo;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_extension_package_01", () => {
@@ -3085,9 +3677,11 @@ START MIGRATION TO COMMITTED SCHEMA;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_extension_package_02", () => {
-    expect(() => tryParse(`CREATE EXTENSION PACKAGE foo VERSION '1.0' {
+    expect(() =>
+      tryParse(`CREATE EXTENSION PACKAGE foo VERSION '1.0' {
     ;;; CREATE TYPE Foo ;;; CREATE TYPE Bar ;;;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_extension_package_03 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -3095,10 +3689,12 @@ START MIGRATION TO COMMITTED SCHEMA;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_create_extension_package_04", () => {
-    expect(() => tryParse(`CREATE EXTENSION PACKAGE foo VERSION '1.0' {
+    expect(() =>
+      tryParse(`CREATE EXTENSION PACKAGE foo VERSION '1.0' {
     set ext_module := "ext::foo";
     CREATE TYPE Foo;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_drop_extension_package_01", () => {
@@ -3126,63 +3722,79 @@ START MIGRATION TO COMMITTED SCHEMA;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_aggregate_00", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::sum(v: SET OF std::int64)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::sum(v: SET OF std::int64)
     -> std::int64
-    USING SQL FUNCTION 'sum';`)).not.toThrow();
+    USING SQL FUNCTION 'sum';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_aggregate_01", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::sum(v: SET OF std::int64)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::sum(v: SET OF std::int64)
     -> std::int64 {
     SET initial_value := 0;
     USING SQL FUNCTION 'test';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_aggregate_02", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::sum(arg: SET OF std::int64)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::sum(arg: SET OF std::int64)
     -> std::int64 {
     SET initial_value := 0;
     USING SQL FUNCTION 'sum';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_aggregate_03", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::sum(integer: SET OF std::int64)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::sum(integer: SET OF std::int64)
     -> std::int64 {
     SET initial_value := 0;
     USING SQL FUNCTION 'sum';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_aggregate_04", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::sum(integer: SET OF std::int64)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::sum(integer: SET OF std::int64)
     -> std::int64 {
     SET initial_value := 0;
     USING SQL FUNCTION 'sum';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_aggregate_06 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(string: SET OF std::str)
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(string: SET OF std::str)
     -> std::int64 {
     SET initial_value := 0;
     USING AAA FUNCTION 'foo';
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_aggregate_08", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::count(expression: SET OF anytype)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::count(expression: SET OF anytype)
     -> std::int64 {
     SET initial_value := 0;
     USING SQL FUNCTION 'count';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_scalar_01", () => {
-    expect(() => tryParse(`CREATE ABSTRACT SCALAR TYPE std::foo;
+    expect(() =>
+      tryParse(`CREATE ABSTRACT SCALAR TYPE std::foo;
 CREATE SCALAR TYPE std::typeref;
-CREATE SCALAR TYPE std::scalarref EXTENDING std::typeref;`)).not.toThrow();
+CREATE SCALAR TYPE std::scalarref EXTENDING std::typeref;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_scalar_02 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
@@ -3222,83 +3834,104 @@ CREATE SCALAR TYPE std::scalarref EXTENDING std::typeref;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_annotation_04", () => {
-    expect(() => tryParse(`ALTER ABSTRACT ANNOTATION foo::my_annotation
-    RENAME TO foo::renamed_annotation;`)).not.toThrow();
+    expect(() =>
+      tryParse(`ALTER ABSTRACT ANNOTATION foo::my_annotation
+    RENAME TO foo::renamed_annotation;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_annotation_05 [parser-gap: Unterminated string literal]", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo {
             CREATE ANNOTATION description :=
                 "multi
                  line";
         };
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_01", () => {
-    expect(() => tryParse(`CREATE ABSTRACT CONSTRAINT std::enum(VARIADIC p: anytype)
+    expect(() =>
+      tryParse(`CREATE ABSTRACT CONSTRAINT std::enum(VARIADIC p: anytype)
     EXTENDING std::constraint
 {
     SET errmessage := '{subject} must be one of: {p}.';
     USING (contains($p, __subject__));
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_02", () => {
-    expect(() => tryParse(`CREATE ABSTRACT CONSTRAINT std::enum(VARIADIC p: anytype) {
+    expect(() =>
+      tryParse(`CREATE ABSTRACT CONSTRAINT std::enum(VARIADIC p: anytype) {
     SET errmessage := '{subject} must be one of: {$p}.';
     USING (contains($p, __subject__));
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_03", () => {
-    expect(() => tryParse(`CREATE ABSTRACT CONSTRAINT std::enum {
+    expect(() =>
+      tryParse(`CREATE ABSTRACT CONSTRAINT std::enum {
     SET errmessage := '{subject} must be one of: {param}.';
     USING (contains($param, __subject__));
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_04", () => {
-    expect(() => tryParse(`        CREATE ABSTRACT CONSTRAINT std::enum() {
+    expect(() =>
+      tryParse(`        CREATE ABSTRACT CONSTRAINT std::enum() {
             SET errmessage := '{subject} must be one of: {param}.';
             USING (contains($param, __subject__));
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_05", () => {
-    expect(() => tryParse(`CREATE SCALAR TYPE std::decimal_rounding_t EXTENDING std::str {
+    expect(() =>
+      tryParse(`CREATE SCALAR TYPE std::decimal_rounding_t EXTENDING std::str {
     CREATE CONSTRAINT std::enum('a', 'b');
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_06", () => {
-    expect(() => tryParse(`CREATE ABSTRACT CONSTRAINT std::len_constraint ON
+    expect(() =>
+      tryParse(`CREATE ABSTRACT CONSTRAINT std::len_constraint ON
         (len(<std::str>__subject__))
     EXTENDING std::constraint
 {
     SET errmessage := 'invalid {subject}';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_07", () => {
-    expect(() => tryParse(`CREATE SCALAR TYPE std::decimal_rounding_t EXTENDING std::str {
+    expect(() =>
+      tryParse(`CREATE SCALAR TYPE std::decimal_rounding_t EXTENDING std::str {
     CREATE CONSTRAINT max_value(99) ON (<int64>__subject__);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_08", () => {
-    expect(() => tryParse(`        CREATE ABSTRACT CONSTRAINT len_fail(f: std::str) {
+    expect(() =>
+      tryParse(`        CREATE ABSTRACT CONSTRAINT len_fail(f: std::str) {
             USING (__subject__ <= f);
             SET subjectexpr := len(__subject__);
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_09", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo {
             CREATE LINK bar -> Bar {
                 CREATE CONSTRAINT my_constraint ON (
                     # It's possible to use shapes in the "ON" expression.
@@ -3312,11 +3945,13 @@ CREATE SCALAR TYPE std::scalarref EXTENDING std::typeref;`)).not.toThrow();
             };
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_10", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         ALTER CONSTRAINT my_constraint ON (foo) {
             CREATE ANNOTATION title := 'special';
@@ -3326,177 +3961,236 @@ CREATE SCALAR TYPE std::scalarref EXTENDING std::typeref;`)).not.toThrow();
     ALTER LINK baz {
         DROP CONSTRAINT my_length(10);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_11 [unconverted: sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         ALTER CONSTRAINT my_constraint ON (foo) {
             RENAME TO myconstraint;
         };
     };
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_12", () => {
-    expect(() => tryParse(`ALTER ABSTRACT CONSTRAINT my_constraint
-RESET errmessage;`)).not.toThrow();
+    expect(() =>
+      tryParse(`ALTER ABSTRACT CONSTRAINT my_constraint
+RESET errmessage;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_13", () => {
-    expect(() => tryParse(`ALTER ABSTRACT CONSTRAINT not_bad
-    USING (((__subject__ != 'bad') and (__subject__ != 'terrible')));`)).not.toThrow();
+    expect(() =>
+      tryParse(`ALTER ABSTRACT CONSTRAINT not_bad
+    USING (((__subject__ != 'bad') and (__subject__ != 'terrible')));`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_14", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     CREATE CONSTRAINT exclusive ON (.name) EXCEPT (.reject);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_constraint_15", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     DROP CONSTRAINT exclusive ON (.name) EXCEPT (.reject);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_01", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(string: std::str) -> std::int64
-    USING SQL FUNCTION 'strlen';`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(string: std::str) -> std::int64
+    USING SQL FUNCTION 'strlen';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_02", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(a: std::str) -> std::int64
-    USING SQL FUNCTION 'strlen';`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(a: std::str) -> std::int64
+    USING SQL FUNCTION 'strlen';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_03", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(string: std::str) -> std::int64
-    USING SQL FUNCTION 'strlen';`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(string: std::str) -> std::int64
+    USING SQL FUNCTION 'strlen';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_04", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(string: std::str, integer: std::int64)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(string: std::str, integer: std::int64)
     -> std::int64
-    USING SQL FUNCTION 'strlen';`)).not.toThrow();
+    USING SQL FUNCTION 'strlen';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_05", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(string: std::str, a: std::int64)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(string: std::str, a: std::int64)
     -> std::int64
-    USING SQL FUNCTION 'strlen';`)).not.toThrow();
+    USING SQL FUNCTION 'strlen';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_06", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(string: std::str = '1')
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(string: std::str = '1')
     -> std::int64
-    USING SQL FUNCTION 'strlen';`)).not.toThrow();
+    USING SQL FUNCTION 'strlen';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_07 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(string: std::str = '1', abc: std::str)
-    -> std::int64 {};`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(string: std::str = '1', abc: std::str)
+    -> std::int64 {};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_08 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(VARIADIC string: std::str,
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(VARIADIC string: std::str,
                             abc: std::str)
-    -> std::int64 {};`)).toThrow();
+    -> std::int64 {};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_09 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(VARIADIC string: std::str,
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(VARIADIC string: std::str,
                             VARIADIC abc: std::str)
-    -> std::int64 {};`)).toThrow();
+    -> std::int64 {};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_10", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(a: std::str = '1', VARIADIC b: std::str)
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(a: std::str = '1', VARIADIC b: std::str)
     -> std::int64
-    USING SQL FUNCTION 'strlen';`)).not.toThrow();
+    USING SQL FUNCTION 'strlen';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_11", () => {
-    expect(() => tryParse(`CREATE FUNCTION no_params() -> std::int64
-USING ( SELECT 1 );`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION no_params() -> std::int64
+USING ( SELECT 1 );`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_13", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(string: std::str) -> tuple<bar: std::int64>
-USING (SELECT (bar := 123));`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(string: std::str) -> tuple<bar: std::int64>
+USING (SELECT (bar := 123));`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_14", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(string: std::str)
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(string: std::str)
 -> tuple<
     bar: std::int64,
     baz: std::str
-> USING (SELECT smth());`)).not.toThrow();
+> USING (SELECT smth());`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_16 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(string: std::str)
--> std::int64 USING AAA FUNCTION 'foo';`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(string: std::str)
+-> std::int64 USING AAA FUNCTION 'foo';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_19 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(string: std::str)
--> std::int64 USING AAA 'code';`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(string: std::str)
+-> std::int64 USING AAA 'code';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_20", () => {
-    expect(() => tryParse(`        CREATE FUNCTION foo() -> std::int64 USING SQL 'SELECT 1';
+    expect(() =>
+      tryParse(`        CREATE FUNCTION foo() -> std::int64 USING SQL 'SELECT 1';
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_21", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo() -> std::int64 USING SQL FUNCTION 'aaa';`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo() -> std::int64 USING SQL FUNCTION 'aaa';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_24", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo() -> std::str USING SQL $a$SELECT $$foo$$$a$;`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo() -> std::str USING SQL $a$SELECT $$foo$$$a$;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_25", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo() -> std::str {
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo() -> std::str {
     CREATE ANNOTATION description := 'aaaa';
     USING SQL $a$SELECT $$foo$$$a$;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_26", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo() -> std::str {
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo() -> std::str {
     SET volatility := 'Volatile';
     CREATE ANNOTATION description := 'aaaa';
     USING SQL $a$SELECT $$foo$$$a$;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_27 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo() -> std::str {
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo() -> std::str {
     CREATE ANNOTATION description := 'aaaa';
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_28 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo() -> std::str {
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo() -> std::str {
     USING SQL 'SELECT 1';
     CREATE ANNOTATION description := 'aaaa';
     USING SQL 'SELECT 2';
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_30", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::foobar(arg1: str, arg2: str = 'DEFAULT',
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::foobar(arg1: str, arg2: str = 'DEFAULT',
                             VARIADIC arg3)
     -> std::int64
-    USING EdgeQL $$$$;`)).toThrow();
+    USING EdgeQL $$$$;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_31", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::foo(VARIADIC SET OF std::str) -> std::int64;`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::foo(VARIADIC SET OF std::str) -> std::int64;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_32", () => {
@@ -3504,149 +4198,188 @@ USING (SELECT (bar := 123));`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_33", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::foo(bar: VARIADIC SET OF std::str) -> std::int64;`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::foo(bar: VARIADIC SET OF std::str) -> std::int64;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_34", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(a: OPTIONAL std::str) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(a: OPTIONAL std::str) ->
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_35", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::foo(a: SET OF std::str) -> VARIADIC std::int64
-    USING SQL $a$SELECT $$foo$$$a$;`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::foo(a: SET OF std::str) -> VARIADIC std::int64
+    USING SQL $a$SELECT $$foo$$$a$;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_36", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(
     a: OPTIONAL std::str,
     NAMED ONLY b: OPTIONAL std::str,
     NAMED ONLY c: OPTIONAL std::str = '1',
     NAMED ONLY d: OPTIONAL std::str
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).not.toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_37 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(
     a: OPTIONAL std::str,
     NAMED ONLY b: OPTIONAL std::str = '1',
     NAMED ONLY c: OPTIONAL std::str,
     d: OPTIONAL std::str
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_38 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(
     s: OPTIONAL std::str,
     NAMED ONLY c: OPTIONAL std::str,
     NAMED ONLY s1: OPTIONAL std::str = '1',
     VARIADIC v: OPTIONAL std::str = '1'
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_39 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(
     s: OPTIONAL std::str,
     NAMED ONLY c: OPTIONAL std::str,
     VARIADIC v: OPTIONAL std::str = '1',
     NAMED ONLY s1: OPTIONAL std::str = '1'
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_40 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(
     \`set\`: OPTIONAL std::str,
     VARIADIC \`variadic\`: OPTIONAL std::str,
     \`select\`: OPTIONAL std::str = '1'
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_41", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(
     \`set\`: OPTIONAL std::str,
     VARIADIC \`variadic\`: OPTIONAL std::str,
     NAMED ONLY \`create\`: OPTIONAL std::str,
     NAMED ONLY \`select\`: OPTIONAL std::str = '1'
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).not.toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_42 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(VARIADIC b: std::str = '1')
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(VARIADIC b: std::str = '1')
     -> std::int64
-    USING SQL FUNCTION 'strlen';`)).toThrow();
+    USING SQL FUNCTION 'strlen';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_43", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen($1: int32) -> int64
-    USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen($1: int32) -> int64
+    USING EdgeQL $$ SELECT 1 $$;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_44", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(a: int16, b: str, a: int16) -> int64
-    USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(a: int16, b: str, a: int16) -> int64
+    USING EdgeQL $$ SELECT 1 $$;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_45", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(aa: int16, b: str,
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(aa: int16, b: str,
                             NAMED ONLY aa: int16) -> int64
-    USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
+    USING EdgeQL $$ SELECT 1 $$;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_46", () => {
-    expect(() => tryParse(`CREATE FUNCTION std::strlen(aa: int16, b: str,
+    expect(() =>
+      tryParse(`CREATE FUNCTION std::strlen(aa: int16, b: str,
                             VARIADIC aa: int16) -> int64
-    USING EdgeQL $$ SELECT 1 $$;`)).toThrow();
+    USING EdgeQL $$ SELECT 1 $$;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_47", () => {
-    expect(() => tryParse(`CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`CREATE FUNCTION foo(
     variadiC f: int64,
     named only foo: OPTIONAL std::str,
     nameD onlY bar: OPTIONAL std::str = '1'
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).not.toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_48", () => {
-    expect(() => tryParse(`CREATE FUNCTION __std__(
+    expect(() =>
+      tryParse(`CREATE FUNCTION __std__(
     f: int64
 ) ->
-    std::int64 USING SQL FUNCTION 'aaa';`)).toThrow();
+    std::int64 USING SQL FUNCTION 'aaa';`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_49", () => {
-    expect(() => tryParse(`        CREATE FUNCTION std::strlen(string: std::str,) -> std::int64
+    expect(() =>
+      tryParse(`        CREATE FUNCTION std::strlen(string: std::str,) -> std::int64
             USING SQL FUNCTION 'strlen';
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_50", () => {
-    expect(() => tryParse(`        CREATE FUNCTION std::strlen(string: std::str = '1',)
+    expect(() =>
+      tryParse(`        CREATE FUNCTION std::strlen(string: std::str = '1',)
             -> std::int64
             USING SQL FUNCTION 'strlen';
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_51", () => {
-    expect(() => tryParse(`        CREATE FUNCTION std::strlen(
+    expect(() =>
+      tryParse(`        CREATE FUNCTION std::strlen(
             a: std::str = '1',
             VARIADIC b: std::str,
         ) -> std::int64
             USING SQL FUNCTION 'strlen';
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_52", () => {
-    expect(() => tryParse(`        CREATE FUNCTION foo(
+    expect(() =>
+      tryParse(`        CREATE FUNCTION foo(
             a: OPTIONAL std::str,
             NAMED ONLY b: OPTIONAL std::str,
             NAMED ONLY c: OPTIONAL std::str = '1',
@@ -3654,7 +4387,8 @@ USING (SELECT (bar := 123));`)).not.toThrow();
         ) ->
             std::int64 USING SQL FUNCTION 'aaa';
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_53", () => {
@@ -3662,117 +4396,147 @@ USING (SELECT (bar := 123));`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_function_54", () => {
-    expect(() => tryParse(`ALTER FUNCTION foo() {
+    expect(() =>
+      tryParse(`ALTER FUNCTION foo() {
     SET volatility := 'volatile';
     USING ('no');
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_operator_01", () => {
-    expect(() => tryParse(`CREATE INFIX OPERATOR
+    expect(() =>
+      tryParse(`CREATE INFIX OPERATOR
 std::\`OR\` (a: std::bool, b: std::bool) -> std::bool {
     SET volatility := 'Immutable';
     USING SQL $$
     SELECT ("a" OR "b") AND ("a"::int | "b"::int)::bool
     $$;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_operator_02", () => {
-    expect(() => tryParse(`CREATE INFIX OPERATOR
+    expect(() =>
+      tryParse(`CREATE INFIX OPERATOR
 std::\`AND\` (a: std::bool, b: std::bool) -> std::bool {
     SET volatility := 'Immutable';
     USING SQL EXPRESSION;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_operator_03", () => {
-    expect(() => tryParse(`CREATE INFIX OPERATOR
+    expect(() =>
+      tryParse(`CREATE INFIX OPERATOR
 std::\`=\` (l: std::bool, r: std::bool) -> std::bool {
     SET volatility := 'Immutable';
     SET commutator := 'std::=';
     SET negator := 'std::!=';
     USING SQL OPERATOR '=';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_operator_04", () => {
-    expect(() => tryParse(`CREATE INFIX OPERATOR
+    expect(() =>
+      tryParse(`CREATE INFIX OPERATOR
 std::\`>\` (l: std::int32, r: std::float32) -> std::bool {
     SET volatility := 'Immutable';
     SET commutator := 'std::<';
     SET negator := 'std::<=';
     USING SQL OPERATOR '>(float8,float8)';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_operator_05", () => {
-    expect(() => tryParse(`CREATE ABSTRACT INFIX OPERATOR
-std::\`>=\` (l: anytype, r: anytype) -> std::bool;`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE ABSTRACT INFIX OPERATOR
+std::\`>=\` (l: anytype, r: anytype) -> std::bool;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_operator_06", () => {
-    expect(() => tryParse(`ALTER INFIX OPERATOR std::\`>=\` (l: anytype, r: anytype) {
+    expect(() =>
+      tryParse(`ALTER INFIX OPERATOR std::\`>=\` (l: anytype, r: anytype) {
     CREATE ANNOTATION description := 'gte';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_operator_07", () => {
-    expect(() => tryParse(`DROP INFIX OPERATOR std::\`>=\` (l: anytype, r: anytype);`)).not.toThrow();
+    expect(() =>
+      tryParse(`DROP INFIX OPERATOR std::\`>=\` (l: anytype, r: anytype);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_01", () => {
-    expect(() => tryParse(`CREATE CAST FROM std::str TO std::bool {
+    expect(() =>
+      tryParse(`CREATE CAST FROM std::str TO std::bool {
     SET volatility := 'Immutable';
     USING SQL FUNCTION 'edgedb.str_to_bool';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_02", () => {
-    expect(() => tryParse(`CREATE CAST FROM std::bool TO std::str {
+    expect(() =>
+      tryParse(`CREATE CAST FROM std::bool TO std::str {
     SET volatility := 'Immutable';
     USING SQL CAST;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_03", () => {
-    expect(() => tryParse(`CREATE CAST FROM std::json TO std::bigint {
+    expect(() =>
+      tryParse(`CREATE CAST FROM std::json TO std::bigint {
     SET volatility := 'Stable';
     USING SQL $$
     SELECT edgedb.str_to_bigint(
         edgedb.jsonb_extract_scalar(val, 'number', detail => detail)
     );
     $$;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_04", () => {
-    expect(() => tryParse(`CREATE CAST FROM std::int32 TO std::int64 {
+    expect(() =>
+      tryParse(`CREATE CAST FROM std::int32 TO std::int64 {
     SET volatility := 'Immutable';
     USING SQL CAST;
     ALLOW IMPLICIT;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_05", () => {
-    expect(() => tryParse(`CREATE CAST FROM std::int64 TO std::int16 {
+    expect(() =>
+      tryParse(`CREATE CAST FROM std::int64 TO std::int16 {
     SET volatility := 'Immutable';
     USING SQL CAST;
     ALLOW ASSIGNMENT;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_06", () => {
-    expect(() => tryParse(`CREATE CAST FROM std::BaseObject TO std::json {
+    expect(() =>
+      tryParse(`CREATE CAST FROM std::BaseObject TO std::json {
     SET volatility := 'Immutable';
     USING SQL EXPRESSION;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_07", () => {
-    expect(() => tryParse(`ALTER CAST FROM std::BaseObject TO std::json {
+    expect(() =>
+      tryParse(`ALTER CAST FROM std::BaseObject TO std::json {
     CREATE ANNOTATION description := 'json';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_cast_08", () => {
@@ -3780,63 +4544,81 @@ std::\`>=\` (l: anytype, r: anytype) -> std::bool;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_property_01", () => {
-    expect(() => tryParse(`CREATE ABSTRACT PROPERTY std::property {
+    expect(() =>
+      tryParse(`CREATE ABSTRACT PROPERTY std::property {
     SET title := 'Base property';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_property_02", () => {
-    expect(() => tryParse(`CREATE ABSTRACT PROPERTY std::property {
+    expect(() =>
+      tryParse(`CREATE ABSTRACT PROPERTY std::property {
     SET title := 'Base property';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_property_03 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE ABSTRACT PROPERTY PROPERTY std::property {
+    expect(() =>
+      tryParse(`CREATE ABSTRACT PROPERTY PROPERTY std::property {
     SET title := 'Base property';
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_property_04 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`CREATE ABSTRACT PROPERTY __type__ {
+    expect(() =>
+      tryParse(`CREATE ABSTRACT PROPERTY __type__ {
     SET title := 'Base property';
-};`)).toThrow();
+};`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_property_05", () => {
-    expect(() => tryParse(`        CREATE ABSTRACT PROPERTY std::property {
+    expect(() =>
+      tryParse(`        CREATE ABSTRACT PROPERTY std::property {
             SET title := 'Base property'
         }
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_property_06", () => {
-    expect(() => tryParse(`        ALTER ABSTRACT PROPERTY prop {
+    expect(() =>
+      tryParse(`        ALTER ABSTRACT PROPERTY prop {
             RESET default;
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_property_07", () => {
-    expect(() => tryParse(`create abstract property union;
+    expect(() =>
+      tryParse(`create abstract property union;
 alter abstract property union reset default;
-drop abstract property union;`)).not.toThrow();
+drop abstract property union;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_link_01", () => {
-    expect(() => tryParse(`create abstract link union;
+    expect(() =>
+      tryParse(`create abstract link union;
 alter abstract link union reset default;
-drop abstract link union;`)).not.toThrow();
+drop abstract link union;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_module_01 [parser-gap: [not supported] dotted module]", () => {
-    expect(() => tryParse(`        CREATE MODULE foo;
+    expect(() =>
+      tryParse(`        CREATE MODULE foo;
         CREATE MODULE foo.bar;
         CREATE MODULE all.abstract.bar;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_module_02", () => {
@@ -3860,11 +4642,14 @@ drop abstract link union;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_01", () => {
-    expect(() => tryParse(`CREATE ABSTRACT TYPE schema::Type EXTENDING schema::Object;`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE ABSTRACT TYPE schema::Type EXTENDING schema::Object;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_02", () => {
-    expect(() => tryParse(`CREATE TYPE schema::TypeElement {
+    expect(() =>
+      tryParse(`CREATE TYPE schema::TypeElement {
     CREATE REQUIRED LINK type: schema::Type;
     CREATE REQUIRED LINK num: std::int64;
     CREATE PROPERTY name: std::str {
@@ -3883,19 +4668,23 @@ drop abstract link union;`)).not.toThrow();
             EXTENDING foo;
         };
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_03", () => {
-    expect(() => tryParse(`        ALTER TYPE schema::Object {
+    expect(() =>
+      tryParse(`        ALTER TYPE schema::Object {
             CREATE MULTI LINK attributes -> schema::Attribute;
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_04", () => {
-    expect(() => tryParse(`CREATE TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`CREATE TYPE mymod::Foo {
     CREATE LINK bar0: mymod::Bar {
         ON TARGET DELETE RESTRICT;
     };
@@ -3908,71 +4697,87 @@ drop abstract link union;`)).not.toThrow();
     CREATE LINK bar3: mymod::Bar {
         ON TARGET DELETE DEFERRED RESTRICT;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_05", () => {
-    expect(() => tryParse(`CREATE TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`CREATE TYPE mymod::Foo {
     CREATE SINGLE LINK foo: mymod::Foo;
     CREATE MULTI LINK bar: mymod::Bar;
     CREATE REQUIRED SINGLE LINK baz: mymod::Baz;
     CREATE REQUIRED MULTI LINK spam: mymod::Spam;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_06", () => {
-    expect(() => tryParse(`CREATE TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`CREATE TYPE mymod::Foo {
     CREATE SINGLE PROPERTY foo: str;
     CREATE MULTI PROPERTY bar: str;
     CREATE REQUIRED SINGLE PROPERTY baz: str;
     CREATE REQUIRED MULTI PROPERTY spam: str;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_07", () => {
-    expect(() => tryParse(`ALTER TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE mymod::Foo {
     ALTER PROPERTY foo {
         SET SINGLE;
         SET REQUIRED;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_08", () => {
-    expect(() => tryParse(`        ALTER TYPE mymod::Foo ALTER LINK foo {
+    expect(() =>
+      tryParse(`        ALTER TYPE mymod::Foo ALTER LINK foo {
             SET MULTI;
             SET OPTIONAL;
         };
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_09", () => {
-    expect(() => tryParse(`        ALTER TYPE mymod::Foo ALTER LINK foo {
+    expect(() =>
+      tryParse(`        ALTER TYPE mymod::Foo ALTER LINK foo {
             SET MULTI;
             SET OPTIONAL
         }
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_10", () => {
-    expect(() => tryParse(`ALTER TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE mymod::Foo {
     ALTER PROPERTY foo {
         SET OWNED;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_11", () => {
-    expect(() => tryParse(`ALTER TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE mymod::Foo {
     ALTER PROPERTY foo {
         DROP OWNED;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_12", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo {
             CREATE PROPERTY bar := 'something';
             CREATE PROPERTY baz := select 'something';
             CREATE LINK quux := select Foo;
@@ -3981,115 +4786,142 @@ drop abstract link union;`)).not.toThrow();
             };
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_13", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER PROPERTY bar {
         RESET EXPRESSION;
         RESET default;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_14", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         RESET EXPRESSION;
         RESET default;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_15", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         SET TYPE int64 USING (SELECT (.bar, 1));
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_16", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         SET REQUIRED USING (SELECT '123');
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_17", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         SET SINGLE USING (SELECT '123');
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_18", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         RESET CARDINALITY USING (SELECT '123');
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_19", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     CREATE PROPERTY bar: str {
         USING (4);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_20", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER PROPERTY bar {
         SET TYPE str;
         USING (4);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_21", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     CREATE LINK bar: Object {
         USING (SELECT Object);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_22", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER LINK bar {
         SET TYPE Object;
         USING (SELECT Object);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_23", () => {
-    expect(() => tryParse(`CREATE TYPE \`123\` {
+    expect(() =>
+      tryParse(`CREATE TYPE \`123\` {
     CREATE PROPERTY \`456\`: str;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_24", () => {
-    expect(() => tryParse(`ALTER TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE mymod::Foo {
     ALTER LINK union {
         USING (SELECT Object);
     };
     ALTER PROPERTY except {
         USING (1312);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_type_25", () => {
-    expect(() => tryParse(`ALTER TYPE mymod::Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE mymod::Foo {
     DROP LINK union;
     DROP PROPERTY except;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_set_command_01", () => {
@@ -4109,13 +4941,16 @@ drop abstract link union;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_reset_command_01", () => {
-    expect(() => tryParse(`RESET MODULE;
+    expect(() =>
+      tryParse(`RESET MODULE;
 RESET ALIAS foo;
-RESET ALIAS *;`)).not.toThrow();
+RESET ALIAS *;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_configure_01 [parser-gap: Expected configure scope: sess]", () => {
-    expect(() => tryParse(`CONFIGURE INSTANCE SET foo := (SELECT User);
+    expect(() =>
+      tryParse(`CONFIGURE INSTANCE SET foo := (SELECT User);
 CONFIGURE SESSION SET foo := (SELECT User);
 CONFIGURE CURRENT BRANCH SET foo := (SELECT User);
 CONFIGURE INSTANCE SET cfg::foo := (SELECT User);
@@ -4135,7 +4970,8 @@ CONFIGURE SESSION INSERT cfg::Foo {bar := (SELECT 1)};
 CONFIGURE CURRENT BRANCH INSERT cfg::Foo {bar := (SELECT 1)};
 CONFIGURE INSTANCE RESET Foo FILTER (.bar = 2);
 CONFIGURE SESSION RESET Foo FILTER (.bar = 2);
-CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`)).not.toThrow();
+CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_configure_02", () => {
@@ -4151,7 +4987,8 @@ CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_alias_02", () => {
-    expect(() => tryParse(`        CREATE ALIAS Foo {
+    expect(() =>
+      tryParse(`        CREATE ALIAS Foo {
             USING (SELECT User);
         };
 
@@ -4160,27 +4997,33 @@ CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`)).not.toThrow();
 
         DROP ALIAS Foo;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_alias_03", () => {
-    expect(() => tryParse(`        CREATE ALIAS Foo := User;
+    expect(() =>
+      tryParse(`        CREATE ALIAS Foo := User;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_01", () => {
-    expect(() => tryParse(`CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`CREATE TYPE Foo {
     CREATE INDEX ON (.title);
 
     CREATE INDEX ON (SELECT __subject__.title);
 
     CREATE INDEX ON (.foo) EXCEPT (.bar);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_02", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     DROP INDEX ON (.title);
 
     CREATE INDEX ON (.title) {
@@ -4200,11 +5043,13 @@ CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`)).not.toThrow();
     ALTER INDEX ON (.foo) EXCEPT (.bar) {
         DROP ANNOTATION system;
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_03", () => {
-    expect(() => tryParse(`        ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`        ALTER TYPE Foo {
             ALTER INDEX ON (.title) {
                 CREATE ANNOTATION system := 'Foo'
             };
@@ -4214,17 +5059,21 @@ CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`)).not.toThrow();
             };
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_04", () => {
-    expect(() => tryParse(`CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`CREATE TYPE Foo {
     CREATE INDEX pg::gist ON (.title);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_05", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo {
             CREATE INDEX myindex0() ON (.bar);
 
             CREATE INDEX myindex1(a := 13, b := 'ab', conf := [4, 3, 2])
@@ -4234,7 +5083,8 @@ CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`)).not.toThrow();
                 ON (.foo);
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_06", () => {
@@ -4242,23 +5092,29 @@ CONFIGURE CURRENT BRANCH RESET Foo FILTER (.bar = 2);`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_07", () => {
-    expect(() => tryParse(`CREATE ABSTRACT INDEX myindex1(conf: str = 'special');
+    expect(() =>
+      tryParse(`CREATE ABSTRACT INDEX myindex1(conf: str = 'special');
 CREATE ABSTRACT INDEX myindex2(val: int64);
 CREATE ABSTRACT INDEX myindex3(a: int64, b: str = 'default')
     USING myindex2(val := a),
           myindex1(conf := b),
-          myindex1;`)).not.toThrow();
+          myindex1;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_08", () => {
-    expect(() => tryParse(`CREATE ABSTRACT INDEX myindex1 EXTENDING fts;
-CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
+    expect(() =>
+      tryParse(`CREATE ABSTRACT INDEX myindex1 EXTENDING fts;
+CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_09", () => {
-    expect(() => tryParse(`ALTER ABSTRACT INDEX myindex0 {
+    expect(() =>
+      tryParse(`ALTER ABSTRACT INDEX myindex0 {
     DROP ANNOTATION system;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_10", () => {
@@ -4266,13 +5122,16 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_11", () => {
-    expect(() => tryParse(`CREATE ABSTRACT INDEX std::btree ON anytype {
+    expect(() =>
+      tryParse(`CREATE ABSTRACT INDEX std::btree ON anytype {
     USING SQL $$hash ((%) NULLS FIRST)$$;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_12", () => {
-    expect(() => tryParse(`CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`CREATE TYPE Foo {
     CREATE DEFERRED INDEX myindex0 ON (.bar);
 
     CREATE DEFERRED INDEX
@@ -4282,14 +5141,17 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
         ON (.foo);
 
     CREATE DEFERRED INDEX ON (.bar);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_13", () => {
-    expect(() => tryParse(`ALTER TYPE Foo {
+    expect(() =>
+      tryParse(`ALTER TYPE Foo {
     ALTER INDEX myindex0 ON (.bar) SET DEFERRED;
     ALTER INDEX ON (.bar) DROP DEFERRED;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_global_01", () => {
@@ -4301,7 +5163,8 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_global_03", () => {
-    expect(() => tryParse(`        CREATE GLOBAL Foo {
+    expect(() =>
+      tryParse(`        CREATE GLOBAL Foo {
             USING (SELECT User);
         };
 
@@ -4310,25 +5173,31 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
 
         DROP GLOBAL Foo;
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_global_04", () => {
-    expect(() => tryParse(`CREATE GLOBAL foo -> str {
+    expect(() =>
+      tryParse(`CREATE GLOBAL foo -> str {
     SET DEFAULT := '20';
     CREATE ANNOTATION title := 'foo';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_global_05", () => {
-    expect(() => tryParse(`CREATE REQUIRED GLOBAL foo -> str {
+    expect(() =>
+      tryParse(`CREATE REQUIRED GLOBAL foo -> str {
     CREATE ANNOTATION title := 'foo';
     SET default := 'lol';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_global_06", () => {
-    expect(() => tryParse(`ALTER GLOBAL foo {
+    expect(() =>
+      tryParse(`ALTER GLOBAL foo {
     set default := '10';
     using (20);
     reset default;
@@ -4342,7 +5211,8 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
     create annotation title := 'foo';
     alter annotation title := 'foo';
     drop annotation title;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_global_07", () => {
@@ -4358,9 +5228,11 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_global_03", () => {
-    expect(() => tryParse(`        select (global bar);
+    expect(() =>
+      tryParse(`        select (global bar);
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_config_global_01", () => {
@@ -4380,108 +5252,133 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_policy_01", () => {
-    expect(() => tryParse(`create type Foo {
+    expect(() =>
+      tryParse(`create type Foo {
     create access policy test
     allow all
     using (true);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_policy_02", () => {
-    expect(() => tryParse(`create type Foo {
+    expect(() =>
+      tryParse(`create type Foo {
     create access policy test
     allow select, update write
     using (true);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_policy_03", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     create access policy test
     when (true)
     deny all
     using (true) {
         create annotation title := 'foo';
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_policy_04", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     alter access policy test {
         rename to bar;
         create annotation title := 'foo';
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_policy_05", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     drop access policy test;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_policy_06", () => {
-    expect(() => tryParse(`create type Foo {
+    expect(() =>
+      tryParse(`create type Foo {
     alter access policy test {
         when (false);
         allow all;
         using (true);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_policy_07", () => {
-    expect(() => tryParse(`create type Foo {
+    expect(() =>
+      tryParse(`create type Foo {
     alter access policy test {
         reset when;
         allow all;
         using (true);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_trigger_01", () => {
-    expect(() => tryParse(`create type Foo {
+    expect(() =>
+      tryParse(`create type Foo {
     create trigger foo
         after insert
         for each
         do (1);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_trigger_02", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     create trigger foo
         after commit of update, delete, insert
         for all
         do (1);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_trigger_03", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     drop trigger foo;
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_trigger_04", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     alter trigger foo
         using (1);
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_rewrite_01", () => {
-    expect(() => tryParse(`create type Foo {
+    expect(() =>
+      tryParse(`create type Foo {
     create property foo: i64 {
         create rewrite update, insert using (1);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_rewrite_02", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     create property name_updated_at: i64 {
         create rewrite update using ((
             datetime_current()
@@ -4489,36 +5386,45 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
             else .name_updated_at
         ));
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_rewrite_03", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     alter property foo {
         drop rewrite update;
         alter rewrite insert using (3);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_rewrite_04", () => {
-    expect(() => tryParse(`alter type Foo {
+    expect(() =>
+      tryParse(`alter type Foo {
     alter property foo {
         alter rewrite insert using (1);
     };
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_empty_01", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo { };
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo { };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_empty_02", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo { CREATE PROPERTY bar -> str { } };
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo { CREATE PROPERTY bar -> str { } };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_match_01", () => {
@@ -4526,9 +5432,11 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_match_02", () => {
-    expect(() => tryParse(`create index match for std::str using pg::brin {
+    expect(() =>
+      tryParse(`create index match for std::str using pg::brin {
     create annotation description := 'foo';
-};`)).not.toThrow();
+};`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_index_match_03", () => {
@@ -4536,17 +5444,20 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_sdl_empty_01", () => {
-    expect(() => tryParse(`        START MIGRATION to {
+    expect(() =>
+      tryParse(`        START MIGRATION to {
             type default::User {
 
             };
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_sdl_empty_02", () => {
-    expect(() => tryParse(`        START MIGRATION to {
+    expect(() =>
+      tryParse(`        START MIGRATION to {
             type default::User {
                 property name -> str {
 
@@ -4554,17 +5465,21 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
             };
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_semi_01", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo { ;;; };
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo { ;;; };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_semi_02", () => {
-    expect(() => tryParse(`        CREATE TYPE Foo {
+    expect(() =>
+      tryParse(`        CREATE TYPE Foo {
             ;;;
             CREATE PROPERTY bar -> str
             ;;;
@@ -4572,21 +5487,25 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
             ;;;
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_sdl_semi_01", () => {
-    expect(() => tryParse(`        START MIGRATION to {
+    expect(() =>
+      tryParse(`        START MIGRATION to {
             type default::User {
                 ;;;;
             };
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_sdl_semi_02", () => {
-    expect(() => tryParse(`        START MIGRATION to {
+    expect(() =>
+      tryParse(`        START MIGRATION to {
             type default::User {
                 ;;;
                 property bar -> int64;
@@ -4596,30 +5515,37 @@ CREATE ABSTRACT INDEX myindex2(conf := 'test') EXTENDING fts;`)).not.toThrow();
             };
         };
 
-`)).not.toThrow();
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_transaction_01", () => {
-    expect(() => tryParse(`START TRANSACTION;
+    expect(() =>
+      tryParse(`START TRANSACTION;
 ROLLBACK;
 COMMIT;
 
 DECLARE SAVEPOINT foo;
 ROLLBACK TO SAVEPOINT foo;
-RELEASE SAVEPOINT foo;`)).not.toThrow();
+RELEASE SAVEPOINT foo;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_transaction_02", () => {
-    expect(() => tryParse(`START TRANSACTION ISOLATION SERIALIZABLE, READ ONLY, DEFERRABLE;
+    expect(() =>
+      tryParse(`START TRANSACTION ISOLATION SERIALIZABLE, READ ONLY, DEFERRABLE;
 START TRANSACTION ISOLATION SERIALIZABLE, READ ONLY;
 START TRANSACTION READ ONLY, DEFERRABLE;
 START TRANSACTION READ ONLY, NOT DEFERRABLE;
 START TRANSACTION READ WRITE, NOT DEFERRABLE;
-START TRANSACTION READ WRITE;`)).not.toThrow();
+START TRANSACTION READ WRITE;`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_transaction_03 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`START TRANSACTION ISOLATION SERIALIZABLE, ISOLATION SERIALIZABLE;`)).toThrow();
+    expect(() =>
+      tryParse(`START TRANSACTION ISOLATION SERIALIZABLE, ISOLATION SERIALIZABLE;`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_transaction_04 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -4631,8 +5557,10 @@ START TRANSACTION READ WRITE;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_transaction_06", () => {
-    expect(() => tryParse(`        START TRANSACTION READ WRITE, NOT DEFERRABLE, ISOLATION SERIALIZABLE;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        START TRANSACTION READ WRITE, NOT DEFERRABLE, ISOLATION SERIALIZABLE;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_transaction_07 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -4656,8 +5584,10 @@ START TRANSACTION READ WRITE;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_describe_05", () => {
-    expect(() => tryParse(`        DESCRIBE INSTANCE CONFIG;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        DESCRIBE INSTANCE CONFIG;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_describe_06", () => {
@@ -4665,8 +5595,10 @@ START TRANSACTION READ WRITE;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_describe_07", () => {
-    expect(() => tryParse(`        DESCRIBE ROLES;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        DESCRIBE ROLES;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_describe_08", () => {
@@ -4674,8 +5606,10 @@ START TRANSACTION READ WRITE;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_describe_09", () => {
-    expect(() => tryParse(`        DESCRIBE SYSTEM CONFIG;
-`)).not.toThrow();
+    expect(() =>
+      tryParse(`        DESCRIBE SYSTEM CONFIG;
+`),
+    ).not.toThrow();
   });
 
   it("test_edgeql_syntax_create_01", () => {
@@ -4683,7 +5617,8 @@ START TRANSACTION READ WRITE;`)).not.toThrow();
   });
 
   it("test_edgeql_syntax_ddl_01 [sqlite-ts parser accepts what upstream rejects]", () => {
-    expect(() => tryParse(`start migration to {
+    expect(() =>
+      tryParse(`start migration to {
   module default {
     type Hello extending MetaHello {
       property platform_fee_percentage: int16 {
@@ -4694,7 +5629,8 @@ START TRANSACTION READ WRITE;`)).not.toThrow();
       required property blah := .bleh - .bloh - .blih;
     }
   }
-}`)).toThrow();
+}`),
+    ).toThrow();
   });
 
   it("test_edgeql_syntax_ddl_02 [sqlite-ts parser accepts what upstream rejects]", () => {
@@ -4716,5 +5652,4 @@ START TRANSACTION READ WRITE;`)).not.toThrow();
   it("test_edgeql_normalized_token_serialization", () => {
     expect(() => tryParse(``)).not.toThrow();
   });
-
 });

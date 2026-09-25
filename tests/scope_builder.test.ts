@@ -62,10 +62,7 @@ describe("scope_builder (Phase 1)", () => {
     const root = treeOf("SELECT count((Card.owners.name, Card.owners.deck_cost))");
     expect(countByName(root, "Card.owners")).toBe(1);
     const owners = find(root, "Card.owners")!;
-    expect(owners.children.map(seg).sort()).toEqual([
-      "Card.owners.deck_cost",
-      "Card.owners.name",
-    ]);
+    expect(owners.children.map(seg).sort()).toEqual(["Card.owners.deck_cost", "Card.owners.name"]);
   });
 
   // --- layer 2: the factoring discriminator ---

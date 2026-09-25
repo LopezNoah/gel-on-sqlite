@@ -58,9 +58,11 @@ function qualifyAstTypeName(name: string, module: string): string {
 }
 
 function lookupAstObjectType(ctx: AstPreValidationCtx, name: string): TypeDef | undefined {
-  return ctx.schema.getType(qualifyAstTypeName(name, ctx.module))
-    ?? ctx.schema.getType(name)
-    ?? ctx.schema.getType(`default::${name}`);
+  return (
+    ctx.schema.getType(qualifyAstTypeName(name, ctx.module)) ??
+    ctx.schema.getType(name) ??
+    ctx.schema.getType(`default::${name}`)
+  );
 }
 
 type AstPointerInfo =
@@ -68,7 +70,11 @@ type AstPointerInfo =
   | { kind: "link"; link: NonNullable<TypeDef["links"]>[number]; owner: TypeDef };
 
 // Resolve a pointer (property or link) on a type, walking `extends`.
-function findAstPointer(ctx: AstPreValidationCtx, typeDef: TypeDef, name: string): AstPointerInfo | undefined {
+function findAstPointer(
+  ctx: AstPreValidationCtx,
+  typeDef: TypeDef,
+  name: string,
+): AstPointerInfo | undefined {
   const queue: TypeDef[] = [typeDef];
   const seen = new Set<string>();
   while (queue.length > 0) {
@@ -103,17 +109,40 @@ const STD_SCALAR_NAME_BY_TYPE: Record<string, string> = {
 };
 
 function declaredScalarTypeName(field: FieldDef): string {
-  return field.targetTypeName ?? field.enumTypeName ?? STD_SCALAR_NAME_BY_TYPE[field.type] ?? `std::${field.type}`;
+  return (
+    field.targetTypeName ??
+    field.enumTypeName ??
+    STD_SCALAR_NAME_BY_TYPE[field.type] ??
+    `std::${field.type}`
+  );
 }
 
 // Names of standard-library scalar/object types that, when written bare in a
 // cast (`<datetime>`, `<Object>`), live in the `std` module. Used to qualify
 // the cast target so it can be compared to a declared pointer type.
 const STD_CAST_TYPE_NAMES = new Set([
-  "str", "int16", "int32", "int64", "float32", "float64", "bool", "uuid",
-  "datetime", "duration", "json", "bytes", "decimal", "bigint", "Object",
-  "BaseObject", "FreeObject", "cal::local_date", "cal::local_time",
-  "cal::local_datetime", "cal::relative_duration", "cal::date_duration",
+  "str",
+  "int16",
+  "int32",
+  "int64",
+  "float32",
+  "float64",
+  "bool",
+  "uuid",
+  "datetime",
+  "duration",
+  "json",
+  "bytes",
+  "decimal",
+  "bigint",
+  "Object",
+  "BaseObject",
+  "FreeObject",
+  "cal::local_date",
+  "cal::local_time",
+  "cal::local_datetime",
+  "cal::relative_duration",
+  "cal::date_duration",
 ]);
 
 // True when `name` resolves to a registered expression alias of any flavor
@@ -143,7 +172,11 @@ function qualifyCastTypeName(ctx: AstPreValidationCtx, castType: string): string
 }
 
 // Generic recursive walk over every object node carrying a string `kind`.
-function walkAstForValidation(node: unknown, visit: (n: Record<string, unknown> & { kind: string }) => void, seen: Set<unknown> = new Set()): void {
+function walkAstForValidation(
+  node: unknown,
+  visit: (n: Record<string, unknown> & { kind: string }) => void,
+  seen: Set<unknown> = new Set(),
+): void {
   if (!node || typeof node !== "object") return;
   if (seen.has(node)) return;
   seen.add(node);
@@ -168,7 +201,11 @@ interface UnionBranchInfo {
   bindingName?: string;
 }
 
-function unionBranchInfo(ctx: AstPreValidationCtx, value: unknown, depth = 0): UnionBranchInfo | undefined {
+function unionBranchInfo(
+  ctx: AstPreValidationCtx,
+  value: unknown,
+  depth = 0,
+): UnionBranchInfo | undefined {
   if (!value || typeof value !== "object" || depth > 6) return undefined;
   const node = value as Record<string, unknown> & { kind?: string };
   switch (node.kind) {
@@ -214,7 +251,11 @@ function unionBranchInfo(ctx: AstPreValidationCtx, value: unknown, depth = 0): U
   }
 }
 
-function bindingUnionBranchInfo(ctx: AstPreValidationCtx, binding: WithBindingValue, depth: number): UnionBranchInfo | undefined {
+function bindingUnionBranchInfo(
+  ctx: AstPreValidationCtx,
+  binding: WithBindingValue,
+  depth: number,
+): UnionBranchInfo | undefined {
   switch (binding.kind) {
     case "subquery": {
       const computed = new Set<string>();
@@ -232,7 +273,11 @@ function bindingUnionBranchInfo(ctx: AstPreValidationCtx, binding: WithBindingVa
   }
 }
 
-function branchHasSchemaPointer(ctx: AstPreValidationCtx, info: UnionBranchInfo, name: string): boolean {
+function branchHasSchemaPointer(
+  ctx: AstPreValidationCtx,
+  info: UnionBranchInfo,
+  name: string,
+): boolean {
   if (!info.typeName) return false;
   const typeDef = lookupAstObjectType(ctx, info.typeName);
   if (!typeDef) return false;
@@ -267,7 +312,11 @@ function checkUnionComputedPointerMix(ctx: AstPreValidationCtx, values: unknown[
 
 // `(Issue UNION <Named>{}).number` — a pointer accessed on a union must
 // exist on every branch of the union.
-function checkUnionFieldAccess(ctx: AstPreValidationCtx, setValues: unknown[], field: string): void {
+function checkUnionFieldAccess(
+  ctx: AstPreValidationCtx,
+  setValues: unknown[],
+  field: string,
+): void {
   if (setValues.length < 2) return;
   if (field === "id" || field === "__type__" || field.startsWith("@")) return;
   const branches: Array<{ typeDef: TypeDef; computed: Set<string> }> = [];
@@ -281,7 +330,9 @@ function checkUnionFieldAccess(ctx: AstPreValidationCtx, setValues: unknown[], f
   for (const branch of branches) {
     if (branch.computed.has(field)) continue;
     if (findAstPointer(ctx, branch.typeDef, field)) continue;
-    preValidationFail(`object type '${qualifiedTypeName(branch.typeDef)}' has no link or property '${field}'`);
+    preValidationFail(
+      `object type '${qualifiedTypeName(branch.typeDef)}' has no link or property '${field}'`,
+    );
   }
 }
 
@@ -290,7 +341,11 @@ function checkUnionFieldAccess(ctx: AstPreValidationCtx, setValues: unknown[], f
 // Whether a computed expression is statically known to produce more than one
 // element (a set literal / UNION with several branches).
 // `SELECT V { single foo := .foo }` where V's `foo` is a multi computed.
-function checkSingleDeclaredComputeds(ctx: AstPreValidationCtx, shape: ShapeElement[], sourceShape: ShapeElement[] | undefined): void {
+function checkSingleDeclaredComputeds(
+  ctx: AstPreValidationCtx,
+  shape: ShapeElement[],
+  sourceShape: ShapeElement[] | undefined,
+): void {
   if (!sourceShape) return;
   for (const el of shape) {
     if (el.kind !== "computed") continue;
@@ -298,7 +353,9 @@ function checkSingleDeclaredComputeds(ctx: AstPreValidationCtx, shape: ShapeElem
     if (cardinality !== "one") continue;
     const referenced = computedElementReferencedField(el.expr);
     if (!referenced) continue;
-    const source = sourceShape.find((s) => s.kind === "computed" && s.name === referenced) as Extract<ShapeElement, { kind: "computed" }> | undefined;
+    const source = sourceShape.find((s) => s.kind === "computed" && s.name === referenced) as
+      | Extract<ShapeElement, { kind: "computed" }>
+      | undefined;
     if (!source) continue;
     if ((source as { multi?: boolean }).multi || computedExprIsMulti(source.expr)) {
       preValidationFail(
@@ -310,7 +367,11 @@ function checkSingleDeclaredComputeds(ctx: AstPreValidationCtx, shape: ShapeElem
 
 // Resolve a `current_item`-rooted field-access chain to its final pointer,
 // starting at `subjectType`. Returns undefined when any step is unknown.
-function resolveCurrentItemPathPointer(ctx: AstPreValidationCtx, expr: unknown, subjectType: TypeDef): AstPointerInfo | undefined {
+function resolveCurrentItemPathPointer(
+  ctx: AstPreValidationCtx,
+  expr: unknown,
+  subjectType: TypeDef,
+): AstPointerInfo | undefined {
   const fields: string[] = [];
   let current = expr as Record<string, unknown> & { kind?: string };
   let guard = 0;
@@ -339,14 +400,19 @@ function resolveCurrentItemPathPointer(ctx: AstPreValidationCtx, expr: unknown, 
 
 // `foo := .owner.todo UNION .owner.todo` — a computed link must be a
 // provably distinct set; a UNION of link paths is not.
-function checkComputedLinkUnions(ctx: AstPreValidationCtx, typeName: string, shape: ShapeElement[]): void {
+function checkComputedLinkUnions(
+  ctx: AstPreValidationCtx,
+  typeName: string,
+  shape: ShapeElement[],
+): void {
   const subjectType = lookupAstObjectType(ctx, typeName);
   if (!subjectType) return;
   for (const el of shape) {
     if (el.kind !== "computed") continue;
     let expr: unknown = el.expr;
     const wrapper = expr as Record<string, unknown> & { kind?: string };
-    if (wrapper?.kind === "select_expr" || wrapper?.kind === "select_expr_subquery") expr = wrapper.expr;
+    if (wrapper?.kind === "select_expr" || wrapper?.kind === "select_expr_subquery")
+      expr = wrapper.expr;
     const setNode = expr as Record<string, unknown> & { kind?: string };
     if (setNode?.kind !== "set_expr") continue;
     const values = (setNode.values as unknown[]) ?? [];
@@ -356,7 +422,9 @@ function checkComputedLinkUnions(ctx: AstPreValidationCtx, typeName: string, sha
       return pointer?.kind === "link";
     });
     if (allLinkPaths) {
-      preValidationFail(`possibly not a distinct set returned by an expression for a computed link '${el.name}'`);
+      preValidationFail(
+        `possibly not a distinct set returned by an expression for a computed link '${el.name}'`,
+      );
     }
   }
 }
@@ -387,12 +455,18 @@ function exprContainsPartialPathRef(node: unknown): boolean {
 
 // ── function call signature checks (func_06 / func_08) ─────────────────────
 
-function functionCallArgLiteral(ctx: AstPreValidationCtx, arg: FunctionCallArgExpr): { value: ScalarValue; numericKind?: string } | undefined {
+function functionCallArgLiteral(
+  ctx: AstPreValidationCtx,
+  arg: FunctionCallArgExpr,
+): { value: ScalarValue; numericKind?: string } | undefined {
   if (arg.kind === "literal") return { value: arg.value };
   if (arg.kind === "expr") {
     const inner = arg.expr as Record<string, unknown> & { kind?: string };
     if (inner?.kind === "literal") {
-      return { value: inner.value as ScalarValue, numericKind: inner.numericKind as string | undefined };
+      return {
+        value: inner.value as ScalarValue,
+        numericKind: inner.numericKind as string | undefined,
+      };
     }
     if (inner?.kind === "binding_ref") {
       return bindingLiteralValue(ctx, inner.name as string);
@@ -403,7 +477,10 @@ function functionCallArgLiteral(ctx: AstPreValidationCtx, arg: FunctionCallArgEx
   return undefined;
 }
 
-function bindingLiteralValue(ctx: AstPreValidationCtx, name: string): { value: ScalarValue } | undefined {
+function bindingLiteralValue(
+  ctx: AstPreValidationCtx,
+  name: string,
+): { value: ScalarValue } | undefined {
   const binding = ctx.bindings.get(name);
   if (!binding) return undefined;
   if (binding.kind === "literal") return { value: binding.value };
@@ -449,9 +526,14 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
   // Schema (user-declared) functions: validate literal argument types against
   // the declared parameter types — the reference raises "function … does not
   // exist" when no overload matches.
-  const moduleName = call.name.includes("::") ? call.name.slice(0, call.name.lastIndexOf("::")) : ctx.module;
-  const fnDef = ctx.schema.findFunction(moduleName, leaf, call.args.length)
-    ?? (moduleName === "default" ? undefined : ctx.schema.findFunction("default", leaf, call.args.length));
+  const moduleName = call.name.includes("::")
+    ? call.name.slice(0, call.name.lastIndexOf("::"))
+    : ctx.module;
+  const fnDef =
+    ctx.schema.findFunction(moduleName, leaf, call.args.length) ??
+    (moduleName === "default"
+      ? undefined
+      : ctx.schema.findFunction("default", leaf, call.args.length));
   if (!fnDef) return;
   if (call.args.some((arg) => containsMutationResult(arg))) {
     preValidationFail("newly created or updated objects cannot be passed to functions");
@@ -478,7 +560,12 @@ function checkFunctionCallSignatures(ctx: AstPreValidationCtx, call: FunctionCal
     const isStrParam = paramType === "str";
     const isNumericArg = argType === "std::int64" || argType === "std::float64";
     if (isStrParam && isNumericArg) {
-      const renderedArgs = call.args.map((_, idx) => `arg${idx}: ${literalStdTypeName(functionCallArgLiteral(ctx, call.args[idx]) ?? { value: "" }) ?? "std::str"}`).join(", ");
+      const renderedArgs = call.args
+        .map(
+          (_, idx) =>
+            `arg${idx}: ${literalStdTypeName(functionCallArgLiteral(ctx, call.args[idx]) ?? { value: "" }) ?? "std::str"}`,
+        )
+        .join(", ");
       preValidationFail(`function "${leaf}(${renderedArgs})" does not exist`);
     }
   }
@@ -510,14 +597,21 @@ export function validateStatementAst(
       if (!node || typeof node !== "object") return false;
       if (Array.isArray(node)) return node.some(bodyUsesIteratorLinkProperty);
       const value = node as Record<string, unknown>;
-      if (value.kind === "field_access" && typeof value.field === "string" && value.field.startsWith("@")) {
+      if (
+        value.kind === "field_access" &&
+        typeof value.field === "string" &&
+        value.field.startsWith("@")
+      ) {
         const source = value.expr as { kind?: string; name?: string } | undefined;
         if (source?.kind === "binding_ref" && source.name === forStatement.variable) return true;
       }
       return Object.values(value).some(bodyUsesIteratorLinkProperty);
     };
-    if (iterator.kind === "field_access" && iterator.expr?.kind === "select"
-        && bodyUsesIteratorLinkProperty(forStatement.body)) {
+    if (
+      iterator.kind === "field_access" &&
+      iterator.expr?.kind === "select" &&
+      bodyUsesIteratorLinkProperty(forStatement.body)
+    ) {
       preValidationFail("unexpected reference to link property outside of a path expression");
     }
   }
@@ -533,11 +627,15 @@ export function validateStatementAst(
   // against a primitive subject. (Checked before the generic walk so the
   // error reports the *declared* scalar type, e.g. a custom scalar.)
   if (statement.kind === "select_expr") {
-    const wrapper = (statement as { expr?: unknown }).expr as Record<string, unknown> & { kind?: string };
+    const wrapper = (statement as { expr?: unknown }).expr as Record<string, unknown> & {
+      kind?: string;
+    };
     if (wrapper?.kind === "select_expr_subquery" && wrapper.filter) {
       const prop = scalarPathProperty(ctx, wrapper.expr);
       if (prop && exprContainsPartialPathRef(wrapper.filter)) {
-        preValidationFail(`invalid property reference on an expression of primitive type '${declaredScalarTypeName(prop)}'`);
+        preValidationFail(
+          `invalid property reference on an expression of primitive type '${declaredScalarTypeName(prop)}'`,
+        );
       }
     }
   }
@@ -639,7 +737,9 @@ function checkInsertStatementAst(
 ): void {
   // `INSERT schema::Migration {…}` — std-lib types are not insertable.
   const qualified = qualifyAstTypeName(typeName, ctx.module);
-  const moduleName = qualified.includes("::") ? qualified.slice(0, qualified.lastIndexOf("::")) : ctx.module;
+  const moduleName = qualified.includes("::")
+    ? qualified.slice(0, qualified.lastIndexOf("::"))
+    : ctx.module;
   const leafName = qualified.slice(qualified.lastIndexOf("::") + 2);
   // `std::FreeObject` has its own diagnostic (test_edgeql_insert_free_obj);
   // leave it to the downstream check rather than the generic std-lib message.
@@ -731,12 +831,20 @@ function checkInsertStatementAst(
 // SELECT (`SELECT SelfRef …`), or via a WITH binding (`WITH X := SelfRef
 // SELECT X …`). FILTER/ORDER/LIMIT clauses don't matter: any live reference
 // to the same extent during its own INSERT is disallowed.
-function insertValueIsSelfReference(ctx: AstPreValidationCtx, value: unknown, selfTypeName: string): boolean {
+function insertValueIsSelfReference(
+  ctx: AstPreValidationCtx,
+  value: unknown,
+  selfTypeName: string,
+): boolean {
   if (!value || typeof value !== "object") return false;
   const node = value as Record<string, unknown> & { kind?: string };
 
   // Bare extent reference: `ref := SelfRef`.
-  if (node.kind === "binding_ref" && typeof node.name === "string" && !ctx.bindings.has(node.name)) {
+  if (
+    node.kind === "binding_ref" &&
+    typeof node.name === "string" &&
+    !ctx.bindings.has(node.name)
+  ) {
     const def = lookupAstObjectType(ctx, node.name);
     return def !== undefined && qualifiedTypeName(def) === selfTypeName;
   }
@@ -745,14 +853,16 @@ function insertValueIsSelfReference(ctx: AstPreValidationCtx, value: unknown, se
   if (node.kind === "select" && typeof node.typeName === "string") {
     if (node.detached === true) return false;
     const clauses = (node.clauses as Record<string, unknown> | undefined) ?? {};
-    const withBindings = (clauses._withBindings as Array<{ name: string; value: unknown }> | undefined) ?? [];
+    const withBindings =
+      (clauses._withBindings as Array<{ name: string; value: unknown }> | undefined) ?? [];
     // Resolve the select subject through any local WITH binding.
     let subject = node.typeName as string;
     for (const b of withBindings) {
       if (b.name === subject) {
         const bv = b.value as Record<string, unknown> & { kind?: string };
         if (bv?.kind === "binding_ref" && typeof bv.name === "string") subject = bv.name;
-        else if (bv?.kind === "select" && typeof bv.typeName === "string") subject = bv.typeName as string;
+        else if (bv?.kind === "select" && typeof bv.typeName === "string")
+          subject = bv.typeName as string;
         break;
       }
     }
@@ -778,19 +888,23 @@ function checkIndeterminateLinkPropTarget(value: unknown): void {
   // elements: `select`/`shape_projection`/`expr`/`select_expr_subquery`.
   let shape: unknown[] | undefined;
   if (node.kind === "select" && Array.isArray(node.shape)) shape = node.shape as unknown[];
-  else if (node.kind === "shape_projection" && Array.isArray(node.shape)) shape = node.shape as unknown[];
+  else if (node.kind === "shape_projection" && Array.isArray(node.shape))
+    shape = node.shape as unknown[];
   else if (node.kind === "expr") return checkIndeterminateLinkPropTarget(node.expr);
-  else if (node.kind === "select_expr" || node.kind === "select_expr_subquery") return checkIndeterminateLinkPropTarget(node.expr);
+  else if (node.kind === "select_expr" || node.kind === "select_expr_subquery")
+    return checkIndeterminateLinkPropTarget(node.expr);
 
   if (!shape) return;
   for (const raw of shape) {
     if (!raw || typeof raw !== "object") continue;
     const el = raw as Record<string, unknown> & { kind?: string; name?: string };
     if (el.kind !== "computed" || typeof el.name !== "string" || !el.name.startsWith("@")) continue;
-    const body = el.expr as Record<string, unknown> & { kind?: string } | undefined;
+    const body = el.expr as (Record<string, unknown> & { kind?: string }) | undefined;
     if (!body) continue;
-    const isEmptyArrayLiteral = body.kind === "array_literal"
-      && Array.isArray(body.values) && (body.values as unknown[]).length === 0;
+    const isEmptyArrayLiteral =
+      body.kind === "array_literal" &&
+      Array.isArray(body.values) &&
+      (body.values as unknown[]).length === 0;
     const isFoldedEmptyArray = body.kind === "literal" && body.value === "[]";
     if (isEmptyArrayLiteral || isFoldedEmptyArray) {
       preValidationFail("expression returns value of indeterminate type");
@@ -824,7 +938,7 @@ function checkArrayValuedScalarTarget(
   if (actual !== declared) {
     preValidationFail(
       `invalid target for property '${field}' of object type ` +
-      `'${qualifiedTypeName(typeDef)}': '${actual}' (expecting '${declared}')`,
+        `'${qualifiedTypeName(typeDef)}': '${actual}' (expecting '${declared}')`,
     );
   }
 }
@@ -853,7 +967,7 @@ function checkEmptyCastTargetType(
     if (castName !== declared) {
       preValidationFail(
         `invalid target for property '${field}' of object type ` +
-        `'${qualifiedTypeName(typeDef)}': '${castName}' (expecting '${declared}')`,
+          `'${qualifiedTypeName(typeDef)}': '${castName}' (expecting '${declared}')`,
       );
     }
   } else {
@@ -863,12 +977,13 @@ function checkEmptyCastTargetType(
     const castObj = lookupAstObjectType(ctx, node.castType);
     const declaredObj = ctx.schema.getType(declared);
     const compatible =
-      castObj && declaredObj &&
+      castObj &&
+      declaredObj &&
       ctx.schema.concreteTypeNamesUnder(declared).includes(qualifiedTypeName(castObj));
     if (!compatible) {
       preValidationFail(
         `invalid target for link '${field}' of object type ` +
-        `'${qualifiedTypeName(typeDef)}': '${castName}' (expecting '${declared}')`,
+          `'${qualifiedTypeName(typeDef)}': '${castName}' (expecting '${declared}')`,
       );
     }
   }
@@ -906,13 +1021,23 @@ function bareObjectExtentName(ctx: AstPreValidationCtx, value: unknown): string 
   const node = value as Record<string, unknown> & { kind?: string };
   if (node.kind === "select" && typeof node.typeName === "string") {
     const clauses = (node.clauses as Record<string, unknown> | undefined) ?? {};
-    if (clauses.filter !== undefined || clauses.limit !== undefined || clauses.offset !== undefined || clauses.order !== undefined) {
+    if (
+      clauses.filter !== undefined ||
+      clauses.limit !== undefined ||
+      clauses.offset !== undefined ||
+      clauses.order !== undefined
+    ) {
       return undefined;
     }
     const qn = qualifyAstTypeName(node.typeName as string, ctx.module);
-    if (lookupAstObjectType(ctx, node.typeName as string)) return qn.slice(qn.lastIndexOf("::") + 2);
+    if (lookupAstObjectType(ctx, node.typeName as string))
+      return qn.slice(qn.lastIndexOf("::") + 2);
   }
-  if (node.kind === "binding_ref" && typeof node.name === "string" && !ctx.bindings.has(node.name)) {
+  if (
+    node.kind === "binding_ref" &&
+    typeof node.name === "string" &&
+    !ctx.bindings.has(node.name)
+  ) {
     if (lookupAstObjectType(ctx, node.name as string)) return node.name as string;
   }
   return undefined;
@@ -921,12 +1046,21 @@ function bareObjectExtentName(ctx: AstPreValidationCtx, value: unknown): string 
 // Peel `mutation_expr` / `select` / `for_expr` wrappers off a tuple element to
 // reach an INSERT, recording any FOR iterators encountered en route (their
 // iterated sets count as correlated references too).
-function unwrapToInsert(value: unknown, iterators: unknown[] = [], depth = 0): { insert: Record<string, unknown>; forIterators: unknown[] } | undefined {
+function unwrapToInsert(
+  value: unknown,
+  iterators: unknown[] = [],
+  depth = 0,
+): { insert: Record<string, unknown>; forIterators: unknown[] } | undefined {
   if (!value || typeof value !== "object" || depth > 8) return undefined;
   const node = value as Record<string, unknown> & { kind?: string };
   if (node.kind === "insert") return { insert: node, forIterators: iterators };
   if (node.kind === "mutation_expr") return unwrapToInsert(node.statement, iterators, depth + 1);
-  if (node.kind === "select" || node.kind === "select_expr" || node.kind === "select_expr_subquery" || node.kind === "subquery_expr") {
+  if (
+    node.kind === "select" ||
+    node.kind === "select_expr" ||
+    node.kind === "select_expr_subquery" ||
+    node.kind === "subquery_expr"
+  ) {
     return unwrapToInsert(node.expr ?? node.statement, iterators, depth + 1);
   }
   if (node.kind === "for_expr" || node.kind === "for") {
@@ -964,7 +1098,12 @@ function insertReferencesCorrelatedSet(
   let hit: string | undefined;
   walkAstForValidation(insert.values, (n) => {
     if (hit) return;
-    if (n.kind === "binding_ref" && typeof n.name === "string" && correlated.has(n.name) && !ctx.bindings.has(n.name)) {
+    if (
+      n.kind === "binding_ref" &&
+      typeof n.name === "string" &&
+      correlated.has(n.name) &&
+      !ctx.bindings.has(n.name)
+    ) {
       hit = n.name;
     }
   });
@@ -1004,7 +1143,11 @@ function insertValueProvablyMulti(ctx: AstPreValidationCtx, value: unknown): boo
 
 // Does a SELECT's FILTER guarantee at most one row? True only for an equality
 // predicate on an exclusive-constrained single property of the subject type.
-function selectFilterGuaranteesSingle(ctx: AstPreValidationCtx, typeName: string, filter: unknown): boolean {
+function selectFilterGuaranteesSingle(
+  ctx: AstPreValidationCtx,
+  typeName: string,
+  filter: unknown,
+): boolean {
   const pred = filter as Record<string, unknown> & { kind?: string };
   if (!pred || pred.kind !== "predicate" || pred.op !== "=") return false;
   const target = pred.target as Record<string, unknown> & { kind?: string };
@@ -1013,5 +1156,7 @@ function selectFilterGuaranteesSingle(ctx: AstPreValidationCtx, typeName: string
   if (!typeDef) return false;
   const fieldDef = (typeDef.fields ?? []).find((f) => f.name === target.field && !f.isLinkColumn);
   if (!fieldDef || fieldDef.multi) return false;
-  return (fieldDef.constraints ?? []).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
+  return (fieldDef.constraints ?? []).some(
+    (c) => c.name === "std::exclusive" || c.name === "exclusive",
+  );
 }

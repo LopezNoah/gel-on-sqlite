@@ -20,7 +20,9 @@ const schemaOf = (types: Record<string, Partial<TypeDef>>): SchemaSnapshot => {
 };
 
 const link = (def: Partial<NonNullable<TypeDef["links"]>[number]>) =>
-  ({ name: "owner", multi: false, properties: [], ...def }) as NonNullable<TypeDef["links"]>[number];
+  ({ name: "owner", multi: false, properties: [], ...def }) as NonNullable<
+    TypeDef["links"]
+  >[number];
 
 describe("usesLinkTable (physical layout re-export)", () => {
   it("inline FK iff single and property-free", () => {
@@ -43,7 +45,10 @@ describe("resolveLinkStorageOwner", () => {
   it("an inherited, equivalent link is owned by the base", () => {
     const schema = schemaOf({
       "default::Base": { links: [link({ targetType: "default::User" })] },
-      "default::Sub": { extends: ["default::Base"], links: [link({ targetType: "default::User" })] },
+      "default::Sub": {
+        extends: ["default::Base"],
+        links: [link({ targetType: "default::User" })],
+      },
     });
     const sub = schema.getType("default::Sub")!;
     expect(resolveLinkStorageOwner(schema, sub, sub.links![0]).name).toBe("Base");
@@ -56,7 +61,10 @@ describe("resolveLinkStorageOwner", () => {
   it("a non-equivalent base re-declaration stops the walk (linkDefsEquivalent guard)", () => {
     const schema = schemaOf({
       "default::Base": { links: [link({ targetType: "default::User", multi: false })] },
-      "default::Sub": { extends: ["default::Base"], links: [link({ targetType: "default::User", multi: true })] },
+      "default::Sub": {
+        extends: ["default::Base"],
+        links: [link({ targetType: "default::User", multi: true })],
+      },
     });
     const sub = schema.getType("default::Sub")!;
     // multi differs → not equivalent → Sub owns it.
@@ -77,7 +85,10 @@ describe("makeLinkStorageOwnerResolver (compile-side adapter)", () => {
   it("returns the qualified owner name", () => {
     const schema = schemaOf({
       "default::Base": { links: [link({ targetType: "default::User" })] },
-      "default::Sub": { extends: ["default::Base"], links: [link({ targetType: "default::User" })] },
+      "default::Sub": {
+        extends: ["default::Base"],
+        links: [link({ targetType: "default::User" })],
+      },
     });
     const resolve = makeLinkStorageOwnerResolver(schema);
     expect(resolve("default::Sub", "owner")).toBe("default::Base");
@@ -107,7 +118,10 @@ describe("makeTypeStorageColumnsResolver (compile-side adapter)", () => {
 
   it("excludes the FK column when the link uses a junction table", () => {
     const schema = schemaOf({
-      "default::T": { fields: [{ name: "name" }] as never, links: [link({ name: "tags", multi: true })] },
+      "default::T": {
+        fields: [{ name: "name" }] as never,
+        links: [link({ name: "tags", multi: true })],
+      },
     });
     const cols = makeTypeStorageColumnsResolver(schema)("default::T");
     expect(cols && [...cols].sort()).toEqual(["id", "name"]);
@@ -119,7 +133,14 @@ describe("makeTypeStorageColumnsResolver (compile-side adapter)", () => {
       "default::Base": { links: [link({ name: "owner", multi: false, properties: [] })] },
       "default::Sub": {
         extends: ["default::Base"],
-        links: [link({ name: "owner", multi: false, properties: [{ name: "since" } as never], overloaded: true })],
+        links: [
+          link({
+            name: "owner",
+            multi: false,
+            properties: [{ name: "since" } as never],
+            overloaded: true,
+          }),
+        ],
       },
     });
     const cols = makeTypeStorageColumnsResolver(schema)("default::Sub");

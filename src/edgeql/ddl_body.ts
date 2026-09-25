@@ -137,7 +137,12 @@ export type CreateTypeBodyEntry =
       exceptExpr?: string;
     };
 
-const MEMBER_MODIFIER_KINDS = new globalThis.Set(["kw_required", "kw_optional", "kw_multi", "kw_single"]);
+const MEMBER_MODIFIER_KINDS = new globalThis.Set([
+  "kw_required",
+  "kw_optional",
+  "kw_multi",
+  "kw_single",
+]);
 
 const stripBacktickName = (lexeme: string): string =>
   lexeme.startsWith("`") && lexeme.endsWith("`") ? lexeme.slice(1, -1) : lexeme;
@@ -226,7 +231,13 @@ const splitTopLevelStatements = (script: string): string[] => {
 };
 
 type MemberHeader =
-  | { kind: "property" | "link"; required: boolean; multi: boolean; name: string; targetType: string }
+  | {
+      kind: "property" | "link";
+      required: boolean;
+      multi: boolean;
+      name: string;
+      targetType: string;
+    }
   | { kind: "computed_link"; required: boolean; multi: boolean; name: string; exprText: string };
 
 // `CREATE [required|optional|multi|single] property|link <name> (-> | : | :=) …`
@@ -271,7 +282,9 @@ const parseMemberHeader = (entry: string): MemberHeader | undefined => {
 };
 
 // `ALTER PROPERTY|LINK <name>` header.
-const parseAlterPointer = (entry: string): { kind: "property" | "link"; name: string } | undefined => {
+const parseAlterPointer = (
+  entry: string,
+): { kind: "property" | "link"; name: string } | undefined => {
   const tokenized = tryResult(() => tokenize(entry));
   if (!tokenized.ok) return undefined;
   const tokens: readonly Token[] = tokenized.value;
@@ -329,7 +342,8 @@ const parseExclusiveConstraint = (entry: string): ExclusiveConstraintSpec | unde
       if (t.kind === "lparen") depth += 1;
       else if (t.kind === "rparen") {
         depth -= 1;
-        if (depth === 0) return { text: entry.slice(tokens[startIdx].offset + 1, t.offset).trim(), next: j + 1 };
+        if (depth === 0)
+          return { text: entry.slice(tokens[startIdx].offset + 1, t.offset).trim(), next: j + 1 };
       }
     }
     return undefined;
@@ -399,7 +413,12 @@ const parseLinkProperties = (innerBody: string): DdlLinkProperty[] => {
   for (const linkBodyEntry of splitTopLevelStatements(innerBody)) {
     const header = parseMemberHeader(stripTrailingBraceBlock(linkBodyEntry));
     if (!header || header.kind !== "property") continue;
-    out.push({ name: header.name, targetType: header.targetType, required: header.required, multi: header.multi });
+    out.push({
+      name: header.name,
+      targetType: header.targetType,
+      required: header.required,
+      multi: header.multi,
+    });
   }
   return out;
 };
@@ -447,13 +466,23 @@ export const parseCreateTypeBody = (bodyText: string): CreateTypeBodyEntry[] => 
     if (altered && innerBody) {
       const constraints = collectExclusiveConstraints(innerBody);
       if (constraints.length > 0) {
-        entries.push({ kind: "alter_pointer", pointerKind: altered.kind, name: altered.name, constraints });
+        entries.push({
+          kind: "alter_pointer",
+          pointerKind: altered.kind,
+          name: altered.name,
+          constraints,
+        });
       }
       continue;
     }
     const typeExcl = parseExclusiveConstraint(entry);
     if (typeExcl) {
-      entries.push({ kind: "type_exclusive_constraint", delegated: typeExcl.delegated, onExpr: typeExcl.onExpr, exceptExpr: typeExcl.exceptExpr });
+      entries.push({
+        kind: "type_exclusive_constraint",
+        delegated: typeExcl.delegated,
+        onExpr: typeExcl.onExpr,
+        exceptExpr: typeExcl.exceptExpr,
+      });
     }
   }
   return entries;
@@ -499,7 +528,8 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
       if (t.kind === "lparen") depth += 1;
       else if (t.kind === "rparen") {
         depth -= 1;
-        if (depth === 0) return { text: src.slice(tokens[startIdx].offset + 1, t.offset).trim(), next: j + 1 };
+        if (depth === 0)
+          return { text: src.slice(tokens[startIdx].offset + 1, t.offset).trim(), next: j + 1 };
       }
     }
     return undefined;
@@ -512,14 +542,20 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
     if (!isDrop && !isCreate) return undefined;
     let j = idx + 1;
     let delegated = false;
-    if (tokens[j]?.kind === "identifier" && tokens[j].lower === "delegated") { delegated = true; j += 1; }
+    if (tokens[j]?.kind === "identifier" && tokens[j].lower === "delegated") {
+      delegated = true;
+      j += 1;
+    }
     if (tokens[j]?.kind !== "kw_constraint") return undefined;
     j += 1;
     const cnameTok = tokens[j];
     if (!cnameTok) return undefined;
     let cname = stripBacktickName(cnameTok.lexeme);
     j += 1;
-    if (tokens[j]?.kind === "coloncolon" && tokens[j + 1]) { cname = stripBacktickName(tokens[j + 1].lexeme); j += 2; }
+    if (tokens[j]?.kind === "coloncolon" && tokens[j + 1]) {
+      cname = stripBacktickName(tokens[j + 1].lexeme);
+      j += 2;
+    }
     if (cname.includes("::")) cname = cname.slice(cname.lastIndexOf("::") + 2);
     if (cname !== "exclusive") return undefined;
     let onExpr: string | undefined;
@@ -528,12 +564,16 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
       if (tokens[j].kind === "kw_on") {
         const sliced = sliceParen(j + 1);
         if (!sliced) break;
-        onExpr = sliced.text; j = sliced.next; continue;
+        onExpr = sliced.text;
+        j = sliced.next;
+        continue;
       }
       if (tokens[j].kind === "kw_except") {
         const sliced = sliceParen(j + 1);
         if (!sliced) break;
-        exceptExpr = sliced.text; j = sliced.next; continue;
+        exceptExpr = sliced.text;
+        j = sliced.next;
+        continue;
       }
       break;
     }
@@ -554,8 +594,14 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
     if (tokens[j]?.kind !== "kw_policy") return undefined;
     j += 1;
     const nameTok = tokens[j];
-    if (!nameTok || nameTok.kind === "semi" || nameTok.kind === "eof"
-      || nameTok.kind === "lbrace" || nameTok.kind === "rbrace") return undefined;
+    if (
+      !nameTok ||
+      nameTok.kind === "semi" ||
+      nameTok.kind === "eof" ||
+      nameTok.kind === "lbrace" ||
+      nameTok.kind === "rbrace"
+    )
+      return undefined;
     const name = stripBacktickName(nameTok.lexeme);
     j += 1;
     const effectLower = tokens[j]?.lower;
@@ -566,18 +612,47 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
     let parseOk = true;
     while (tokens[j]) {
       const t = tokens[j];
-      if (t.kind === "kw_using" || t.kind === "semi" || t.kind === "rbrace"
-        || t.kind === "eof" || t.kind === "lbrace") break;
-      if (t.kind === "comma") { j += 1; continue; }
-      if (t.kind === "kw_select") { operations.push("select"); j += 1; continue; }
-      if (t.kind === "kw_insert") { operations.push("insert"); j += 1; continue; }
-      if (t.kind === "kw_delete") { operations.push("delete"); j += 1; continue; }
-      if (t.lower === "all") { operations.push("all"); j += 1; continue; }
+      if (
+        t.kind === "kw_using" ||
+        t.kind === "semi" ||
+        t.kind === "rbrace" ||
+        t.kind === "eof" ||
+        t.kind === "lbrace"
+      )
+        break;
+      if (t.kind === "comma") {
+        j += 1;
+        continue;
+      }
+      if (t.kind === "kw_select") {
+        operations.push("select");
+        j += 1;
+        continue;
+      }
+      if (t.kind === "kw_insert") {
+        operations.push("insert");
+        j += 1;
+        continue;
+      }
+      if (t.kind === "kw_delete") {
+        operations.push("delete");
+        j += 1;
+        continue;
+      }
+      if (t.lower === "all") {
+        operations.push("all");
+        j += 1;
+        continue;
+      }
       if (t.kind === "kw_update") {
         j += 1;
-        if (tokens[j]?.lower === "read") { operations.push("update read"); j += 1; }
-        else if (tokens[j]?.lower === "write") { operations.push("update write"); j += 1; }
-        else operations.push("update");
+        if (tokens[j]?.lower === "read") {
+          operations.push("update read");
+          j += 1;
+        } else if (tokens[j]?.lower === "write") {
+          operations.push("update write");
+          j += 1;
+        } else operations.push("update");
         continue;
       }
       parseOk = false;
@@ -602,7 +677,10 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
         j += 1;
       }
     }
-    return { op: { kind: "create_access_policy", name, effect, operations, usingExprText }, next: j };
+    return {
+      op: { kind: "create_access_policy", name, effect, operations, usingExprText },
+      next: j,
+    };
   };
 
   const sliceDefaultExpr = (assignIdx: number): { text: string; next: number } => {
@@ -626,21 +704,33 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
 
   const skipPointerClause = (start: number, end: number): number => {
     let j = start + 3; // past ALTER <kind> <name>
-    while (j < end && tokens[j]?.kind !== "lbrace" && tokens[j]?.kind !== "kw_alter"
-      && tokens[j]?.kind !== "kw_set" && tokens[j]?.kind !== "semi"
-      && tokens[j]?.kind !== "kw_drop" && tokens[j]?.kind !== "kw_create") {
+    while (
+      j < end &&
+      tokens[j]?.kind !== "lbrace" &&
+      tokens[j]?.kind !== "kw_alter" &&
+      tokens[j]?.kind !== "kw_set" &&
+      tokens[j]?.kind !== "semi" &&
+      tokens[j]?.kind !== "kw_drop" &&
+      tokens[j]?.kind !== "kw_create"
+    ) {
       j += 1;
     }
     return j;
   };
 
-  const walkAlterPointer = (start: number, end: number, path: string[], braceDepth: number): void => {
+  const walkAlterPointer = (
+    start: number,
+    end: number,
+    path: string[],
+    braceDepth: number,
+  ): void => {
     const nameT = tokens[start + 2];
     const name = stripBacktickName(nameT.lexeme);
     const nextPath = [...path, name];
     const j = start + 3;
     if (tokens[j]?.kind === "lbrace") {
-      let depth = 1; let k = j + 1;
+      let depth = 1;
+      let k = j + 1;
       while (k < end && depth > 0) {
         if (tokens[k].kind === "lbrace") depth += 1;
         else if (tokens[k].kind === "rbrace") depth -= 1;
@@ -659,7 +749,8 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
       const t = tokens[j];
       if (!t || t.kind === "eof") break;
       if (t.kind === "lbrace") {
-        let depth = 1; let k = j + 1;
+        let depth = 1;
+        let k = j + 1;
         while (k < end && depth > 0) {
           if (tokens[k].kind === "lbrace") depth += 1;
           else if (tokens[k].kind === "rbrace") depth -= 1;
@@ -670,7 +761,10 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
         j = k + 1;
         continue;
       }
-      if (t.kind === "rbrace" || t.kind === "semi") { j += 1; continue; }
+      if (t.kind === "rbrace" || t.kind === "semi") {
+        j += 1;
+        continue;
+      }
       if (t.kind === "kw_alter") {
         const kindTok = tokens[j + 1];
         const nameT = tokens[j + 2];
@@ -682,16 +776,29 @@ export const parseAlterTypeBody = (tail: string): AlterTypeOp[] => {
         j += 1;
         continue;
       }
-      if (t.kind === "kw_set" && tokens[j + 1]?.lower === "default" && tokens[j + 2]?.kind === "assign") {
+      if (
+        t.kind === "kw_set" &&
+        tokens[j + 1]?.lower === "default" &&
+        tokens[j + 2]?.kind === "assign"
+      ) {
         const sliced = sliceDefaultExpr(j + 2);
-        if (path.length > 0) ops.push({ kind: "set_default", pointerPath: [...path], exprText: sliced.text });
+        if (path.length > 0)
+          ops.push({ kind: "set_default", pointerPath: [...path], exprText: sliced.text });
         j = sliced.next;
         continue;
       }
       const ap = parseAccessPolicyOp(j);
-      if (ap) { ops.push(ap.op); j = ap.next; continue; }
+      if (ap) {
+        ops.push(ap.op);
+        j = ap.next;
+        continue;
+      }
       const con = parseConstraintOp(j);
-      if (con) { ops.push(con.op); j = con.next; continue; }
+      if (con) {
+        ops.push(con.op);
+        j = con.next;
+        continue;
+      }
       j += 1;
     }
   }

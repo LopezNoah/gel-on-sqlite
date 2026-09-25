@@ -43,7 +43,12 @@ describe("native math lowering for custom-function-less targets", () => {
   });
 
   it("datetime extractors + truncate → native strftime on d1, _gel_* on sqlite", () => {
-    for (const fn of ["std::datetime_get", "cal::date_get", "cal::time_get", "std::datetime_truncate"]) {
+    for (const fn of [
+      "std::datetime_get",
+      "cal::date_get",
+      "cal::time_get",
+      "std::datetime_truncate",
+    ]) {
       const d1 = lowerStdlibFunctionSql("d1", fn, ["dt", "'year'"]) ?? "";
       expect(d1).toContain("strftime");
       expect(d1).not.toContain("_gel_");

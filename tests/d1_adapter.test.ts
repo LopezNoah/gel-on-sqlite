@@ -73,7 +73,15 @@ const makeFakeD1 = (
         }
       : {}),
   };
-  return { d1, get bound() { return bound; }, get batchCalls() { return state.batchCalls; } };
+  return {
+    d1,
+    get bound() {
+      return bound;
+    },
+    get batchCalls() {
+      return state.batchCalls;
+    },
+  };
 };
 
 // A fake Durable Objects SqlStorage backed by the sync sqlite db.
@@ -100,7 +108,11 @@ describe("D1/DO adapter improvements", () => {
     ensureGelSchemaTables(db);
     serializeSchemaToGelTables(db, schema);
     serializeSchemaToInstdata(db, schema);
-    for (const [name, age] of [["Alice", 30], ["Bob", 25], ["Carol", 41]] as const) {
+    for (const [name, age] of [
+      ["Alice", 30],
+      ["Bob", 25],
+      ["Carol", 41],
+    ] as const) {
       executeQuery(db, schema, `insert default::Person { name := '${name}', age := ${age} };`);
     }
   });
@@ -136,7 +148,9 @@ describe("D1/DO adapter improvements", () => {
       "select default::Person { name } order by .name;",
     ]);
     expect(fake.batchCalls).toBe(1);
-    expect(results[0].rows).toEqual(executeQuery(db, schema, "select count(default::Person);").rows);
+    expect(results[0].rows).toEqual(
+      executeQuery(db, schema, "select count(default::Person);").rows,
+    );
     expect(results[1].rows).toEqual(
       executeQuery(db, schema, "select default::Person { name } order by .name;").rows,
     );
@@ -146,9 +160,7 @@ describe("D1/DO adapter improvements", () => {
     const fake = makeFakeD1(db, { withBatch: false });
     const adapter = createD1Adapter(fake.d1);
     expect(adapter.batch).toBeUndefined();
-    const results = await executeManyAsync(adapter, schema, [
-      "select count(default::Person);",
-    ]);
+    const results = await executeManyAsync(adapter, schema, ["select count(default::Person);"]);
     expect(results[0].rows).toEqual([3]);
   });
 

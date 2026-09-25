@@ -40,25 +40,38 @@ const describeSetLevelSide = (
   deps: SqlLoweringContext,
 ): SetLevelSideDescriptor | null => {
   const {
-    compileSelectSource, collectScalarPointerSources, collectInnerWhereClauses,
-    compileValueSetSQL, collectReferencedColumns, compilePolymorphicSource,
-    compilePredicateSetSQL, orderedCallArgs,
+    compileSelectSource,
+    collectScalarPointerSources,
+    collectInnerWhereClauses,
+    compileValueSetSQL,
+    collectReferencedColumns,
+    compilePolymorphicSource,
+    compilePredicateSetSQL,
+    orderedCallArgs,
   } = deps;
   const expr = set.expr;
 
   if (expr.kind === "type_cast") {
     const inner = (expr as TypeCast).expr;
     const innerExprKind = inner.expr.kind;
-    if ((innerExprKind === "string_constant" || innerExprKind === "integer_constant"
-      || innerExprKind === "float_constant" || innerExprKind === "boolean_constant")
-      && (inner.expr as BaseConstant).value === null) {
+    if (
+      (innerExprKind === "string_constant" ||
+        innerExprKind === "integer_constant" ||
+        innerExprKind === "float_constant" ||
+        innerExprKind === "boolean_constant") &&
+      (inner.expr as BaseConstant).value === null
+    ) {
       return { kind: "always-empty" };
     }
     return describeSetLevelSide(inner, params, target, options, deps);
   }
 
-  if (expr.kind === "string_constant" || expr.kind === "integer_constant"
-    || expr.kind === "float_constant" || expr.kind === "boolean_constant") {
+  if (
+    expr.kind === "string_constant" ||
+    expr.kind === "integer_constant" ||
+    expr.kind === "float_constant" ||
+    expr.kind === "boolean_constant"
+  ) {
     const value = (expr as BaseConstant).value;
     if (value === null) {
       return { kind: "always-empty" };
@@ -75,8 +88,12 @@ const describeSetLevelSide = (
   // subquery of its row ids. compileSelectSource handles select_expr
   // wrappers (WITH bindings carry their FILTER inline), pointer chains, and
   // type roots uniformly.
-  if (set.typeref && set.typeref.isScalar === false && !set.typeref.collection
-      && (expr.kind === "pointer" || expr.kind === "select_expr" || expr.kind === "type_root")) {
+  if (
+    set.typeref &&
+    set.typeref.isScalar === false &&
+    !set.typeref.collection &&
+    (expr.kind === "pointer" || expr.kind === "select_expr" || expr.kind === "type_root")
+  ) {
     const paramsCheckpoint = params.length;
     const source = compileSelectSource(set, undefined, undefined, options, params, target, "oc0");
     if (source) {
@@ -105,8 +122,9 @@ const describeSetLevelSide = (
 
     const whereParts: string[] = [];
     for (const w of wheres) {
-      const compiled = compilePredicateSetSQL(w, "g0", params, target, options)
-        ?? compileValueSetSQL(w, "g0", params, target, options);
+      const compiled =
+        compilePredicateSetSQL(w, "g0", params, target, options) ??
+        compileValueSetSQL(w, "g0", params, target, options);
       if (!compiled) {
         params.length = paramsCheckpoint;
         return null;
@@ -166,9 +184,11 @@ export const compileCorrelatedOptionalCompareRows = (
   deps: SqlLoweringContext,
 ): string | null => {
   const { shouldUseLinkTable, linkTableNameForPointer } = deps;
-  if (lhsPointer.direction !== "outbound"
-      || lhsPointer.ptrref.outTarget.isScalar
-      || !shouldUseLinkTable(lhsPointer)) {
+  if (
+    lhsPointer.direction !== "outbound" ||
+    lhsPointer.ptrref.outTarget.isScalar ||
+    !shouldUseLinkTable(lhsPointer)
+  ) {
     return null;
   }
   const paramsCheckpoint = params.length;
@@ -180,16 +200,19 @@ export const compileCorrelatedOptionalCompareRows = (
   const linkTable = quoteIdent(linkTableNameForPointer(lhsPointer, options));
   const lhsRows = `SELECT lt.${quoteIdent("target")} AS v FROM ${linkTable} lt WHERE lt.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")}`;
   const lhsExists = `EXISTS (SELECT 1 FROM ${linkTable} lt WHERE lt.${quoteIdent("source")} = ${sourceAlias}.${quoteIdent("id")})`;
-  const cmp = op === "?="
-    ? `CASE WHEN lhs_r.v IS rhs_r.${rhsDesc.valueColumn} THEN 'true' ELSE 'false' END`
-    : `CASE WHEN lhs_r.v IS NOT rhs_r.${rhsDesc.valueColumn} THEN 'true' ELSE 'false' END`;
+  const cmp =
+    op === "?="
+      ? `CASE WHEN lhs_r.v IS rhs_r.${rhsDesc.valueColumn} THEN 'true' ELSE 'false' END`
+      : `CASE WHEN lhs_r.v IS NOT rhs_r.${rhsDesc.valueColumn} THEN 'true' ELSE 'false' END`;
   const oneEmpty = op === "?=" ? "'false'" : "'true'";
   const bothEmpty = op === "?=" ? "'true'" : "'false'";
-  return `WITH rhs_r AS (${rhsDesc.selectSQL})`
-    + ` SELECT ${cmp} AS v FROM (${lhsRows}) lhs_r CROSS JOIN rhs_r`
-    + ` UNION ALL SELECT ${oneEmpty} AS v FROM rhs_r WHERE NOT ${lhsExists}`
-    + ` UNION ALL SELECT ${oneEmpty} AS v FROM (${lhsRows}) lhs_r WHERE NOT EXISTS (SELECT 1 FROM rhs_r)`
-    + ` UNION ALL SELECT ${bothEmpty} AS v WHERE NOT ${lhsExists} AND NOT EXISTS (SELECT 1 FROM rhs_r)`;
+  return (
+    `WITH rhs_r AS (${rhsDesc.selectSQL})` +
+    ` SELECT ${cmp} AS v FROM (${lhsRows}) lhs_r CROSS JOIN rhs_r` +
+    ` UNION ALL SELECT ${oneEmpty} AS v FROM rhs_r WHERE NOT ${lhsExists}` +
+    ` UNION ALL SELECT ${oneEmpty} AS v FROM (${lhsRows}) lhs_r WHERE NOT EXISTS (SELECT 1 FROM rhs_r)` +
+    ` UNION ALL SELECT ${bothEmpty} AS v WHERE NOT ${lhsExists} AND NOT EXISTS (SELECT 1 FROM rhs_r)`
+  );
 };
 
 // When LHS and RHS of `??` share no LCP (no common type_root), EdgeDB
@@ -214,9 +237,16 @@ export const tryCompileSetLevelCoalesceSQL = (
   deps: SqlLoweringContext,
 ): string | null => {
   const {
-    collectTypeRootIds, pathIdKey, orderedCallArgs, collectScalarPointerSources,
-    collectInnerWhereClauses, compileValueSetSQL, collectReferencedColumns,
-    compilePolymorphicSource, compilePredicateSetSQL, referencesUnboundAlias,
+    collectTypeRootIds,
+    pathIdKey,
+    orderedCallArgs,
+    collectScalarPointerSources,
+    collectInnerWhereClauses,
+    compileValueSetSQL,
+    collectReferencedColumns,
+    compilePolymorphicSource,
+    compilePredicateSetSQL,
+    referencesUnboundAlias,
     compileScalarSelectSQL,
   } = deps;
   // Only BARE (unfenced) roots establish a common scoped path: a fenced
@@ -229,7 +259,10 @@ export const tryCompileSetLevelCoalesceSQL = (
   collectTypeRootIds(coalesce.right, rhsRoots, true);
   let sharesRoots = false;
   for (const id of rhsRoots) {
-    if (lhsRoots.has(id)) { sharesRoots = true; break; }
+    if (lhsRoots.has(id)) {
+      sharesRoots = true;
+      break;
+    }
   }
   // Shared-LCP shared-path shortcut: when LHS is structurally identical to one
   // of RHS's union args (`X ?? {X, …}`), the shared LCP iteration emits one
@@ -237,9 +270,10 @@ export const tryCompileSetLevelCoalesceSQL = (
   // as a NULL-filtered set; skip the RHS branch entirely.
   const rhsExprForShortcut = coalesce.right.expr;
   let lhsAppearsInRhsUnion = false;
-  if (sharesRoots
-    && rhsExprForShortcut.kind === "operator_call"
-    && (rhsExprForShortcut as OperatorCall).operator === "union"
+  if (
+    sharesRoots &&
+    rhsExprForShortcut.kind === "operator_call" &&
+    (rhsExprForShortcut as OperatorCall).operator === "union"
   ) {
     const lhsKey = pathIdKey(coalesce.left);
     const unionArgs = orderedCallArgs((rhsExprForShortcut as OperatorCall).args);
@@ -275,18 +309,23 @@ export const tryCompileSetLevelCoalesceSQL = (
     params.length = paramsStart;
     return null;
   }
-  const projectedColumns = [...new globalThis.Set([
-    "id",
-    ...collectReferencedColumns(lhsSet),
-    ...lhsFenceWheres.flatMap((w) => collectReferencedColumns(w)),
-  ])];
-  const lhsFrom = lhsTypeRef ? compilePolymorphicSource(lhsTypeRef, false, "g0", projectedColumns, options) : null;
+  const projectedColumns = [
+    ...new globalThis.Set([
+      "id",
+      ...collectReferencedColumns(lhsSet),
+      ...lhsFenceWheres.flatMap((w) => collectReferencedColumns(w)),
+    ]),
+  ];
+  const lhsFrom = lhsTypeRef
+    ? compilePolymorphicSource(lhsTypeRef, false, "g0", projectedColumns, options)
+    : null;
 
   const whereStart = params.length;
   const whereParts: string[] = [];
   for (const w of lhsWheres) {
-    const compiled = compilePredicateSetSQL(w, "g0", params, target, options)
-      ?? compileValueSetSQL(w, "g0", params, target, options);
+    const compiled =
+      compilePredicateSetSQL(w, "g0", params, target, options) ??
+      compileValueSetSQL(w, "g0", params, target, options);
     if (!compiled) {
       params.length = paramsStart;
       return null;
@@ -301,8 +340,9 @@ export const tryCompileSetLevelCoalesceSQL = (
   const outerStart = params.length;
   const outerParts: string[] = [];
   for (const w of outerWheres) {
-    const compiled = compilePredicateSetSQL(w, "g0", params, target, options)
-      ?? compileValueSetSQL(w, "g0", params, target, options);
+    const compiled =
+      compilePredicateSetSQL(w, "g0", params, target, options) ??
+      compileValueSetSQL(w, "g0", params, target, options);
     if (!compiled) {
       params.length = paramsStart;
       return null;
@@ -315,10 +355,9 @@ export const tryCompileSetLevelCoalesceSQL = (
   // stub row so the filter evaluates against an empty LHS binding.
   let fallbackOuterFrom = "";
   if (outerWhereSql && outerWhereSql.includes("g0.")) {
-    const stubCols = [...new globalThis.Set([
-      "id",
-      ...outerWheres.flatMap((w) => collectReferencedColumns(w)),
-    ])];
+    const stubCols = [
+      ...new globalThis.Set(["id", ...outerWheres.flatMap((w) => collectReferencedColumns(w))]),
+    ];
     fallbackOuterFrom = ` CROSS JOIN (SELECT ${stubCols.map((c) => `NULL AS ${quoteIdent(c)}`).join(", ")}) g0`;
   }
   const fallbackOuterWhere = outerWhereSql ? `${outerWhereSql} AND ` : "";
@@ -361,9 +400,11 @@ export const tryCompileSetLevelCoalesceSQL = (
       .join(" UNION ALL ");
     params.push(...outerParams);
     params.push(...whereParams);
-    return `SELECT ${lhsSql} AS ${quoteIdent("value")} FROM ${lhsFrom} WHERE ${lhsWhereSql}${outerWhereSql ? ` AND ${outerWhereSql}` : ""}`
-      + ` UNION ALL `
-      + `SELECT ${quoteIdent("value")} FROM (${fallbackRowsSql})${fallbackOuterFrom} WHERE ${fallbackOuterWhere}NOT EXISTS (SELECT 1 FROM ${lhsFrom} WHERE ${lhsWhereSql})`;
+    return (
+      `SELECT ${lhsSql} AS ${quoteIdent("value")} FROM ${lhsFrom} WHERE ${lhsWhereSql}${outerWhereSql ? ` AND ${outerWhereSql}` : ""}` +
+      ` UNION ALL ` +
+      `SELECT ${quoteIdent("value")} FROM (${fallbackRowsSql})${fallbackOuterFrom} WHERE ${fallbackOuterWhere}NOT EXISTS (SELECT 1 FROM ${lhsFrom} WHERE ${lhsWhereSql})`
+    );
   }
 
   // If RHS is a set built via `union`, expand each element as its own fallback
@@ -391,7 +432,9 @@ export const tryCompileSetLevelCoalesceSQL = (
         unionOk = false;
         break;
       }
-      elementParts.push(`SELECT ${quoteIdent("value")} FROM (${argRows}) WHERE ${quoteIdent("value")} IS NOT NULL`);
+      elementParts.push(
+        `SELECT ${quoteIdent("value")} FROM (${argRows}) WHERE ${quoteIdent("value")} IS NOT NULL`,
+      );
     }
     if (unionOk) {
       rhsRowsSql = elementParts.join(" UNION ALL ");
@@ -427,9 +470,11 @@ export const tryCompileSetLevelCoalesceSQL = (
   if (lhsFrom) {
     params.push(...outerParams);
     params.push(...whereParams);
-    return `SELECT ${lhsSql} AS ${quoteIdent("value")} FROM ${lhsFrom} WHERE ${lhsWhereSql}${outerWhereSql ? ` AND ${outerWhereSql}` : ""}`
-      + ` UNION ALL `
-      + `SELECT ${quoteIdent("value")} FROM (${rhsRowsSql})${fallbackOuterFrom} WHERE ${fallbackOuterWhere}NOT EXISTS (SELECT 1 FROM ${lhsFrom} WHERE ${lhsWhereSql})`;
+    return (
+      `SELECT ${lhsSql} AS ${quoteIdent("value")} FROM ${lhsFrom} WHERE ${lhsWhereSql}${outerWhereSql ? ` AND ${outerWhereSql}` : ""}` +
+      ` UNION ALL ` +
+      `SELECT ${quoteIdent("value")} FROM (${rhsRowsSql})${fallbackOuterFrom} WHERE ${fallbackOuterWhere}NOT EXISTS (SELECT 1 FROM ${lhsFrom} WHERE ${lhsWhereSql})`
+    );
   }
 
   // LHS has no polymorphic source — it's a literal/parameter/scalar
@@ -452,10 +497,12 @@ export const tryCompileSetLevelCoalesceSQL = (
   }
   const innerWhereSqlNoNullCheck = whereParts.slice(0, -1).join(" AND ");
   const cteWhereClause = innerWhereSqlNoNullCheck ? ` WHERE ${innerWhereSqlNoNullCheck}` : "";
-  return `WITH lhs_q AS (SELECT ${lhsSql} AS ${quoteIdent("value")}${cteWhereClause})`
-    + ` SELECT ${quoteIdent("value")} FROM lhs_q WHERE ${quoteIdent("value")} IS NOT NULL`
-    + ` UNION ALL `
-    + `SELECT ${quoteIdent("value")} FROM (${rhsRowsSql}) WHERE NOT EXISTS (SELECT 1 FROM lhs_q WHERE ${quoteIdent("value")} IS NOT NULL)`;
+  return (
+    `WITH lhs_q AS (SELECT ${lhsSql} AS ${quoteIdent("value")}${cteWhereClause})` +
+    ` SELECT ${quoteIdent("value")} FROM lhs_q WHERE ${quoteIdent("value")} IS NOT NULL` +
+    ` UNION ALL ` +
+    `SELECT ${quoteIdent("value")} FROM (${rhsRowsSql}) WHERE NOT EXISTS (SELECT 1 FROM lhs_q WHERE ${quoteIdent("value")} IS NOT NULL)`
+  );
 };
 
 export const tryCompileSetLevelOptionalCompareSQL = (
@@ -470,11 +517,21 @@ export const tryCompileSetLevelOptionalCompareSQL = (
   deps: SqlLoweringContext,
 ): string | null => {
   const {
-    orderedCallArgs, collectTypeRootIds, pathIdKey, collectPathIdKeys,
-    compileSelectSource, collectScalarPointerSources, collectReferencedColumns,
-    compilePolymorphicSource, compileValueSetSQL, collectInnerWhereClauses,
-    compilePredicateSetSQL, shouldUseLinkTable, columnForPointer,
-    compileScalarSelectSQL, referencesUnboundAlias,
+    orderedCallArgs,
+    collectTypeRootIds,
+    pathIdKey,
+    collectPathIdKeys,
+    compileSelectSource,
+    collectScalarPointerSources,
+    collectReferencedColumns,
+    compilePolymorphicSource,
+    compileValueSetSQL,
+    collectInnerWhereClauses,
+    compilePredicateSetSQL,
+    shouldUseLinkTable,
+    columnForPointer,
+    compileScalarSelectSQL,
+    referencesUnboundAlias,
   } = deps;
   const op = call.operator;
   if (op !== "?=" && op !== "?!=") return null;
@@ -490,7 +547,10 @@ export const tryCompileSetLevelOptionalCompareSQL = (
   collectTypeRootIds(rhs, rhsRoots);
   let sharesRoots = false;
   for (const id of rhsRoots) {
-    if (lhsRoots.has(id)) { sharesRoots = true; break; }
+    if (lhsRoots.has(id)) {
+      sharesRoots = true;
+      break;
+    }
   }
   if (sharesRoots) {
     // Shared-LCP shared-path: when one side's path appears in the other (e.g.
@@ -503,7 +563,9 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     // `<str>Publication.id` and `<str>count(Publication)` share the same
     // degenerate `cast:str` pathId without being the same path (set_of_03).
     const isConcretePath = (s: Set): boolean => {
-      const pid = s.pathId as { isPointerPath?: boolean; steps?: { type?: { inSchema?: boolean } }[] } | undefined;
+      const pid = s.pathId as
+        | { isPointerPath?: boolean; steps?: { type?: { inSchema?: boolean } }[] }
+        | undefined;
       if (!pid) return false;
       if (pid.isPointerPath) return true;
       return pid.steps?.[0]?.type?.inSchema === true;
@@ -559,17 +621,31 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     // `X ?= X` / `X ?!= X` on an OBJECT set: identity compare of each
     // element with itself — TRUE per row for ?= (FALSE for ?!=), and the
     // both-empty fallback carries the same value (set_of_12, self compare).
-    if (lhsKey === rhsKey
-        && JSON.stringify(lhs.expr) === JSON.stringify(rhs.expr)
-        && lhs.typeref && lhs.typeref.isScalar === false && !lhs.typeref.collection) {
+    if (
+      lhsKey === rhsKey &&
+      JSON.stringify(lhs.expr) === JSON.stringify(rhs.expr) &&
+      lhs.typeref &&
+      lhs.typeref.isScalar === false &&
+      !lhs.typeref.collection
+    ) {
       const selfCkpt = params.length;
-      const src = compileSelectSource(lhs, undefined, undefined, options, params, target, "oc_self");
+      const src = compileSelectSource(
+        lhs,
+        undefined,
+        undefined,
+        options,
+        params,
+        target,
+        "oc_self",
+      );
       if (src) {
         const srcParams = params.slice(selfCkpt);
         const val = op === "?=" ? "json('true')" : "json('false')";
         params.push(...srcParams);
-        return `SELECT ${val} AS ${quoteIdent("value")} FROM ${src.sql}`
-          + ` UNION ALL SELECT ${val} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM ${src.sql})`;
+        return (
+          `SELECT ${val} AS ${quoteIdent("value")} FROM ${src.sql}` +
+          ` UNION ALL SELECT ${val} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM ${src.sql})`
+        );
       }
       params.length = selfCkpt;
     }
@@ -600,8 +676,9 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     const innerStart = params.length;
     const innerParts: string[] = [];
     for (const w of collectInnerWhereClauses(lcp)) {
-      const compiled = compilePredicateSetSQL(w, "g0", params, target, options)
-        ?? compileValueSetSQL(w, "g0", params, target, options);
+      const compiled =
+        compilePredicateSetSQL(w, "g0", params, target, options) ??
+        compileValueSetSQL(w, "g0", params, target, options);
       if (!compiled) {
         params.length = ckpt;
         return null;
@@ -610,13 +687,15 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     }
     const iterParams = params.slice(lcpStart, innerStart).concat(params.slice(innerStart));
     const iterWhereSql = [`${lcpSql} IS NOT NULL`, ...innerParts].join(" AND ");
-    const compareSqlExpr = (op === "?=")
-      ? `(CASE WHEN ${lhsSql} IS ${rhsSql} THEN json('true') ELSE json('false') END)`
-      : `(CASE WHEN ${lhsSql} IS NOT ${rhsSql} THEN json('true') ELSE json('false') END)`;
+    const compareSqlExpr =
+      op === "?="
+        ? `(CASE WHEN ${lhsSql} IS ${rhsSql} THEN json('true') ELSE json('false') END)`
+        : `(CASE WHEN ${lhsSql} IS NOT ${rhsSql} THEN json('true') ELSE json('false') END)`;
     const outerParts: string[] = [];
     for (const w of outerWheres) {
-      const compiled = compilePredicateSetSQL(w, "g0", params, target, options)
-        ?? compileValueSetSQL(w, "g0", params, target, options);
+      const compiled =
+        compilePredicateSetSQL(w, "g0", params, target, options) ??
+        compileValueSetSQL(w, "g0", params, target, options);
       if (!compiled) {
         params.length = ckpt;
         return null;
@@ -653,13 +732,20 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     const srcRoots = new globalThis.Set<string>();
     collectTypeRootIds(lhsPtr.source, srcRoots);
     const sourceTyperef = lhsPtr.source.typeref;
-    if (srcRoots.size === 0
-        && JSON.stringify(lhsPtr.source) === JSON.stringify(rhsPtr.source)
-        && lhsPtr.direction === "outbound" && rhsPtr.direction === "outbound"
-        && lhsPtr.ptrref.outTarget.isScalar && rhsPtr.ptrref.outTarget.isScalar
-        && !lhsPtr.ptrref.isLinkProperty && !rhsPtr.ptrref.isLinkProperty
-        && !shouldUseLinkTable(lhsPtr) && !shouldUseLinkTable(rhsPtr)
-        && sourceTyperef.inSchema && !sourceTyperef.isScalar) {
+    if (
+      srcRoots.size === 0 &&
+      JSON.stringify(lhsPtr.source) === JSON.stringify(rhsPtr.source) &&
+      lhsPtr.direction === "outbound" &&
+      rhsPtr.direction === "outbound" &&
+      lhsPtr.ptrref.outTarget.isScalar &&
+      rhsPtr.ptrref.outTarget.isScalar &&
+      !lhsPtr.ptrref.isLinkProperty &&
+      !rhsPtr.ptrref.isLinkProperty &&
+      !shouldUseLinkTable(lhsPtr) &&
+      !shouldUseLinkTable(rhsPtr) &&
+      sourceTyperef.inSchema &&
+      !sourceTyperef.isScalar
+    ) {
       const ckpt = params.length;
       const idRows = compileScalarSelectSQL(lhsPtr.source, params, target, options);
       if (idRows) {
@@ -667,14 +753,17 @@ export const tryCompileSetLevelOptionalCompareSQL = (
         const rhsColumn = columnForPointer(rhsPtr);
         const projected = [...new globalThis.Set(["id", lhsColumn, rhsColumn])];
         const objSrc = compilePolymorphicSource(sourceTyperef, false, "g_osrc", projected, options);
-        const cmp = op === "?="
-          ? `CASE WHEN l IS r THEN json('true') ELSE json('false') END`
-          : `CASE WHEN l IS NOT r THEN json('true') ELSE json('false') END`;
+        const cmp =
+          op === "?="
+            ? `CASE WHEN l IS r THEN json('true') ELSE json('false') END`
+            : `CASE WHEN l IS NOT r THEN json('true') ELSE json('false') END`;
         const emptyVal = op === "?=" ? "json('true')" : "json('false')";
-        return `WITH osrc AS (SELECT g_osrc.${quoteIdent(lhsColumn)} AS l, g_osrc.${quoteIdent(rhsColumn)} AS r`
-          + ` FROM (${idRows}) src_ids JOIN ${objSrc} ON g_osrc.${quoteIdent("id")} = src_ids.${quoteIdent("value")})`
-          + ` SELECT ${cmp} AS ${quoteIdent("value")} FROM osrc`
-          + ` UNION ALL SELECT ${emptyVal} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM osrc)`;
+        return (
+          `WITH osrc AS (SELECT g_osrc.${quoteIdent(lhsColumn)} AS l, g_osrc.${quoteIdent(rhsColumn)} AS r` +
+          ` FROM (${idRows}) src_ids JOIN ${objSrc} ON g_osrc.${quoteIdent("id")} = src_ids.${quoteIdent("value")})` +
+          ` SELECT ${cmp} AS ${quoteIdent("value")} FROM osrc` +
+          ` UNION ALL SELECT ${emptyVal} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM osrc)`
+        );
       }
       params.length = ckpt;
     }
@@ -701,21 +790,22 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     return null;
   };
   const lhsDesc = describeOrRows(lhs);
-  if (!lhsDesc) { params.length = paramsStart; return null; }
+  if (!lhsDesc) {
+    params.length = paramsStart;
+    return null;
+  }
   const rhsDesc = describeOrRows(rhs);
-  if (!rhsDesc) { params.length = paramsStart; return null; }
+  if (!rhsDesc) {
+    params.length = paramsStart;
+    return null;
+  }
 
   // Compute the result for the LHS-empty fallback row.
   // ?= : true iff both sides empty (else false)
   // ?!=: true iff exactly one side empty (else false)
-  const rhsIsEmptyConst = rhsDesc.kind === "always-empty"
-    ? true
-    : rhsDesc.kind === "always-present"
-      ? false
-      : null;
-  const emptyCaseTrue = (op === "?=")
-    ? rhsIsEmptyConst === true
-    : rhsIsEmptyConst === false;
+  const rhsIsEmptyConst =
+    rhsDesc.kind === "always-empty" ? true : rhsDesc.kind === "always-present" ? false : null;
+  const emptyCaseTrue = op === "?=" ? rhsIsEmptyConst === true : rhsIsEmptyConst === false;
 
   // Element-wise compare expression used when LHS has a value.
   const compareSqlEq = (lhsValueSql: string, rhsValueSql: string): string =>
@@ -737,7 +827,7 @@ export const tryCompileSetLevelOptionalCompareSQL = (
       // Cross with rhs_q so multi-set RHS yields one comparison per RHS row,
       // plus an empty-fallback when rhs_q has no rows.
       const elementWise = `SELECT ${compareSql(lhsDesc.valueSQL, `rhs_q.${rhsDesc.valueColumn}`)} AS ${quoteIdent("value")} FROM rhs_q`;
-      const fallback = `SELECT ${(op === "?=") ? "json('false')" : "json('true')"} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM rhs_q)`;
+      const fallback = `SELECT ${op === "?=" ? "json('false')" : "json('true')"} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM rhs_q)`;
       return `${head}${elementWise} UNION ALL ${fallback}`;
     }
     const rhsVal = rhsDesc.kind === "always-empty" ? "NULL" : rhsDesc.valueSQL;
@@ -755,15 +845,14 @@ export const tryCompileSetLevelOptionalCompareSQL = (
     // One-empty fallbacks: one row per element of the non-empty side;
     // both-empty: a single row (?= true / ?!= false).
     elementWise = `SELECT ${compareSql(`lhs_q.${lhsDesc.valueColumn}`, `rhs_q.${rhsDesc.valueColumn}`)} AS ${quoteIdent("value")} FROM lhs_q CROSS JOIN rhs_q`;
-    const fallbackBool = (op === "?=") ? "json('false')" : "json('true')";
-    const bothEmptyBool = (op === "?=") ? "json('true')" : "json('false')";
-    fallback = `SELECT ${fallbackBool} AS ${quoteIdent("value")} FROM rhs_q WHERE NOT EXISTS (SELECT 1 FROM lhs_q)`
-      + ` UNION ALL SELECT ${fallbackBool} AS ${quoteIdent("value")} FROM lhs_q WHERE NOT EXISTS (SELECT 1 FROM rhs_q)`
-      + ` UNION ALL SELECT ${bothEmptyBool} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM lhs_q) AND NOT EXISTS (SELECT 1 FROM rhs_q)`;
+    const fallbackBool = op === "?=" ? "json('false')" : "json('true')";
+    const bothEmptyBool = op === "?=" ? "json('true')" : "json('false')";
+    fallback =
+      `SELECT ${fallbackBool} AS ${quoteIdent("value")} FROM rhs_q WHERE NOT EXISTS (SELECT 1 FROM lhs_q)` +
+      ` UNION ALL SELECT ${fallbackBool} AS ${quoteIdent("value")} FROM lhs_q WHERE NOT EXISTS (SELECT 1 FROM rhs_q)` +
+      ` UNION ALL SELECT ${bothEmptyBool} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM lhs_q) AND NOT EXISTS (SELECT 1 FROM rhs_q)`;
   } else {
-    const rhsValueExpr = rhsDesc.kind === "always-empty"
-      ? "NULL"
-      : rhsDesc.valueSQL;
+    const rhsValueExpr = rhsDesc.kind === "always-empty" ? "NULL" : rhsDesc.valueSQL;
     elementWise = `SELECT ${compareSql(`lhs_q.${lhsDesc.valueColumn}`, rhsValueExpr)} AS ${quoteIdent("value")} FROM lhs_q`;
     fallback = `SELECT ${emptyCaseTrue ? "json('true')" : "json('false')"} AS ${quoteIdent("value")} WHERE NOT EXISTS (SELECT 1 FROM lhs_q)`;
   }

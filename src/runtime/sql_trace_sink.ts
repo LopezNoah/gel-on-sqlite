@@ -45,12 +45,21 @@ export const installSqlTrace = (db: SQLiteDatabase): void => {
     };
     const origRun = stmt.run.bind(stmt);
     const origAll = stmt.all.bind(stmt);
-    stmt.run = (...params: ScalarValue[]) => { record(params); return origRun(...params); };
-    stmt.all = (...params: ScalarValue[]) => { record(params); return origAll(...params); };
+    stmt.run = (...params: ScalarValue[]) => {
+      record(params);
+      return origRun(...params);
+    };
+    stmt.all = (...params: ScalarValue[]) => {
+      record(params);
+      return origAll(...params);
+    };
     const maybeGet = (stmt as { get?: (...p: ScalarValue[]) => unknown }).get;
     if (maybeGet) {
       const origGet = maybeGet.bind(stmt);
-      (stmt as { get?: (...p: ScalarValue[]) => unknown }).get = (...params: ScalarValue[]) => { record(params); return origGet(...params); };
+      (stmt as { get?: (...p: ScalarValue[]) => unknown }).get = (...params: ScalarValue[]) => {
+        record(params);
+        return origGet(...params);
+      };
     }
     return stmt;
   };

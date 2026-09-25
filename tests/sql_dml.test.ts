@@ -428,5 +428,4 @@ describe("TestSQLDataModificationLanguage", () => {
   it.skip("test_sql_dml_03 [unconverted: PostgreSQL SQL DML frontend not implemented in sqlite-ts]", () => {
     // No inline query string detected in the Python source; see test_sql_dml.py::test_sql_dml_03 for details.
   });
-
 });

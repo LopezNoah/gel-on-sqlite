@@ -22,7 +22,13 @@ export const normalizeGelSQLValue = (value: unknown): unknown => {
   if (typeof value !== "string") {
     return value ?? null;
   }
-  if (value === "true" || value === "false" || value === "null" || value.startsWith("[") || value.startsWith("{")) {
+  if (
+    value === "true" ||
+    value === "false" ||
+    value === "null" ||
+    value.startsWith("[") ||
+    value.startsWith("{")
+  ) {
     try {
       return JSON.parse(value);
     } catch {
@@ -48,46 +54,49 @@ const DROP_SCALAR_NULL = Symbol("drop-scalar-null");
 export const materializeGelSQLRows = (
   rows: Record<string, unknown>[],
   options: { keepInternalId: boolean; scalarResultIsStr?: boolean; scalarResultIsBool?: boolean },
-): unknown[] => rows.map((row) => {
-  const keys = Object.keys(row);
-  // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
-  // strings while preserving plain numeric strings produced by text casts.
-  if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
-    if (row.value === null || row.value === undefined) {
-      return DROP_SCALAR_NULL;
-    }
-    if (options.scalarResultIsBool) {
-      if (typeof row.value === "number") return row.value !== 0;
-      if (typeof row.value === "bigint") return row.value !== 0n;
-      if (typeof row.value === "boolean") return row.value;
-    }
-    if (options.scalarResultIsStr && typeof row.value === "string") {
-      if (row.value.startsWith("\"")) {
-        try {
-          return JSON.parse(row.value);
-        } catch {
+): unknown[] =>
+  rows
+    .map((row) => {
+      const keys = Object.keys(row);
+      // Scalar select: Gel SQL projects a single `value` column. Parse JSON-shaped
+      // strings while preserving plain numeric strings produced by text casts.
+      if (keys.length === 1 && Object.prototype.hasOwnProperty.call(row, "value")) {
+        if (row.value === null || row.value === undefined) {
+          return DROP_SCALAR_NULL;
+        }
+        if (options.scalarResultIsBool) {
+          if (typeof row.value === "number") return row.value !== 0;
+          if (typeof row.value === "bigint") return row.value !== 0n;
+          if (typeof row.value === "boolean") return row.value;
+        }
+        if (options.scalarResultIsStr && typeof row.value === "string") {
+          if (row.value.startsWith('"')) {
+            try {
+              return JSON.parse(row.value);
+            } catch {
+              return row.value;
+            }
+          }
+          // The statement's static type is std::str — keep JSON-looking plain
+          // text (`'false'`, `'[1]'`) verbatim instead of JSON.parsing it.
           return row.value;
         }
+        return normalizeGelSQLValue(row.value);
       }
-      // The statement's static type is std::str — keep JSON-looking plain
-      // text (`'false'`, `'[1]'`) verbatim instead of JSON.parsing it.
-      return row.value;
-    }
-    return normalizeGelSQLValue(row.value);
-  }
 
-  const out: Record<string, unknown> = {};
-  let hasShapeColumn = false;
-  for (const key of keys) {
-    if (key === "__source_type" || key === "__tid__" || key === "__tname__") continue;
-    if (key === "id" && !options.keepInternalId) continue;
-    hasShapeColumn = true;
-    out[key] = normalizeGelSQLValue(row[key]);
-  }
+      const out: Record<string, unknown> = {};
+      let hasShapeColumn = false;
+      for (const key of keys) {
+        if (key === "__source_type" || key === "__tid__" || key === "__tname__") continue;
+        if (key === "id" && !options.keepInternalId) continue;
+        hasShapeColumn = true;
+        out[key] = normalizeGelSQLValue(row[key]);
+      }
 
-  if (!hasShapeColumn) {
-    const allNull = keys.every((key) => row[key] === null || row[key] === undefined);
-    if (allNull) return null;
-  }
-  return out;
-}).filter((value) => value !== DROP_SCALAR_NULL);
+      if (!hasShapeColumn) {
+        const allNull = keys.every((key) => row[key] === null || row[key] === undefined);
+        if (allNull) return null;
+      }
+      return out;
+    })
+    .filter((value) => value !== DROP_SCALAR_NULL);

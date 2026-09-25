@@ -332,11 +332,7 @@ const gelEnum = (value: string): string => value.toUpperCase();
 const titleEnum = (value: string): string =>
   value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
 
-const gelKind = (kind: string): string =>
-  kind
-    .split("_")
-    .map(titleEnum)
-    .join("");
+const gelKind = (kind: string): string => kind.split("_").map(titleEnum).join("");
 
 const normalizeIrKindTree = (node: IRNodeKind): IRNodeKind => ({
   kind: gelKind(node.kind),
@@ -382,7 +378,9 @@ function collectPathIdFacts(statement: GelIRStatement): GelPathIdFact[] {
       if (!seenPathIds.has(pathId)) {
         seenPathIds.add(pathId);
         facts.push({
-          expr: gelKind(typeof set.expr === "object" && set.expr ? String(set.expr.kind ?? "") : ""),
+          expr: gelKind(
+            typeof set.expr === "object" && set.expr ? String(set.expr.kind ?? "") : "",
+          ),
           node: "Set",
           owner: ownerName(parent, key),
           path_id: pathId,

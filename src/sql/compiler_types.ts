@@ -1,4 +1,10 @@
-import type { GroupRowProjection, ObjectSelectBinding, Pointer, Set, TypeRef } from "../ir/gel_ir.js";
+import type {
+  GroupRowProjection,
+  ObjectSelectBinding,
+  Pointer,
+  Set,
+  TypeRef,
+} from "../ir/gel_ir.js";
 import type { RuntimeTarget } from "../runtime/target.js";
 import type { ScalarValue } from "../types.js";
 import type { Relation } from "./relation.js";

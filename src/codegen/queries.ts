@@ -18,7 +18,13 @@ import path from "node:path";
 import { loadSchema } from "../schema/load.js";
 import { inspect } from "../compiler/inspect.js";
 import { qualifiedTypeRefName, valueFactsOf } from "../ir/value_facts.js";
-import type { Cardinality, Set as IRSet, ShapeElement, Statement as GelIRStatement, TypeRef } from "../ir/gel_ir.js";
+import type {
+  Cardinality,
+  Set as IRSet,
+  ShapeElement,
+  Statement as GelIRStatement,
+  TypeRef,
+} from "../ir/gel_ir.js";
 
 export interface GenerateQueryClientInput {
   schemaSource: string;
@@ -91,10 +97,15 @@ const collectParams = (ast: unknown): ParamInfo[] => {
     if (obj.kind === "cast" && isParameterNode(obj.expr)) {
       const name = obj.expr.name;
       if (!found.has(name)) {
-        found.set(name, { name, tsType: castTypeToTs(String(obj.castType)), required: obj.optional !== true });
+        found.set(name, {
+          name,
+          tsType: castTypeToTs(String(obj.castType)),
+          required: obj.optional !== true,
+        });
       }
     } else if (obj.kind === "parameter" && typeof obj.name === "string") {
-      if (!found.has(obj.name)) found.set(obj.name, { name: obj.name, tsType: "unknown", required: true });
+      if (!found.has(obj.name))
+        found.set(obj.name, { name: obj.name, tsType: "unknown", required: true });
     }
     for (const v of Object.values(obj)) visit(v);
   };
@@ -131,7 +142,12 @@ const camelCase = (raw: string): string => {
 // The "list-ness" half of cardinality: many/at-least-one → array. Absence of a
 // single value (at_most_one) is encoded by the caller — as a `?` on a shape
 // field, or `| null` on a top-level result — so it is NOT added here.
-const arrayWrap = (base: string, card: Cardinality, warn: (m: string) => void, ctx: string): string => {
+const arrayWrap = (
+  base: string,
+  card: Cardinality,
+  warn: (m: string) => void,
+  ctx: string,
+): string => {
   if (card === "many" || card === "at_least_one") return `${base}[]`;
   if (card === "unknown") {
     warn(`${ctx}: cardinality is unknown — treating as a list`);
@@ -157,7 +173,9 @@ const typeRefToTs = (typeref: TypeRef | undefined): string => {
 // `setToTs`/`arrayWrap`, the top-level result via the chosen Client method.
 const baseTypeOf = (set: IRSet, indent: string, warn: (m: string) => void, ctx: string): string => {
   if (set.typeref?.union && set.typeref.union.length > 0) {
-    warn(`${ctx}: result is a polymorphic union — add __typename__ to the query to discriminate; typed as unknown`);
+    warn(
+      `${ctx}: result is a polymorphic union — add __typename__ to the query to discriminate; typed as unknown`,
+    );
     return "unknown";
   }
 
@@ -181,8 +199,13 @@ const baseTypeOf = (set: IRSet, indent: string, warn: (m: string) => void, ctx: 
 
 // Build the TS type for one nested result set (a shape field), wrapping the
 // element type for many/at-least-one cardinality.
-const setToTs = (set: IRSet, card: Cardinality, indent: string, warn: (m: string) => void, ctx: string): string =>
-  arrayWrap(baseTypeOf(set, indent, warn, ctx), card, warn, ctx);
+const setToTs = (
+  set: IRSet,
+  card: Cardinality,
+  indent: string,
+  warn: (m: string) => void,
+  ctx: string,
+): string => arrayWrap(baseTypeOf(set, indent, warn, ctx), card, warn, ctx);
 
 // Maps the statement's top-level cardinality to the matching gel-js Client
 // method + how the method's return wraps the element type `T`.
@@ -233,7 +256,9 @@ const buildQuery = (
   const pascal = pascalCase(fileBase);
 
   const paramFields = params.map((p) => `  ${p.name}${p.required ? "" : "?"}: ${p.tsType};`);
-  const paramsType = paramFields.length ? `{\n${paramFields.join("\n")}\n}` : "Record<string, never>";
+  const paramsType = paramFields.length
+    ? `{\n${paramFields.join("\n")}\n}`
+    : "Record<string, never>";
 
   // The per-row element type; the chosen Client method encodes cardinality
   // (querySingle → `T | null`, query → `T[]`, …).
@@ -269,7 +294,9 @@ export interface Executor {
 `;
 
 const renderQuery = (q: GeneratedQuery): string => {
-  const clientParam = q.hasParams ? `client: Executor, params: ${q.pascal}Params` : `client: Executor`;
+  const clientParam = q.hasParams
+    ? `client: Executor, params: ${q.pascal}Params`
+    : `client: Executor`;
   const argsForward = q.hasParams ? ", params" : "";
   return [
     `export type ${q.pascal}Params = ${q.paramsType};`,
@@ -300,7 +327,9 @@ export const generateQueryClient = (input: GenerateQueryClientInput): GenerateQu
     const queryText = fs.readFileSync(file, "utf-8");
     const insp = inspect(schema, queryText);
     if (!insp.ok || !insp.artifact) {
-      warn(`${path.relative(input.queriesDir, file)}: did not compile [${insp.error?.code}] ${insp.error?.message}`);
+      warn(
+        `${path.relative(input.queriesDir, file)}: did not compile [${insp.error?.code}] ${insp.error?.message}`,
+      );
       continue;
     }
     const params = collectParams(insp.ast);

@@ -2,7 +2,10 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { schemaFromSdl } from "../src/compiler/inspect.js";
 import { openSQLite, materializeSchema } from "../src/runtime/database.js";
-import { populateSchemaIntrospection, schemaIntrospectionTypeDefs } from "../src/schema/schema_introspection.js";
+import {
+  populateSchemaIntrospection,
+  schemaIntrospectionTypeDefs,
+} from "../src/schema/schema_introspection.js";
 import { tableNameForType } from "../src/codegen/sql.js";
 
 // schemaIntrospectionTypeDefs (the meta-type catalog) and
@@ -11,13 +14,23 @@ import { tableNameForType } from "../src/codegen/sql.js";
 // introspection query happened to run. These tests pin the catalog and the
 // population (ADR 0050).
 
-const schema = schemaFromSdl(fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"));
+const schema = schemaFromSdl(
+  fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"),
+);
 const objTable = tableNameForType("schema::ObjectType");
 
 describe("schemaIntrospectionTypeDefs — the meta-type catalog", () => {
   it("exposes the core introspection meta-types", () => {
     const names = new Set(schemaIntrospectionTypeDefs().map((t) => t.name));
-    for (const expected of ["ObjectType", "Property", "Link", "Pointer", "ScalarType", "Function", "Type"]) {
+    for (const expected of [
+      "ObjectType",
+      "Property",
+      "Link",
+      "Pointer",
+      "ScalarType",
+      "Function",
+      "Type",
+    ]) {
       expect(names.has(expected)).toBe(true);
     }
   });
@@ -38,8 +51,11 @@ describe("populateSchemaIntrospection — fills schema::ObjectType from a snapsh
     .sort();
 
   const objectTypeRows = (db: ReturnType<typeof openSQLite>["db"]): string[] =>
-    (db.prepare(`SELECT name FROM ${quote(objTable)} ORDER BY name`).all() as Array<{ name: string }>)
-      .map((r) => r.name);
+    (
+      db.prepare(`SELECT name FROM ${quote(objTable)} ORDER BY name`).all() as Array<{
+        name: string;
+      }>
+    ).map((r) => r.name);
 
   it("writes a row for every user object type", () => {
     const { db } = openSQLite(":memory:");

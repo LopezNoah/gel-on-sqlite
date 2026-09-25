@@ -8,15 +8,23 @@ import type { SchemaSnapshot } from "../src/schema/schema.js";
 import type { Statement } from "../src/edgeql/ast.js";
 
 const loadSchema = (): SchemaSnapshot => {
-  const source = fs.readFileSync(new URL("./schemas/cards_ir_inference.esdl", import.meta.url), "utf8");
-  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, { legacySyntaxCompat: true });
+  const source = fs.readFileSync(
+    new URL("./schemas/cards_ir_inference.esdl", import.meta.url),
+    "utf8",
+  );
+  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, {
+    legacySyntaxCompat: true,
+  });
   return schemaSnapshotFromDeclarative(decl);
 };
 
 const compileQuery = (schema: SchemaSnapshot, query: string) => {
   const ast = parseEdgeQL(query) as unknown;
   const stmt = (Array.isArray(ast) ? (ast as Statement[])[0] : (ast as Statement)) as Statement;
-  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), { module: (stmt as { withModule?: string }).withModule, schema });
+  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), {
+    module: (stmt as { withModule?: string }).withModule,
+    schema,
+  });
 };
 
 describe("TestEdgeQLTypeInference", () => {
@@ -36,7 +44,8 @@ describe("TestEdgeQLTypeInference", () => {
   // typerefs are not part of the inference module.
   it.skip("test_edgeql_ir_type_inference_01", () => {
     const ir = compileQuery(schema, `SELECT Card { name }`);
-    const shape = (ir as { shape?: Array<{ name: string; typeRef?: { name?: string } }> }).shape ?? [];
+    const shape =
+      (ir as { shape?: Array<{ name: string; typeRef?: { name?: string } }> }).shape ?? [];
     const nameField = shape.find((el) => el.name === "name");
     expect(nameField?.typeRef?.name).toBe("std::str");
   });

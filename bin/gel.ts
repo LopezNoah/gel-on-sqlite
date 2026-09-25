@@ -150,7 +150,11 @@ const main = (): void => {
     case "codegen": {
       const target = readTarget(options.schema);
       const out = options.out ?? path.join(options.queries, "queries.ts");
-      const res = generateQueryClient({ schemaSource: target, queriesDir: options.queries, outFile: out });
+      const res = generateQueryClient({
+        schemaSource: target,
+        queriesDir: options.queries,
+        outFile: out,
+      });
       if (res.generated === 0) {
         process.stdout.write(`no .edgeql files found under '${options.queries}'\n`);
         return;

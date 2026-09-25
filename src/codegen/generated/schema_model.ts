@@ -4,7 +4,7 @@
 import { registerGeneratedSchemaModel, type GeneratedSchema } from "../schema.js";
 
 export const generatedSchema = {
-  "typeNames": [
+  typeNames: [
     "default::A",
     "default::B",
     "default::C",
@@ -42,3494 +42,3305 @@ export const generatedSchema = {
     "default::Z",
     "test::TestA",
     "test::TestB",
-    "test::TestC"
+    "test::TestC",
   ],
-  "typesByName": {
+  typesByName: {
     "default::A": {
-      "qualifiedName": "default::A",
-      "module": "default",
-      "name": "A",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__a",
-      "fields": [
+      qualifiedName: "default::A",
+      module: "default",
+      name: "A",
+      abstract: false,
+      extends: [],
+      tableName: "default__a",
+      fields: [
         {
-          "name": "p_bool",
-          "type": "bool",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "annotations": [
+          name: "p_bool",
+          type: "bool",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "single bool"
-            }
+              name: "std::title",
+              value: "single bool",
+            },
           ],
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "p_str",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_str",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_datetime",
-          "type": "datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_datetime",
+          type: "datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_local_datetime",
-          "type": "local_datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_local_datetime",
+          type: "local_datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_local_date",
-          "type": "local_date",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_local_date",
+          type: "local_date",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_local_time",
-          "type": "local_time",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_local_time",
+          type: "local_time",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_duration",
-          "type": "duration",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_duration",
+          type: "duration",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_int16",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_int16",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_int32",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_int32",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_int64",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_int64",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_float32",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_float32",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_float64",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_float64",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_bigint",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_bigint",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_decimal",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_decimal",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_json",
-          "type": "json",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_json",
+          type: "json",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_bytes",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "p_bytes",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "p_bool",
-          "type": "bool",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "annotations": [
+          name: "p_bool",
+          type: "bool",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "single bool"
-            }
+              name: "std::title",
+              value: "single bool",
+            },
           ],
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "p_str",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_str",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_datetime",
-          "type": "datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_datetime",
+          type: "datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_local_datetime",
-          "type": "local_datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_local_datetime",
+          type: "local_datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_local_date",
-          "type": "local_date",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_local_date",
+          type: "local_date",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_local_time",
-          "type": "local_time",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_local_time",
+          type: "local_time",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_duration",
-          "type": "duration",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_duration",
+          type: "duration",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_int16",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_int16",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_int32",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_int32",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_int64",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_int64",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_float32",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_float32",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_float64",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_float64",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_bigint",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_bigint",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_decimal",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_decimal",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_json",
-          "type": "json",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "p_json",
+          type: "json",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "p_bytes",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "p_bytes",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::A"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::A"],
     },
     "default::B": {
-      "qualifiedName": "default::B",
-      "module": "default",
-      "name": "B",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__b",
-      "fields": [
+      qualifiedName: "default::B",
+      module: "default",
+      name: "B",
+      abstract: false,
+      extends: [],
+      tableName: "default__b",
+      fields: [
         {
-          "name": "p_bool",
-          "type": "bool",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "annotations": [
+          name: "p_bool",
+          type: "bool",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "multi bool"
-            }
+              name: "std::title",
+              value: "multi bool",
+            },
           ],
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "p_str",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_str",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_datetime",
-          "type": "datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_datetime",
+          type: "datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_local_datetime",
-          "type": "local_datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_local_datetime",
+          type: "local_datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_local_date",
-          "type": "local_date",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_local_date",
+          type: "local_date",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_local_time",
-          "type": "local_time",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_local_time",
+          type: "local_time",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_duration",
-          "type": "duration",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_duration",
+          type: "duration",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_int16",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_int16",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_int32",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_int32",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_int64",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_int64",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_float32",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_float32",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_float64",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_float64",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_bigint",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_bigint",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_decimal",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_decimal",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_json",
-          "type": "json",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_json",
+          type: "json",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_bytes",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
-        }
+          name: "p_bytes",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "p_bool",
-          "type": "bool",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "annotations": [
+          name: "p_bool",
+          type: "bool",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "multi bool"
-            }
+              name: "std::title",
+              value: "multi bool",
+            },
           ],
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "p_str",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_str",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_datetime",
-          "type": "datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_datetime",
+          type: "datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_local_datetime",
-          "type": "local_datetime",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_local_datetime",
+          type: "local_datetime",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_local_date",
-          "type": "local_date",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_local_date",
+          type: "local_date",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_local_time",
-          "type": "local_time",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_local_time",
+          type: "local_time",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_duration",
-          "type": "duration",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_duration",
+          type: "duration",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_int16",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_int16",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_int32",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_int32",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_int64",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_int64",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_float32",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_float32",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_float64",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_float64",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_bigint",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_bigint",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_decimal",
-          "type": "float",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_decimal",
+          type: "float",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_json",
-          "type": "json",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
+          name: "p_json",
+          type: "json",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
         },
         {
-          "name": "p_bytes",
-          "type": "str",
-          "required": false,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": true,
-          "constraints": []
-        }
+          name: "p_bytes",
+          type: "str",
+          required: false,
+          hasDefault: false,
+          readonly: false,
+          multi: true,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::B"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::B"],
     },
     "default::C": {
-      "qualifiedName": "default::C",
-      "module": "default",
-      "name": "C",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__c",
-      "fields": [
+      qualifiedName: "default::C",
+      module: "default",
+      name: "C",
+      abstract: false,
+      extends: [],
+      tableName: "default__c",
+      fields: [
         {
-          "name": "val",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "annotations": [
+          name: "val",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "val"
-            }
+              name: "std::title",
+              value: "val",
+            },
           ],
-          "constraints": [
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [
+              name: "std::exclusive",
+              annotations: [
                 {
-                  "name": "std::title",
-                  "value": "exclusive C val"
-                }
+                  name: "std::title",
+                  value: "exclusive C val",
+                },
               ],
-              "delegated": false
-            }
-          ]
-        }
+              delegated: false,
+            },
+          ],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "val",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "annotations": [
+          name: "val",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "val"
-            }
+              name: "std::title",
+              value: "val",
+            },
           ],
-          "constraints": [
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [
+              name: "std::exclusive",
+              annotations: [
                 {
-                  "name": "std::title",
-                  "value": "exclusive C val"
-                }
+                  name: "std::title",
+                  value: "exclusive C val",
+                },
               ],
-              "delegated": false
-            }
-          ]
-        }
+              delegated: false,
+            },
+          ],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::C"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::C"],
     },
     "default::D": {
-      "qualifiedName": "default::D",
-      "module": "default",
-      "name": "D",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__d",
-      "fields": [
+      qualifiedName: "default::D",
+      module: "default",
+      name: "D",
+      abstract: false,
+      extends: [],
+      tableName: "default__d",
+      fields: [
         {
-          "name": "num",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "num",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "single_link_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "single_link_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "single_link",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false,
-          "annotations": [
+          name: "single_link",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "single link to C"
-            }
-          ]
+              name: "std::title",
+              value: "single link to C",
+            },
+          ],
         },
         {
-          "name": "multi_link",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": true,
-          "readonly": false,
-          "hasDefault": false,
-          "annotations": [
+          name: "multi_link",
+          targetType: "default::C",
+          overloaded: false,
+          multi: true,
+          readonly: false,
+          hasDefault: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "multi link to C"
-            }
-          ]
-        }
+              name: "std::title",
+              value: "multi link to C",
+            },
+          ],
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "num",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "num",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "single_link_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "single_link_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "single_link",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false,
-          "annotations": [
+          name: "single_link",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "single link to C"
-            }
-          ]
+              name: "std::title",
+              value: "single link to C",
+            },
+          ],
         },
         {
-          "name": "multi_link",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": true,
-          "readonly": false,
-          "hasDefault": false,
-          "annotations": [
+          name: "multi_link",
+          targetType: "default::C",
+          overloaded: false,
+          multi: true,
+          readonly: false,
+          hasDefault: false,
+          annotations: [
             {
-              "name": "std::title",
-              "value": "multi link to C"
-            }
-          ]
-        }
+              name: "std::title",
+              value: "multi link to C",
+            },
+          ],
+        },
       ],
-      "concreteSubtypes": [
-        "default::D",
-        "default::E",
-        "default::F"
-      ]
+      concreteSubtypes: ["default::D", "default::E", "default::F"],
     },
     "default::DefA": {
-      "qualifiedName": "default::DefA",
-      "module": "default",
-      "name": "DefA",
-      "abstract": false,
-      "extends": [
-        "test::TestA"
-      ],
-      "tableName": "default__defa",
-      "fields": [
+      qualifiedName: "default::DefA",
+      module: "default",
+      name: "DefA",
+      abstract: false,
+      extends: ["test::TestA"],
+      tableName: "default__defa",
+      fields: [
         {
-          "name": "a",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "a",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "a",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "a",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::DefA"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::DefA"],
     },
     "default::DefB": {
-      "qualifiedName": "default::DefB",
-      "module": "default",
-      "name": "DefB",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__defb",
-      "fields": [
+      qualifiedName: "default::DefB",
+      module: "default",
+      name: "DefB",
+      abstract: false,
+      extends: [],
+      tableName: "default__defb",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "test::user_func_3",
-            "args": [
-              0
-            ]
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "test::user_func_3",
+            args: [0],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "other_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "other_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "other",
-          "targetType": "test::TestB",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "other",
+          targetType: "test::TestB",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "test::user_func_3",
-            "args": [
-              0
-            ]
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "test::user_func_3",
+            args: [0],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "other_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "other_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "other",
-          "targetType": "test::TestB",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "other",
+          targetType: "test::TestB",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::DefB"
-      ]
+      concreteSubtypes: ["default::DefB"],
     },
     "default::DefC": {
-      "qualifiedName": "default::DefC",
-      "module": "default",
-      "name": "DefC",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__defc",
-      "fields": [
+      qualifiedName: "default::DefC",
+      module: "default",
+      name: "DefC",
+      abstract: false,
+      extends: [],
+      tableName: "default__defc",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "test::user_func_3",
-            "args": [
-              1
-            ]
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "test::user_func_3",
+            args: [1],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "other_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "other_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "other",
-          "targetType": "test::TestC",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "other",
+          targetType: "test::TestC",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "test::user_func_3",
-            "args": [
-              1
-            ]
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "test::user_func_3",
+            args: [1],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "other_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "other_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "other",
-          "targetType": "test::TestC",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "other",
+          targetType: "test::TestC",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::DefC"
-      ]
+      concreteSubtypes: ["default::DefC"],
     },
     "default::E": {
-      "qualifiedName": "default::E",
-      "module": "default",
-      "name": "E",
-      "abstract": false,
-      "extends": [
-        "default::D"
-      ],
-      "tableName": "default__e",
-      "fields": [
+      qualifiedName: "default::E",
+      module: "default",
+      name: "E",
+      abstract: false,
+      extends: ["default::D"],
+      tableName: "default__e",
+      fields: [
         {
-          "name": "num",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "num",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "single_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "single_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "lp0",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false,
-              "annotations": [
+              name: "lp0",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+              annotations: [
                 {
-                  "name": "std::title",
-                  "value": "single lp0"
-                }
-              ]
-            }
+                  name: "std::title",
+                  value: "single lp0",
+                },
+              ],
+            },
           ],
-          "hasDefault": false
+          hasDefault: false,
         },
         {
-          "name": "multi_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": true,
-          "readonly": false,
-          "properties": [
+          name: "multi_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: true,
+          readonly: false,
+          properties: [
             {
-              "name": "lp1",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false,
-              "annotations": [
+              name: "lp1",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+              annotations: [
                 {
-                  "name": "std::title",
-                  "value": "single lp1"
-                }
-              ]
-            }
+                  name: "std::title",
+                  value: "single lp1",
+                },
+              ],
+            },
           ],
-          "hasDefault": false
-        }
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "num",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "num",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "single_link_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "single_link_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "single_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "single_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "lp0",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false,
-              "annotations": [
+              name: "lp0",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+              annotations: [
                 {
-                  "name": "std::title",
-                  "value": "single lp0"
-                }
-              ]
-            }
+                  name: "std::title",
+                  value: "single lp0",
+                },
+              ],
+            },
           ],
-          "hasDefault": false
+          hasDefault: false,
         },
         {
-          "name": "multi_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": true,
-          "readonly": false,
-          "properties": [
+          name: "multi_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: true,
+          readonly: false,
+          properties: [
             {
-              "name": "lp1",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false,
-              "annotations": [
+              name: "lp1",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+              annotations: [
                 {
-                  "name": "std::title",
-                  "value": "single lp1"
-                }
-              ]
-            }
+                  name: "std::title",
+                  value: "single lp1",
+                },
+              ],
+            },
           ],
-          "hasDefault": false
-        }
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::E"
-      ]
+      concreteSubtypes: ["default::E"],
     },
     "default::F": {
-      "qualifiedName": "default::F",
-      "module": "default",
-      "name": "F",
-      "abstract": false,
-      "extends": [
-        "default::D"
-      ],
-      "tableName": "default__f",
-      "fields": [
+      qualifiedName: "default::F",
+      module: "default",
+      name: "F",
+      abstract: false,
+      extends: ["default::D"],
+      tableName: "default__f",
+      fields: [
         {
-          "name": "num",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "num",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "single_link_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": false
-        }
+          name: "single_link_id",
+          type: "uuid",
+          required: true,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "single_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
+          name: "single_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
         },
         {
-          "name": "multi_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": true,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "multi_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: true,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "num",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "num",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "single_link_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": false
-        }
+          name: "single_link_id",
+          type: "uuid",
+          required: true,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "single_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
+          name: "single_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
         },
         {
-          "name": "multi_link",
-          "targetType": "default::C",
-          "overloaded": true,
-          "multi": true,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "multi_link",
+          targetType: "default::C",
+          overloaded: true,
+          multi: true,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::F"
-      ]
+      concreteSubtypes: ["default::F"],
     },
     "default::G": {
-      "qualifiedName": "default::G",
-      "module": "default",
-      "name": "G",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__g",
-      "fields": [
+      qualifiedName: "default::G",
+      module: "default",
+      name: "G",
+      abstract: false,
+      extends: [],
+      tableName: "default__g",
+      fields: [
         {
-          "name": "g0",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "literal",
-            "value": "fixed"
+          name: "g0",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "literal",
+            value: "fixed",
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "g1",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "user_func_0",
-            "args": [
-              1
-            ]
+          name: "g1",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "user_func_0",
+            args: [1],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "g2",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "to_str",
-            "args": [
-              2
-            ]
+          name: "g2",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "to_str",
+            args: [2],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "g0",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "literal",
-            "value": "fixed"
+          name: "g0",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "literal",
+            value: "fixed",
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "g1",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "user_func_0",
-            "args": [
-              1
-            ]
+          name: "g1",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "user_func_0",
+            args: [1],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "g2",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "function_call",
-            "name": "to_str",
-            "args": [
-              2
-            ]
+          name: "g2",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "function_call",
+            name: "to_str",
+            args: [2],
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::G"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::G"],
     },
     "default::H": {
-      "qualifiedName": "default::H",
-      "module": "default",
-      "name": "H",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__h",
-      "fields": [],
-      "links": [],
-      "resolvedFields": [],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::H"
-      ]
+      qualifiedName: "default::H",
+      module: "default",
+      name: "H",
+      abstract: false,
+      extends: [],
+      tableName: "default__h",
+      fields: [],
+      links: [],
+      resolvedFields: [],
+      resolvedLinks: [],
+      concreteSubtypes: ["default::H"],
     },
     "default::I": {
-      "qualifiedName": "default::I",
-      "module": "default",
-      "name": "I",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__i",
-      "fields": [
+      qualifiedName: "default::I",
+      module: "default",
+      name: "I",
+      abstract: false,
+      extends: [],
+      tableName: "default__i",
+      fields: [
         {
-          "name": "i0_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
+          name: "i0_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
         },
         {
-          "name": "i1_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
+          name: "i1_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
         },
         {
-          "name": "i2_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
-        }
+          name: "i2_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "i0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D00"
-          ]
+          name: "i0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: true,
+          defaultTargetValues: ["D00"],
         },
         {
-          "name": "i1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D0"
-          ]
+          name: "i1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: true,
+          defaultTargetValues: ["D0"],
         },
         {
-          "name": "i2",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D",
-            "0",
-            "2",
-            ""
-          ]
-        }
+          name: "i2",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: true,
+          defaultTargetValues: ["D", "0", "2", ""],
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "i0_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
+          name: "i0_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
         },
         {
-          "name": "i1_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
+          name: "i1_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
         },
         {
-          "name": "i2_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
-        }
+          name: "i2_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "i0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D00"
-          ]
+          name: "i0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: true,
+          defaultTargetValues: ["D00"],
         },
         {
-          "name": "i1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D0"
-          ]
+          name: "i1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: true,
+          defaultTargetValues: ["D0"],
         },
         {
-          "name": "i2",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D",
-            "0",
-            "2",
-            ""
-          ]
-        }
+          name: "i2",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: true,
+          defaultTargetValues: ["D", "0", "2", ""],
+        },
       ],
-      "concreteSubtypes": [
-        "default::I"
-      ]
+      concreteSubtypes: ["default::I"],
     },
     "default::J": {
-      "qualifiedName": "default::J",
-      "module": "default",
-      "name": "J",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__j",
-      "fields": [],
-      "links": [],
-      "resolvedFields": [],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::J"
-      ]
+      qualifiedName: "default::J",
+      module: "default",
+      name: "J",
+      abstract: false,
+      extends: [],
+      tableName: "default__j",
+      fields: [],
+      links: [],
+      resolvedFields: [],
+      resolvedLinks: [],
+      concreteSubtypes: ["default::J"],
     },
     "default::K": {
-      "qualifiedName": "default::K",
-      "module": "default",
-      "name": "K",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__k",
-      "fields": [
+      qualifiedName: "default::K",
+      module: "default",
+      name: "K",
+      abstract: false,
+      extends: [],
+      tableName: "default__k",
+      fields: [
         {
-          "name": "k",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "k",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "k",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "k",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::K"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::K"],
     },
     "default::L": {
-      "qualifiedName": "default::L",
-      "module": "default",
-      "name": "L",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__l",
-      "fields": [
+      qualifiedName: "default::L",
+      module: "default",
+      name: "L",
+      abstract: false,
+      extends: [],
+      tableName: "default__l",
+      fields: [
         {
-          "name": "l0",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "l0",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "l1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "l1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "l0",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "l0",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "l1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "l1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::L"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::L"],
     },
     "default::M": {
-      "qualifiedName": "default::M",
-      "module": "default",
-      "name": "M",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__m",
-      "fields": [
+      qualifiedName: "default::M",
+      module: "default",
+      name: "M",
+      abstract: false,
+      extends: [],
+      tableName: "default__m",
+      fields: [
         {
-          "name": "m0",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "m0",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "default::user_int_constr",
-              "annotations": [
+              name: "default::user_int_constr",
+              annotations: [
                 {
-                  "name": "std::title",
-                  "value": "user_int_constraint constraint"
-                }
+                  name: "std::title",
+                  value: "user_int_constraint constraint",
+                },
               ],
-              "delegated": false,
-              "params": [
+              delegated: false,
+              params: [
                 {
-                  "name": "x",
-                  "value": 3
-                }
-              ]
-            }
-          ]
+                  name: "x",
+                  value: 3,
+                },
+              ],
+            },
+          ],
         },
         {
-          "name": "m1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "m1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::max_len_value",
-              "annotations": [],
-              "delegated": false,
-              "params": [
+              name: "std::max_len_value",
+              annotations: [],
+              delegated: false,
+              params: [
                 {
-                  "name": "max",
-                  "value": 3
-                }
-              ]
-            }
-          ]
-        }
-      ],
-      "links": [],
-      "resolvedFields": [
-        {
-          "name": "m0",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
-            {
-              "name": "default::user_int_constr",
-              "annotations": [
-                {
-                  "name": "std::title",
-                  "value": "user_int_constraint constraint"
-                }
+                  name: "max",
+                  value: 3,
+                },
               ],
-              "delegated": false,
-              "params": [
+            },
+          ],
+        },
+      ],
+      links: [],
+      resolvedFields: [
+        {
+          name: "m0",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
+            {
+              name: "default::user_int_constr",
+              annotations: [
                 {
-                  "name": "x",
-                  "value": 3
-                }
-              ]
-            }
-          ]
+                  name: "std::title",
+                  value: "user_int_constraint constraint",
+                },
+              ],
+              delegated: false,
+              params: [
+                {
+                  name: "x",
+                  value: 3,
+                },
+              ],
+            },
+          ],
         },
         {
-          "name": "m1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "m1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::max_len_value",
-              "annotations": [],
-              "delegated": false,
-              "params": [
+              name: "std::max_len_value",
+              annotations: [],
+              delegated: false,
+              params: [
                 {
-                  "name": "max",
-                  "value": 3
-                }
-              ]
-            }
-          ]
-        }
+                  name: "max",
+                  value: 3,
+                },
+              ],
+            },
+          ],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::M"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::M"],
     },
     "default::N": {
-      "qualifiedName": "default::N",
-      "module": "default",
-      "name": "N",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__n",
-      "fields": [
+      qualifiedName: "default::N",
+      module: "default",
+      name: "N",
+      abstract: false,
+      extends: [],
+      tableName: "default__n",
+      fields: [
         {
-          "name": "n0",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserInt"
+          name: "n0",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserInt",
         },
         {
-          "name": "n1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserStr"
-        }
+          name: "n1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserStr",
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "n0",
-          "type": "int",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserInt"
+          name: "n0",
+          type: "int",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserInt",
         },
         {
-          "name": "n1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserStr"
-        }
+          name: "n1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserStr",
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::N"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::N"],
     },
     "default::O": {
-      "qualifiedName": "default::O",
-      "module": "default",
-      "name": "O",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__o",
-      "fields": [
+      qualifiedName: "default::O",
+      module: "default",
+      name: "O",
+      abstract: false,
+      extends: [],
+      tableName: "default__o",
+      fields: [
         {
-          "name": "o0",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserEnum",
-          "enumValues": [
-            "Lorem",
-            "ipsum",
-            "dolor",
-            "sit",
-            "amet"
-          ],
-          "enumTypeName": "default::UserEnum"
+          name: "o0",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserEnum",
+          enumValues: ["Lorem", "ipsum", "dolor", "sit", "amet"],
+          enumTypeName: "default::UserEnum",
         },
         {
-          "name": "o1",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "literal",
-            "value": "Lorem"
+          name: "o1",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "literal",
+            value: "Lorem",
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserEnum",
-          "enumValues": [
-            "Lorem",
-            "ipsum",
-            "dolor",
-            "sit",
-            "amet"
-          ],
-          "enumTypeName": "default::UserEnum"
-        }
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserEnum",
+          enumValues: ["Lorem", "ipsum", "dolor", "sit", "amet"],
+          enumTypeName: "default::UserEnum",
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "o0",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserEnum",
-          "enumValues": [
-            "Lorem",
-            "ipsum",
-            "dolor",
-            "sit",
-            "amet"
-          ],
-          "enumTypeName": "default::UserEnum"
+          name: "o0",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserEnum",
+          enumValues: ["Lorem", "ipsum", "dolor", "sit", "amet"],
+          enumTypeName: "default::UserEnum",
         },
         {
-          "name": "o1",
-          "type": "str",
-          "required": true,
-          "hasDefault": true,
-          "defaultExpr": {
-            "kind": "literal",
-            "value": "Lorem"
+          name: "o1",
+          type: "str",
+          required: true,
+          hasDefault: true,
+          defaultExpr: {
+            kind: "literal",
+            value: "Lorem",
           },
-          "readonly": false,
-          "multi": false,
-          "constraints": [],
-          "targetTypeName": "default::UserEnum",
-          "enumValues": [
-            "Lorem",
-            "ipsum",
-            "dolor",
-            "sit",
-            "amet"
-          ],
-          "enumTypeName": "default::UserEnum"
-        }
+          readonly: false,
+          multi: false,
+          constraints: [],
+          targetTypeName: "default::UserEnum",
+          enumValues: ["Lorem", "ipsum", "dolor", "sit", "amet"],
+          enumTypeName: "default::UserEnum",
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::O"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::O"],
     },
     "default::P": {
-      "qualifiedName": "default::P",
-      "module": "default",
-      "name": "P",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__p",
-      "fields": [
+      qualifiedName: "default::P",
+      module: "default",
+      name: "P",
+      abstract: false,
+      extends: [],
+      tableName: "default__p",
+      fields: [
         {
-          "name": "p2",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "array"
+          name: "p2",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "array",
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "p3",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "array"
+          name: "p3",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "array",
           },
-          "constraints": []
-        }
+          constraints: [],
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "plink0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "plink0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "p0",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false
-            }
+              name: "p0",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+            },
           ],
-          "hasDefault": false
+          hasDefault: false,
         },
         {
-          "name": "plink1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "plink1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "p1",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false
-            }
+              name: "p1",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+            },
           ],
-          "hasDefault": false
-        }
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "p2",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "array"
+          name: "p2",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "array",
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "p3",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "array"
+          name: "p3",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "array",
           },
-          "constraints": []
-        }
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "plink0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "plink0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "p0",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false
-            }
+              name: "p0",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+            },
           ],
-          "hasDefault": false
+          hasDefault: false,
         },
         {
-          "name": "plink1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "plink1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "p1",
-              "type": "str",
-              "required": false,
-              "hasDefault": false,
-              "readonly": false
-            }
+              name: "p1",
+              type: "str",
+              required: false,
+              hasDefault: false,
+              readonly: false,
+            },
           ],
-          "hasDefault": false
-        }
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::P"
-      ]
+      concreteSubtypes: ["default::P"],
     },
     "default::Q": {
-      "qualifiedName": "default::Q",
-      "module": "default",
-      "name": "Q",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__q",
-      "fields": [
+      qualifiedName: "default::Q",
+      module: "default",
+      name: "Q",
+      abstract: false,
+      extends: [],
+      tableName: "default__q",
+      fields: [
         {
-          "name": "q0",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple"
+          name: "q0",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "q1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple"
+          name: "q1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "q2",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple",
-            "elementNames": [
-              "x",
-              "y"
-            ]
+          name: "q2",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
+            elementNames: ["x", "y"],
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "q3",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple",
-            "elementNames": [
-              "x",
-              "y"
-            ]
+          name: "q3",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
+            elementNames: ["x", "y"],
           },
-          "constraints": []
-        }
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "q0",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple"
+          name: "q0",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "q1",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple"
+          name: "q1",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "q2",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple",
-            "elementNames": [
-              "x",
-              "y"
-            ]
+          name: "q2",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
+            elementNames: ["x", "y"],
           },
-          "constraints": []
+          constraints: [],
         },
         {
-          "name": "q3",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "collection": {
-            "kind": "tuple",
-            "elementNames": [
-              "x",
-              "y"
-            ]
+          name: "q3",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          collection: {
+            kind: "tuple",
+            elementNames: ["x", "y"],
           },
-          "constraints": []
-        }
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::Q"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::Q"],
     },
     "default::R": {
-      "qualifiedName": "default::R",
-      "module": "default",
-      "name": "R",
-      "abstract": true,
-      "extends": [],
-      "tableName": "default__r",
-      "fields": [
+      qualifiedName: "default::R",
+      module: "default",
+      name: "R",
+      abstract: true,
+      extends: [],
+      tableName: "default__r",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
-        }
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
-        }
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::S",
-        "default::T",
-        "default::V"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::S", "default::T", "default::V"],
     },
     "default::ROLinksA": {
-      "qualifiedName": "default::ROLinksA",
-      "module": "default",
-      "name": "ROLinksA",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__rolinksa",
-      "fields": [
+      qualifiedName: "default::ROLinksA",
+      module: "default",
+      name: "ROLinksA",
+      abstract: false,
+      extends: [],
+      tableName: "default__rolinksa",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "rol0_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "rol0_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "rol1_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
-        }
+          name: "rol1_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "rol0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": true,
-          "hasDefault": false
+          name: "rol0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: true,
+          hasDefault: false,
         },
         {
-          "name": "rol1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": true,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D00"
-          ]
+          name: "rol1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: true,
+          hasDefault: true,
+          defaultTargetValues: ["D00"],
         },
         {
-          "name": "rol2",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": true,
-          "readonly": true,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D01",
-            "D02"
-          ]
-        }
+          name: "rol2",
+          targetType: "default::C",
+          overloaded: false,
+          multi: true,
+          readonly: true,
+          hasDefault: true,
+          defaultTargetValues: ["D01", "D02"],
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "rol0_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "rol0_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "rol1_id",
-          "type": "uuid",
-          "required": true,
-          "hasDefault": true
-        }
+          name: "rol1_id",
+          type: "uuid",
+          required: true,
+          hasDefault: true,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "rol0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": true,
-          "hasDefault": false
+          name: "rol0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: true,
+          hasDefault: false,
         },
         {
-          "name": "rol1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": true,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D00"
-          ]
+          name: "rol1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: true,
+          hasDefault: true,
+          defaultTargetValues: ["D00"],
         },
         {
-          "name": "rol2",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": true,
-          "readonly": true,
-          "hasDefault": true,
-          "defaultTargetValues": [
-            "D01",
-            "D02"
-          ]
-        }
+          name: "rol2",
+          targetType: "default::C",
+          overloaded: false,
+          multi: true,
+          readonly: true,
+          hasDefault: true,
+          defaultTargetValues: ["D01", "D02"],
+        },
       ],
-      "concreteSubtypes": [
-        "default::ROLinksA"
-      ]
+      concreteSubtypes: ["default::ROLinksA"],
     },
     "default::ROLinksB": {
-      "qualifiedName": "default::ROLinksB",
-      "module": "default",
-      "name": "ROLinksB",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__rolinksb",
-      "fields": [
+      qualifiedName: "default::ROLinksB",
+      module: "default",
+      name: "ROLinksB",
+      abstract: false,
+      extends: [],
+      tableName: "default__rolinksb",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
-        }
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "rol0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "rol0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "rolp00",
-              "type": "int",
-              "required": false,
-              "hasDefault": false,
-              "readonly": true
+              name: "rolp00",
+              type: "int",
+              required: false,
+              hasDefault: false,
+              readonly: true,
             },
             {
-              "name": "rolp01",
-              "type": "int",
-              "required": false,
-              "hasDefault": true,
-              "readonly": true
-            }
+              name: "rolp01",
+              type: "int",
+              required: false,
+              hasDefault: true,
+              readonly: true,
+            },
           ],
-          "hasDefault": false
+          hasDefault: false,
         },
         {
-          "name": "rol1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": true,
-          "readonly": false,
-          "properties": [
+          name: "rol1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: true,
+          readonly: false,
+          properties: [
             {
-              "name": "rolp10",
-              "type": "int",
-              "required": false,
-              "hasDefault": false,
-              "readonly": true
+              name: "rolp10",
+              type: "int",
+              required: false,
+              hasDefault: false,
+              readonly: true,
             },
             {
-              "name": "rolp11",
-              "type": "int",
-              "required": false,
-              "hasDefault": true,
-              "readonly": true
-            }
+              name: "rolp11",
+              type: "int",
+              required: false,
+              hasDefault: true,
+              readonly: true,
+            },
           ],
-          "hasDefault": false
-        }
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
-        }
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "rol0",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "properties": [
+          name: "rol0",
+          targetType: "default::C",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          properties: [
             {
-              "name": "rolp00",
-              "type": "int",
-              "required": false,
-              "hasDefault": false,
-              "readonly": true
+              name: "rolp00",
+              type: "int",
+              required: false,
+              hasDefault: false,
+              readonly: true,
             },
             {
-              "name": "rolp01",
-              "type": "int",
-              "required": false,
-              "hasDefault": true,
-              "readonly": true
-            }
+              name: "rolp01",
+              type: "int",
+              required: false,
+              hasDefault: true,
+              readonly: true,
+            },
           ],
-          "hasDefault": false
+          hasDefault: false,
         },
         {
-          "name": "rol1",
-          "targetType": "default::C",
-          "overloaded": false,
-          "multi": true,
-          "readonly": false,
-          "properties": [
+          name: "rol1",
+          targetType: "default::C",
+          overloaded: false,
+          multi: true,
+          readonly: false,
+          properties: [
             {
-              "name": "rolp10",
-              "type": "int",
-              "required": false,
-              "hasDefault": false,
-              "readonly": true
+              name: "rolp10",
+              type: "int",
+              required: false,
+              hasDefault: false,
+              readonly: true,
             },
             {
-              "name": "rolp11",
-              "type": "int",
-              "required": false,
-              "hasDefault": true,
-              "readonly": true
-            }
+              name: "rolp11",
+              type: "int",
+              required: false,
+              hasDefault: true,
+              readonly: true,
+            },
           ],
-          "hasDefault": false
-        }
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::ROLinksB"
-      ]
+      concreteSubtypes: ["default::ROLinksB"],
     },
     "default::ROPropsA": {
-      "qualifiedName": "default::ROPropsA",
-      "module": "default",
-      "name": "ROPropsA",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__ropropsa",
-      "fields": [
+      qualifiedName: "default::ROPropsA",
+      module: "default",
+      name: "ROPropsA",
+      abstract: false,
+      extends: [],
+      tableName: "default__ropropsa",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "rop0",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": true,
-          "multi": false,
-          "constraints": []
+          name: "rop0",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: true,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "rop1",
-          "type": "int",
-          "required": true,
-          "hasDefault": true,
-          "readonly": true,
-          "multi": false,
-          "constraints": []
-        }
+          name: "rop1",
+          type: "int",
+          required: true,
+          hasDefault: true,
+          readonly: true,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "rop0",
-          "type": "int",
-          "required": false,
-          "hasDefault": false,
-          "readonly": true,
-          "multi": false,
-          "constraints": []
+          name: "rop0",
+          type: "int",
+          required: false,
+          hasDefault: false,
+          readonly: true,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "rop1",
-          "type": "int",
-          "required": true,
-          "hasDefault": true,
-          "readonly": true,
-          "multi": false,
-          "constraints": []
-        }
+          name: "rop1",
+          type: "int",
+          required: true,
+          hasDefault: true,
+          readonly: true,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::ROPropsA"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::ROPropsA"],
     },
     "default::S": {
-      "qualifiedName": "default::S",
-      "module": "default",
-      "name": "S",
-      "abstract": false,
-      "extends": [
-        "default::R"
-      ],
-      "tableName": "default__s",
-      "fields": [
+      qualifiedName: "default::S",
+      module: "default",
+      name: "S",
+      abstract: false,
+      extends: ["default::R"],
+      tableName: "default__s",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
         },
         {
-          "name": "s",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "s",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
         },
         {
-          "name": "s",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "s",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::S",
-        "default::V"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::S", "default::V"],
     },
     "default::SourceA": {
-      "qualifiedName": "default::SourceA",
-      "module": "default",
-      "name": "SourceA",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__sourcea",
-      "fields": [
+      qualifiedName: "default::SourceA",
+      module: "default",
+      name: "SourceA",
+      abstract: false,
+      extends: [],
+      tableName: "default__sourcea",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "link0_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "link0_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "link1_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "link1_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "link2_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "link2_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "link3_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "link3_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "link0",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "restrict",
-          "hasDefault": false
+          name: "link0",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "restrict",
+          hasDefault: false,
         },
         {
-          "name": "link1",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "delete_source",
-          "hasDefault": false
+          name: "link1",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "delete_source",
+          hasDefault: false,
         },
         {
-          "name": "link2",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "allow",
-          "hasDefault": false
+          name: "link2",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "allow",
+          hasDefault: false,
         },
         {
-          "name": "link3",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "deferred_restrict",
-          "hasDefault": false
-        }
+          name: "link3",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "deferred_restrict",
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "link0_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "link0_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "link1_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "link1_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "link2_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
+          name: "link2_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
         },
         {
-          "name": "link3_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "link3_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "link0",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "restrict",
-          "hasDefault": false
+          name: "link0",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "restrict",
+          hasDefault: false,
         },
         {
-          "name": "link1",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "delete_source",
-          "hasDefault": false
+          name: "link1",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "delete_source",
+          hasDefault: false,
         },
         {
-          "name": "link2",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "allow",
-          "hasDefault": false
+          name: "link2",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "allow",
+          hasDefault: false,
         },
         {
-          "name": "link3",
-          "targetType": "default::TargetA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "onTargetDelete": "deferred_restrict",
-          "hasDefault": false
-        }
+          name: "link3",
+          targetType: "default::TargetA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          onTargetDelete: "deferred_restrict",
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::SourceA"
-      ]
+      concreteSubtypes: ["default::SourceA"],
     },
     "default::T": {
-      "qualifiedName": "default::T",
-      "module": "default",
-      "name": "T",
-      "abstract": false,
-      "extends": [
-        "default::R"
-      ],
-      "tableName": "default__t",
-      "fields": [
+      qualifiedName: "default::T",
+      module: "default",
+      name: "T",
+      abstract: false,
+      extends: ["default::R"],
+      tableName: "default__t",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
         },
         {
-          "name": "t",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "t",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
         },
         {
-          "name": "t",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "t",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::T",
-        "default::V"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::T", "default::V"],
     },
     "default::TargetA": {
-      "qualifiedName": "default::TargetA",
-      "module": "default",
-      "name": "TargetA",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__targeta",
-      "fields": [
+      qualifiedName: "default::TargetA",
+      module: "default",
+      name: "TargetA",
+      abstract: false,
+      extends: [],
+      tableName: "default__targeta",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
-        }
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
-        }
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::TargetA"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::TargetA"],
     },
     "default::U": {
-      "qualifiedName": "default::U",
-      "module": "default",
-      "name": "U",
-      "abstract": true,
-      "extends": [],
-      "tableName": "default__u",
-      "fields": [
+      qualifiedName: "default::U",
+      module: "default",
+      name: "U",
+      abstract: true,
+      extends: [],
+      tableName: "default__u",
+      fields: [
         {
-          "name": "u",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "u",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "u",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "u",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::V"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::V"],
     },
     "default::UserEnum": {
-      "qualifiedName": "default::UserEnum",
-      "module": "default",
-      "name": "UserEnum",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__userenum",
-      "fields": [
+      qualifiedName: "default::UserEnum",
+      module: "default",
+      name: "UserEnum",
+      abstract: false,
+      extends: [],
+      tableName: "default__userenum",
+      fields: [
         {
-          "name": "__enum__",
-          "type": "str",
-          "enumValues": [
-            "Lorem",
-            "ipsum",
-            "dolor",
-            "sit",
-            "amet"
-          ]
-        }
+          name: "__enum__",
+          type: "str",
+          enumValues: ["Lorem", "ipsum", "dolor", "sit", "amet"],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "__enum__",
-          "type": "str",
-          "enumValues": [
-            "Lorem",
-            "ipsum",
-            "dolor",
-            "sit",
-            "amet"
-          ]
-        }
+          name: "__enum__",
+          type: "str",
+          enumValues: ["Lorem", "ipsum", "dolor", "sit", "amet"],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::UserEnum"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::UserEnum"],
     },
     "default::V": {
-      "qualifiedName": "default::V",
-      "module": "default",
-      "name": "V",
-      "abstract": false,
-      "extends": [
-        "default::U",
-        "default::S",
-        "default::T"
-      ],
-      "tableName": "default__v",
-      "fields": [
+      qualifiedName: "default::V",
+      module: "default",
+      name: "V",
+      abstract: false,
+      extends: ["default::U", "default::S", "default::T"],
+      tableName: "default__v",
+      fields: [
         {
-          "name": "u",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "u",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
         },
         {
-          "name": "s",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "s",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "t",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "t",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "u",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "u",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": true
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: true,
+            },
+          ],
         },
         {
-          "name": "s",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "s",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "t",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "t",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::V"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::V"],
     },
     "default::W": {
-      "qualifiedName": "default::W",
-      "module": "default",
-      "name": "W",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__w",
-      "fields": [
+      qualifiedName: "default::W",
+      module: "default",
+      name: "W",
+      abstract: false,
+      extends: [],
+      tableName: "default__w",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "w_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "w_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "w",
-          "targetType": "default::W",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "w",
+          targetType: "default::W",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": [
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [
             {
-              "name": "std::exclusive",
-              "annotations": [],
-              "delegated": false
-            }
-          ]
+              name: "std::exclusive",
+              annotations: [],
+              delegated: false,
+            },
+          ],
         },
         {
-          "name": "w_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "w_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "w",
-          "targetType": "default::W",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "w",
+          targetType: "default::W",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::W"
-      ]
+      concreteSubtypes: ["default::W"],
     },
     "default::X": {
-      "qualifiedName": "default::X",
-      "module": "default",
-      "name": "X",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__x",
-      "fields": [
+      qualifiedName: "default::X",
+      module: "default",
+      name: "X",
+      abstract: false,
+      extends: [],
+      tableName: "default__x",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "y_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "y_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "y",
-          "targetType": "default::Y",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "y",
+          targetType: "default::Y",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "y_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "y_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "y",
-          "targetType": "default::Y",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "y",
+          targetType: "default::Y",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::X"
-      ]
+      concreteSubtypes: ["default::X"],
     },
     "default::Y": {
-      "qualifiedName": "default::Y",
-      "module": "default",
-      "name": "Y",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__y",
-      "fields": [
+      qualifiedName: "default::Y",
+      module: "default",
+      name: "Y",
+      abstract: false,
+      extends: [],
+      tableName: "default__y",
+      fields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "x_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "x_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "x",
-          "targetType": "default::X",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "x",
+          targetType: "default::X",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "name",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "name",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "x_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "x_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "x",
-          "targetType": "default::X",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "x",
+          targetType: "default::X",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::Y"
-      ]
+      concreteSubtypes: ["default::Y"],
     },
     "default::Z": {
-      "qualifiedName": "default::Z",
-      "module": "default",
-      "name": "Z",
-      "abstract": false,
-      "extends": [],
-      "tableName": "default__z",
-      "fields": [
+      qualifiedName: "default::Z",
+      module: "default",
+      name: "Z",
+      abstract: false,
+      extends: [],
+      tableName: "default__z",
+      fields: [
         {
-          "name": "ck_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "ck_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "ck",
-          "targetType": "default::C|default::K",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
+          name: "ck",
+          targetType: "default::C|default::K",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
         },
         {
-          "name": "stw",
-          "targetType": "default::S|default::T|default::W",
-          "overloaded": false,
-          "multi": true,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "stw",
+          targetType: "default::S|default::T|default::W",
+          overloaded: false,
+          multi: true,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "ck_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "ck_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "ck",
-          "targetType": "default::C|default::K",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
+          name: "ck",
+          targetType: "default::C|default::K",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
         },
         {
-          "name": "stw",
-          "targetType": "default::S|default::T|default::W",
-          "overloaded": false,
-          "multi": true,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "stw",
+          targetType: "default::S|default::T|default::W",
+          overloaded: false,
+          multi: true,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "default::Z"
-      ]
+      concreteSubtypes: ["default::Z"],
     },
     "test::TestA": {
-      "qualifiedName": "test::TestA",
-      "module": "test",
-      "name": "TestA",
-      "abstract": false,
-      "extends": [],
-      "tableName": "test__testa",
-      "fields": [
+      qualifiedName: "test::TestA",
+      module: "test",
+      name: "TestA",
+      abstract: false,
+      extends: [],
+      tableName: "test__testa",
+      fields: [
         {
-          "name": "a",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "a",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "links": [],
-      "resolvedFields": [
+      links: [],
+      resolvedFields: [
         {
-          "name": "a",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
-        }
+          name: "a",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
+        },
       ],
-      "resolvedLinks": [],
-      "concreteSubtypes": [
-        "default::DefA",
-        "test::TestA"
-      ]
+      resolvedLinks: [],
+      concreteSubtypes: ["default::DefA", "test::TestA"],
     },
     "test::TestB": {
-      "qualifiedName": "test::TestB",
-      "module": "test",
-      "name": "TestB",
-      "abstract": false,
-      "extends": [],
-      "tableName": "test__testb",
-      "fields": [
+      qualifiedName: "test::TestB",
+      module: "test",
+      name: "TestB",
+      abstract: false,
+      extends: [],
+      tableName: "test__testb",
+      fields: [
         {
-          "name": "b",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "b",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "blink_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "blink_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "blink",
-          "targetType": "test::TestA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "blink",
+          targetType: "test::TestA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "b",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "b",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "blink_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "blink_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "blink",
-          "targetType": "test::TestA",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "blink",
+          targetType: "test::TestA",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "test::TestB"
-      ]
+      concreteSubtypes: ["test::TestB"],
     },
     "test::TestC": {
-      "qualifiedName": "test::TestC",
-      "module": "test",
-      "name": "TestC",
-      "abstract": false,
-      "extends": [],
-      "tableName": "test__testc",
-      "fields": [
+      qualifiedName: "test::TestC",
+      module: "test",
+      name: "TestC",
+      abstract: false,
+      extends: [],
+      tableName: "test__testc",
+      fields: [
         {
-          "name": "c",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "c",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "clink_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "clink_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "links": [
+      links: [
         {
-          "name": "clink",
-          "targetType": "default::DefC",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "clink",
+          targetType: "default::DefC",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedFields": [
+      resolvedFields: [
         {
-          "name": "c",
-          "type": "str",
-          "required": true,
-          "hasDefault": false,
-          "readonly": false,
-          "multi": false,
-          "constraints": []
+          name: "c",
+          type: "str",
+          required: true,
+          hasDefault: false,
+          readonly: false,
+          multi: false,
+          constraints: [],
         },
         {
-          "name": "clink_id",
-          "type": "uuid",
-          "required": false,
-          "hasDefault": false
-        }
+          name: "clink_id",
+          type: "uuid",
+          required: false,
+          hasDefault: false,
+        },
       ],
-      "resolvedLinks": [
+      resolvedLinks: [
         {
-          "name": "clink",
-          "targetType": "default::DefC",
-          "overloaded": false,
-          "multi": false,
-          "readonly": false,
-          "hasDefault": false
-        }
+          name: "clink",
+          targetType: "default::DefC",
+          overloaded: false,
+          multi: false,
+          readonly: false,
+          hasDefault: false,
+        },
       ],
-      "concreteSubtypes": [
-        "test::TestC"
-      ]
-    }
-  }
+      concreteSubtypes: ["test::TestC"],
+    },
+  },
 } as const;
 registerGeneratedSchemaModel("dump01", generatedSchema as unknown as GeneratedSchema);

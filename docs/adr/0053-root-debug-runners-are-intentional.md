@@ -6,13 +6,13 @@ the repo root" (`qsql.ts`, `qfn.ts`, `qins.ts`, `cdbg.ts`, `csql.ts`, `sdbg.ts`,
 having observed them in the working tree.
 
 **Finding (the candidate's premise was wrong):** every one of those files is
-already **gitignored** — `.gitignore` has a dedicated *"Local debug runners
-(developer scratch files at repo root)"* section listing them explicitly and by
+already **gitignored** — `.gitignore` has a dedicated _"Local debug runners
+(developer scratch files at repo root)"_ section listing them explicitly and by
 glob (`/dbg_*.ts`, `/*_scratch.ts`, `/q*.ts`, …); `git check-ignore` confirms
 all of them are excluded. They are **not** tracked, and they do **not** appear
 in the repository as any teammate or agent clones it. The only tracked root
 `.ts` files are `sql_trace.ts` (a permanent debug tool, kept by round 7) and
-`vitest.config.ts`. The explorer saw the working tree; the *repository* root is
+`vitest.config.ts`. The explorer saw the working tree; the _repository_ root is
 already clean.
 
 **Decision (done — no code change):** do nothing. There is no navigability debt

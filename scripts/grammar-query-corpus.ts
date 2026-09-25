@@ -15,12 +15,20 @@ export function extractSuiteQueries(): { queries: SuiteQuery[]; skippedInterpola
   const queries: SuiteQuery[] = [];
   let skippedInterpolated = 0;
   for (const file of readdirSync(tests).filter((name) => /^edgeql_.*\.test\.ts$/.test(name))) {
-    const source = ts.createSourceFile(file, readFileSync(join(tests, file), "utf8"),
-      ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(join(tests, file), "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
-        const callee = ts.isIdentifier(node.expression) ? node.expression.text
-          : ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : "";
+        const callee = ts.isIdentifier(node.expression)
+          ? node.expression.text
+          : ts.isPropertyAccessExpression(node.expression)
+            ? node.expression.name.text
+            : "";
         if (helpers.has(callee) && node.arguments.length >= 2) {
           const queryArg = node.arguments[1];
           if (ts.isNoSubstitutionTemplateLiteral(queryArg) || ts.isStringLiteral(queryArg)) {

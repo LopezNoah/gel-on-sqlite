@@ -47,7 +47,13 @@ interface BuildState {
 
 // Visible WITH/alias bindings: name -> its body's top-level shape elements (used
 // to decide whether a traversed field is an inline view computable).
-type Bindings = Map<string, { shape: any[] }>;
+type AstObject = Record<string, unknown>;
+type Bindings = Map<string, { shape: unknown[] }>;
+
+const asAstObject = (value: unknown): AstObject | undefined =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as AstObject)
+    : undefined;
 
 // One path segment: its name and whether it traverses an inline view computable
 // (and therefore opens a fresh per-occurrence namespace).
@@ -114,15 +120,16 @@ const attachPath = (scope: ScopeTreeNode, segs: Seg[], state: BuildState): void 
   let parent = scope;
   let ns: string[] = [];
   for (let i = 0; i < segs.length; i += 1) {
-    if (segs[i]!.computable && ns.length === 0) {
+    if (segs[i].computable && ns.length === 0) {
       state.nextNs += 1;
       ns = [`vns${state.nextNs}`];
     }
-    const prefixId = sigToPathId(segs.slice(0, i + 1).map((s) => s.name), ns);
-    const key = pathIdKey(prefixId);
-    let child = parent.children.find(
-      (c) => c.pathId !== undefined && pathIdKey(c.pathId) === key,
+    const prefixId = sigToPathId(
+      segs.slice(0, i + 1).map((s) => s.name),
+      ns,
     );
+    const key = pathIdKey(prefixId);
+    let child = parent.children.find((c) => c.pathId !== undefined && pathIdKey(c.pathId) === key);
     if (!child) {
       child = newNode(state, { pathId: prefixId, namespaces: [...ns] });
       parent.children.push(child);
@@ -131,32 +138,48 @@ const attachPath = (scope: ScopeTreeNode, segs: Seg[], state: BuildState): void 
   }
 };
 
-const aliasShapeOf = (v: any): any[] => {
-  if (!v || typeof v !== "object") return [];
-  if (Array.isArray(v.shape)) return v.shape;
-  if (v.query && Array.isArray(v.query.shape)) return v.query.shape;
-  if (v.expr) return aliasShapeOf(v.expr);
+const aliasShapeOf = (value: unknown): unknown[] => {
+  const node = asAstObject(value);
+  if (!node) return [];
+  if (Array.isArray(node.shape)) return node.shape;
+  const query = asAstObject(node.query);
+  if (query && Array.isArray(query.shape)) return query.shape;
+  if (node.expr) return aliasShapeOf(node.expr);
   return [];
 };
 
 // Flatten a `field_access` chain (and simple path heads) into a head expr + the
 // trailing field names. Returns null for a non-path expr.
-const flattenPath = (e: any): { head: any; fields: string[] } | null => {
-  if (!e || typeof e !== "object") return null;
+const flattenPath = (value: unknown): { head: AstObject; fields: string[] } | null => {
+  const e = asAstObject(value);
+  if (!e) return null;
   switch (e.kind) {
     case "field_access": {
       const inner = flattenPath(e.expr);
+      if (typeof e.field !== "string") return null;
       if (inner) return { head: inner.head, fields: [...inner.fields, e.field] };
-      return { head: e.expr, fields: [e.field] };
+      const head = asAstObject(e.expr);
+      return head ? { head, fields: [e.field] } : null;
     }
     case "binding_ref":
     case "select":
       return { head: e, fields: [] };
-    case "path":
-      return { head: { kind: "object_head", name: e.head }, fields: e.tail ? [e.tail] : [] };
+    case "path": {
+      if (typeof e.head !== "string") return null;
+      return {
+        head: { kind: "object_head", name: e.head },
+        fields: typeof e.tail === "string" ? [e.tail] : [],
+      };
+    }
     case "path_chain": {
-      const [head, ...tail] = e.parts ?? [];
-      return head ? { head: { kind: "object_head", name: head }, fields: tail } : null;
+      const parts = Array.isArray(e.parts) ? e.parts : [];
+      const [head, ...tail] = parts;
+      return typeof head === "string"
+        ? {
+            head: { kind: "object_head", name: head },
+            fields: tail.filter((part): part is string => typeof part === "string"),
+          }
+        : null;
     }
     default:
       return null;
@@ -165,17 +188,19 @@ const flattenPath = (e: any): { head: any; fields: string[] } | null => {
 
 // Resolve a path-ish expr to segments, marking inline view-computable steps.
 // Returns null when the expr is not a simple path (so the walker recurses).
-const pathSegments = (e: any, bindings: Bindings): Seg[] | null => {
+const pathSegments = (e: unknown, bindings: Bindings): Seg[] | null => {
   const flat = flattenPath(e);
   if (!flat) return null;
   const head = flat.head;
 
   let baseName: string | undefined;
-  let shapeCursor: any[] | null = null;
+  let shapeCursor: unknown[] | null = null;
   if (head.kind === "binding_ref" || head.kind === "object_head") {
+    if (typeof head.name !== "string") return null;
     baseName = head.name;
     shapeCursor = bindings.get(head.name)?.shape ?? null;
   } else if (head.kind === "select") {
+    if (typeof head.typeName !== "string") return null;
     baseName = head.typeName; // a direct extent - no view shape to track
   } else {
     return null; // head is a sub-expression; let the walker recurse into it
@@ -186,11 +211,13 @@ const pathSegments = (e: any, bindings: Bindings): Seg[] | null => {
   for (const field of flat.fields) {
     let computable = false;
     if (shapeCursor) {
-      const el = shapeCursor.find((x) => x && x.name === field);
+      const el = shapeCursor.map(asAstObject).find((item) => item?.name === field);
       // A `:=`-defined shape element (has `expr`) is a view computable; a plain
       // projected link (`deck: { ... }`) has a sub-shape but no `expr`.
       if (el && el.expr != null) computable = true;
-      shapeCursor = (el && (el.shape ?? el.query?.shape)) ?? null;
+      const query = asAstObject(el?.query);
+      const nestedShape = el?.shape ?? query?.shape;
+      shapeCursor = Array.isArray(nestedShape) ? nestedShape : null;
     }
     segs.push({ name: field, computable });
   }
@@ -201,8 +228,14 @@ const pathSegments = (e: any, bindings: Bindings): Seg[] | null => {
 const FENCE_KINDS = new Set(["select", "exists"]);
 
 // Recursively walk an AST expr, attaching paths and fences under `scope`.
-const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState, bindings: Bindings): void => {
-  if (!e || typeof e !== "object") return;
+const walkExpr = (
+  value: unknown,
+  scope: ScopeTreeNode,
+  state: BuildState,
+  bindings: Bindings,
+): void => {
+  const e = asAstObject(value);
+  if (!e) return;
   if (state.seen.has(e)) return;
   state.seen.add(e);
 
@@ -217,13 +250,15 @@ const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState, bindings: Bin
   if (e.kind === "for_expr") {
     walkExpr(e.iterator, scope, state, bindings);
     const body = attachBranch(scope, state);
-    if (e.variable) attachPath(body, [{ name: e.variable, computable: false }], state);
+    if (typeof e.variable === "string")
+      attachPath(body, [{ name: e.variable, computable: false }], state);
     walkExpr(e.body, body, state, bindings);
     return;
   }
 
   // A real subquery / EXISTS is a fence.
-  const childScope = FENCE_KINDS.has(e.kind) ? attachFence(scope, state) : scope;
+  const childScope =
+    typeof e.kind === "string" && FENCE_KINDS.has(e.kind) ? attachFence(scope, state) : scope;
 
   // WITH bindings (on a `select_expr`/`select`): each binding body is a detached
   // fenced scope; register the binding's shape so later references can tell an
@@ -231,12 +266,17 @@ const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState, bindings: Bin
   let childBindings = bindings;
   if (Array.isArray(e.with) && e.with.length > 0) {
     childBindings = new Map(bindings);
-    for (const binding of e.with) {
-      if (binding?.name) childBindings.set(binding.name, { shape: aliasShapeOf(binding.value) });
+    for (const value of e.with) {
+      const binding = asAstObject(value);
+      if (binding && typeof binding.name === "string") {
+        childBindings.set(binding.name, { shape: aliasShapeOf(binding.value) });
+      }
     }
-    for (const binding of e.with) {
+    for (const value of e.with) {
+      const binding = asAstObject(value);
+      if (!binding) continue;
       const bScope = attachFence(childScope, state);
-      walkExpr(binding?.value, bScope, state, childBindings);
+      walkExpr(binding.value, bScope, state, childBindings);
     }
   }
   if (e.kind === "subquery" && e.query) {
@@ -249,7 +289,7 @@ const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState, bindings: Bin
   for (const [k, v] of Object.entries(e)) {
     if (k === "with" || k === "span" || k === "pos") continue;
     if (Array.isArray(v)) v.forEach((c) => walkExpr(c, childScope, state, childBindings));
-    else if (v && typeof v === "object") walkExpr(v, childScope, state, childBindings);
+    else if (asAstObject(v)) walkExpr(v, childScope, state, childBindings);
   }
 };
 
@@ -262,8 +302,8 @@ const walkExpr = (e: any, scope: ScopeTreeNode, state: BuildState, bindings: Bin
 // (not all elements are simple equal-depth shared-prefix paths) so the caller
 // falls back to the product path.
 export const tupleSharedPrefixCorrelated = (
-  elementAsts: any[],
-  astBindings: Map<string, any>,
+  elementAsts: unknown[],
+  astBindings: Map<string, unknown>,
 ): boolean | null => {
   if (elementAsts.length < 2) return null;
   const bindings: Bindings = new Map();
@@ -271,14 +311,14 @@ export const tupleSharedPrefixCorrelated = (
   const segLists = elementAsts.map((e) => pathSegments(e, bindings));
   if (segLists.some((s) => s === null)) return null;
   const sl = segLists as Seg[][];
-  const depth = sl[0]!.length;
+  const depth = sl[0].length;
   if (depth < 2) return null; // need at least <prefix>.<leaf>
   const prefixLen = depth - 1;
   for (const s of sl) {
     if (s.length !== depth) return false; // different depth -> not a shared immediate prefix
     for (let i = 0; i < prefixLen; i += 1) {
-      if (s[i]!.name !== sl[0]![i]!.name) return false; // independent prefixes
-      if (s[i]!.computable) return false; // view computable in the shared prefix -> factored
+      if (s[i].name !== sl[0][i].name) return false; // independent prefixes
+      if (s[i].computable) return false; // view computable in the shared prefix -> factored
     }
   }
   return true;
@@ -286,7 +326,7 @@ export const tupleSharedPrefixCorrelated = (
 
 // Build a populated scope tree from an EdgeQL statement AST. The root is a fence
 // (the statement boundary), mirroring Gel. Purely structural; behaviour-neutral.
-export const buildScopeTreeFromAst = (statement: any): ScopeTreeNode => {
+export const buildScopeTreeFromAst = (statement: unknown): ScopeTreeNode => {
   const state: BuildState = { nextId: 1, nextNs: 0, seen: new WeakSet<object>() };
   const root = newNode(state, { fenced: true });
   walkExpr(statement, root, state, new Map());

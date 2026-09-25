@@ -7,7 +7,11 @@ import { tableNameForType } from "../src/codegen/sql.js";
 import { parseEdgeQLGrammar, parseEdgeQLGrammarScript } from "../src/edgeql/grammar_parser.js";
 import { parseGelGrammarStatement } from "../src/edgeql/gel_lr_ast_reducer.js";
 import { parseEdgeQLScript } from "../src/edgeql/parser.js";
-import { acceptsGelGrammarBlock, parseGelGrammarCST, type GelCSTNode } from "../src/edgeql/gel_lr_parser.js";
+import {
+  acceptsGelGrammarBlock,
+  parseGelGrammarCST,
+  type GelCSTNode,
+} from "../src/edgeql/gel_lr_parser.js";
 import { openSQLite, materializeSchema } from "../src/runtime/database.js";
 
 // This tests the *working AST* seam, not just syntax acceptance: the same
@@ -23,8 +27,8 @@ const queries = [
   "SELECT 'a' ++ 'b' ++ 'c';",
   `SELECT '\\'"\\\\\\'\\""\\\\x\\\\u';`,
   `SELECT "'\\"\\\\\\'\\"\\\\x\\\\u";`,
-  "SELECT \"1 + 1 = \\(1 + 1)\";",
-  "SELECT \"a \\(1) b \\(2)c\";",
+  'SELECT "1 + 1 = \\(1 + 1)";',
+  'SELECT "a \\(1) b \\(2)c";',
   "SELECT 1 = 2 OR 3 = 4;",
   "SELECT 1 IF true ELSE 2;",
   "if true then 10 else 11",
@@ -228,10 +232,12 @@ const gelAstGoldens: Array<{ query: string; ast: unknown }> = [
     ast: {
       kind: "select_expr",
       expr: {
-        kind: "math", op: "+",
+        kind: "math",
+        op: "+",
         left: { kind: "literal", value: 1, numericKind: "integer" },
         right: {
-          kind: "math", op: "*",
+          kind: "math",
+          op: "*",
           left: { kind: "literal", value: 2, numericKind: "integer" },
           right: { kind: "literal", value: 3, numericKind: "integer" },
         },
@@ -249,9 +255,14 @@ const gelAstGoldens: Array<{ query: string; ast: unknown }> = [
           name: "call1",
           args: [
             { kind: "expr", expr: { kind: "literal", value: "-" } },
-            { kind: "named_arg", name: "suffix", arg: {
-              kind: "expr", expr: { kind: "literal", value: "s1" },
-            } },
+            {
+              kind: "named_arg",
+              name: "suffix",
+              arg: {
+                kind: "expr",
+                expr: { kind: "literal", value: "s1" },
+              },
+            },
           ],
         },
       },
@@ -268,11 +279,15 @@ const gelAstGoldens: Array<{ query: string; ast: unknown }> = [
           kind: "introspect_typeof",
           expr: {
             kind: "function_call",
-            call: { name: "sum", args: [{ kind: "expr", expr: { kind: "set_literal", values: [1, 2, 3] } }] },
+            call: {
+              name: "sum",
+              args: [{ kind: "expr", expr: { kind: "set_literal", values: [1, 2, 3] } }],
+            },
           },
           typeofForm: true,
         },
-        field: "name", optional: false,
+        field: "name",
+        optional: false,
       },
       pos: { line: 1, column: 1 },
     },
@@ -288,27 +303,50 @@ const gelAstGoldens: Array<{ query: string; ast: unknown }> = [
           expr: { kind: "binding_ref", name: "std::float64" },
           typeofForm: false,
         },
-        field: "name", optional: false,
+        field: "name",
+        optional: false,
       },
       pos: { line: 1, column: 1 },
     },
   },
   {
-    query: "INSERT Y { l := (INSERT X { n := <str>$n } UNLESS CONFLICT ON (.n) ELSE (X)) } UNLESS CONFLICT ON (.l);",
+    query:
+      "INSERT Y { l := (INSERT X { n := <str>$n } UNLESS CONFLICT ON (.n) ELSE (X)) } UNLESS CONFLICT ON (.l);",
     ast: {
-      kind: "insert", typeName: "Y",
-      values: { l: { kind: "expr", expr: { kind: "mutation_expr", statement: {
-        kind: "insert", typeName: "X",
-        values: { n: { kind: "expr", expr: {
-          kind: "cast", castType: "str", expr: { kind: "parameter", name: "n" },
-        } } },
-        conflict: { onField: "n", else: {
-          kind: "select", typeName: "X",
-          shape: [{ kind: "field", name: "id", operation: "assign", origin: "default" }],
-          clauses: {},
-        } },
-        pos: { line: 1, column: 18 },
-      } } } },
+      kind: "insert",
+      typeName: "Y",
+      values: {
+        l: {
+          kind: "expr",
+          expr: {
+            kind: "mutation_expr",
+            statement: {
+              kind: "insert",
+              typeName: "X",
+              values: {
+                n: {
+                  kind: "expr",
+                  expr: {
+                    kind: "cast",
+                    castType: "str",
+                    expr: { kind: "parameter", name: "n" },
+                  },
+                },
+              },
+              conflict: {
+                onField: "n",
+                else: {
+                  kind: "select",
+                  typeName: "X",
+                  shape: [{ kind: "field", name: "id", operation: "assign", origin: "default" }],
+                  clauses: {},
+                },
+              },
+              pos: { line: 1, column: 18 },
+            },
+          },
+        },
+      },
       conflict: { onField: "l" },
       pos: { line: 1, column: 1 },
     },
@@ -316,92 +354,171 @@ const gelAstGoldens: Array<{ query: string; ast: unknown }> = [
   {
     query: "SELECT User {name};",
     ast: {
-      kind: "select", typeName: "User",
+      kind: "select",
+      typeName: "User",
       shape: [{ kind: "field", name: "name", operation: "assign", origin: "explicit" }],
-      fields: ["name"], pos: { line: 1, column: 1 },
+      fields: ["name"],
+      pos: { line: 1, column: 1 },
     },
   },
   {
     query: "SELECT User {name, age} FILTER .name = 'alice';",
     ast: {
-      kind: "select", typeName: "User",
+      kind: "select",
+      typeName: "User",
       shape: [
         { kind: "field", name: "name", operation: "assign", origin: "explicit" },
         { kind: "field", name: "age", operation: "assign", origin: "explicit" },
       ],
       fields: ["name", "age"],
-      filter: { kind: "predicate", target: { kind: "field", field: "name" }, op: "=", value: "alice" },
+      filter: {
+        kind: "predicate",
+        target: { kind: "field", field: "name" },
+        op: "=",
+        value: "alice",
+      },
       pos: { line: 1, column: 1 },
     },
   },
   {
     query: "SELECT Ba { [IS Bb].bb };",
     ast: {
-      kind: "select", typeName: "Ba",
-      shape: [{ kind: "computed", name: "bb", expr: {
-        kind: "polymorphic_field_ref", sourceType: "Bb",
-        sourceTypeExpr: { kind: "type_name", name: "Bb" }, field: "bb",
-      }, operation: "assign", origin: "explicit" }],
-      fields: [], pos: { line: 1, column: 1 },
+      kind: "select",
+      typeName: "Ba",
+      shape: [
+        {
+          kind: "computed",
+          name: "bb",
+          expr: {
+            kind: "polymorphic_field_ref",
+            sourceType: "Bb",
+            sourceTypeExpr: { kind: "type_name", name: "Bb" },
+            field: "bb",
+          },
+          operation: "assign",
+          origin: "explicit",
+        },
+      ],
+      fields: [],
+      pos: { line: 1, column: 1 },
     },
   },
   {
     query: "SELECT Ba { [IS Bb & Bc].bb };",
     ast: {
-      kind: "select", typeName: "Ba",
-      shape: [{ kind: "computed", name: "bb", expr: {
-        kind: "polymorphic_field_ref", sourceType: "",
-        sourceTypeExpr: { kind: "type_intersection",
-          left: { kind: "type_name", name: "Bb" }, right: { kind: "type_name", name: "Bc" } },
-        field: "bb",
-      }, operation: "assign", origin: "explicit" }],
-      fields: [], pos: { line: 1, column: 1 },
+      kind: "select",
+      typeName: "Ba",
+      shape: [
+        {
+          kind: "computed",
+          name: "bb",
+          expr: {
+            kind: "polymorphic_field_ref",
+            sourceType: "",
+            sourceTypeExpr: {
+              kind: "type_intersection",
+              left: { kind: "type_name", name: "Bb" },
+              right: { kind: "type_name", name: "Bc" },
+            },
+            field: "bb",
+          },
+          operation: "assign",
+          origin: "explicit",
+        },
+      ],
+      fields: [],
+      pos: { line: 1, column: 1 },
     },
   },
   {
     query: "SELECT Ba { [IS Bb | Bc].bb };",
     ast: {
-      kind: "select", typeName: "Ba",
-      shape: [{ kind: "computed", name: "bb", expr: {
-        kind: "polymorphic_field_ref", sourceType: "",
-        sourceTypeExpr: { kind: "type_union",
-          left: { kind: "type_name", name: "Bb" }, right: { kind: "type_name", name: "Bc" } },
-        field: "bb",
-      }, operation: "assign", origin: "explicit" }],
-      fields: [], pos: { line: 1, column: 1 },
+      kind: "select",
+      typeName: "Ba",
+      shape: [
+        {
+          kind: "computed",
+          name: "bb",
+          expr: {
+            kind: "polymorphic_field_ref",
+            sourceType: "",
+            sourceTypeExpr: {
+              kind: "type_union",
+              left: { kind: "type_name", name: "Bb" },
+              right: { kind: "type_name", name: "Bc" },
+            },
+            field: "bb",
+          },
+          operation: "assign",
+          origin: "explicit",
+        },
+      ],
+      fields: [],
+      pos: { line: 1, column: 1 },
     },
   },
   {
     query: "SELECT Ba[IS Bb & Bc] {ba};",
     ast: {
-      kind: "select", typeName: "Ba",
-      typeFilterExprs: [{ kind: "type_intersection",
-        left: { kind: "type_name", name: "Bb" }, right: { kind: "type_name", name: "Bc" } }],
+      kind: "select",
+      typeName: "Ba",
+      typeFilterExprs: [
+        {
+          kind: "type_intersection",
+          left: { kind: "type_name", name: "Bb" },
+          right: { kind: "type_name", name: "Bc" },
+        },
+      ],
       shape: [{ kind: "field", name: "ba", operation: "assign", origin: "explicit" }],
-      fields: ["ba"], pos: { line: 1, column: 1 },
+      fields: ["ba"],
+      pos: { line: 1, column: 1 },
     },
   },
   {
     query: "SELECT Ba[IS Bb | Bc] {ba};",
     ast: {
-      kind: "select", typeName: "Ba",
-      typeFilterExprs: [{ kind: "type_union",
-        left: { kind: "type_name", name: "Bb" }, right: { kind: "type_name", name: "Bc" } }],
+      kind: "select",
+      typeName: "Ba",
+      typeFilterExprs: [
+        {
+          kind: "type_union",
+          left: { kind: "type_name", name: "Bb" },
+          right: { kind: "type_name", name: "Bc" },
+        },
+      ],
       shape: [{ kind: "field", name: "ba", operation: "assign", origin: "explicit" }],
-      fields: ["ba"], pos: { line: 1, column: 1 },
+      fields: ["ba"],
+      pos: { line: 1, column: 1 },
     },
   },
   {
     query: "SELECT Object[IS (Ba | Bb)] { [IS Ba].ba };",
     ast: {
-      kind: "select", typeName: "Object",
-      typeFilterExprs: [{ kind: "type_union",
-        left: { kind: "type_name", name: "Ba" }, right: { kind: "type_name", name: "Bb" } }],
-      shape: [{ kind: "computed", name: "ba", expr: {
-        kind: "polymorphic_field_ref", sourceType: "Ba",
-        sourceTypeExpr: { kind: "type_name", name: "Ba" }, field: "ba",
-      }, operation: "assign", origin: "explicit" }],
-      fields: [], pos: { line: 1, column: 1 },
+      kind: "select",
+      typeName: "Object",
+      typeFilterExprs: [
+        {
+          kind: "type_union",
+          left: { kind: "type_name", name: "Ba" },
+          right: { kind: "type_name", name: "Bb" },
+        },
+      ],
+      shape: [
+        {
+          kind: "computed",
+          name: "ba",
+          expr: {
+            kind: "polymorphic_field_ref",
+            sourceType: "Ba",
+            sourceTypeExpr: { kind: "type_name", name: "Ba" },
+            field: "ba",
+          },
+          operation: "assign",
+          origin: "explicit",
+        },
+      ],
+      fields: [],
+      pos: { line: 1, column: 1 },
     },
   },
 ];
@@ -414,19 +531,23 @@ describe("grammar-backed SELECT parser", () => {
     "SELECT User {friends: {name} ORDER BY .name};",
     "SELECT array_agg('x' ORDER BY 'x');",
     "WITH val := <int16>1234, FOR X IN {(2, 2), (10, 10)} SELECT X.0 + X.1;",
-    "SELECT \"1 + 1 = \\(1 + 1)\";",
+    'SELECT "1 + 1 = \\(1 + 1)";',
   ])("recognizes syntax from the generated Gel LR table: %s", (query) => {
     expect(acceptsGelGrammarBlock(query)).toBe(true);
   });
 
-  it.each(["SELECT 1 +;", "1 + 2;"])("rejects malformed or non-EdgeQL blocks with Gel tables: %s", (query) => {
-    expect(acceptsGelGrammarBlock(query)).toBe(false);
-  });
+  it.each(["SELECT 1 +;", "1 + 2;"])(
+    "rejects malformed or non-EdgeQL blocks with Gel tables: %s",
+    (query) => {
+      expect(acceptsGelGrammarBlock(query)).toBe(false);
+    },
+  );
 
   it("retains Gel production names and spans in the generated CST", () => {
     const cst = parseGelGrammarCST("SELECT 1 + 2 * 3;");
     expect(cst).toMatchObject({
-      kind: "production", name: ["EdgeQLGrammar", "reduce_STARTBLOCK_EdgeQLBlock_EOI"],
+      kind: "production",
+      name: ["EdgeQLGrammar", "reduce_STARTBLOCK_EdgeQLBlock_EOI"],
     });
     const reductions: string[] = [];
     const visit = (node: GelCSTNode): void => {
@@ -450,15 +571,21 @@ describe("grammar-backed SELECT parser", () => {
     const artifact = new CompilerService().compile(schemaFromSdl(""), statement);
     const database = new Database(":memory:");
     try {
-      expect(database.prepare(artifact.sql.sql).all(...artifact.sql.params)).toEqual([{ value: expected }]);
+      expect(database.prepare(artifact.sql.sql).all(...artifact.sql.params)).toEqual([
+        { value: expected },
+      ]);
     } finally {
       database.close();
     }
   });
 
   it("does not silently reduce unsupported generated blocks or expression forms", () => {
-    expect(() => parseGelGrammarStatement("SELECT 1; SELECT 2;")).toThrow(/simple SELECT statements only/);
-    expect(() => parseGelGrammarStatement("SELECT User {friends: {name}};")).toThrow(/plain field entries only/);
+    expect(() => parseGelGrammarStatement("SELECT 1; SELECT 2;")).toThrow(
+      /simple SELECT statements only/,
+    );
+    expect(() => parseGelGrammarStatement("SELECT User {friends: {name}};")).toThrow(
+      /plain field entries only/,
+    );
     expect(() => parseGelGrammarStatement("SELECT 1 ORDER BY 1;")).toThrow(/SELECT clauses/);
   });
 
@@ -474,12 +601,16 @@ describe("grammar-backed SELECT parser", () => {
 
       const shaped = parseGelGrammarStatement("SELECT Foo {name} FILTER .name = 'Ada';");
       const shapedArtifact = new CompilerService().compile(schema, shaped);
-      const shapedRows = db.prepare(shapedArtifact.sql.sql).all(...shapedArtifact.sql.params) as Array<{ name: string }>;
+      const shapedRows = db
+        .prepare(shapedArtifact.sql.sql)
+        .all(...shapedArtifact.sql.params) as Array<{ name: string }>;
       expect(shapedRows.map((row) => row.name)).toEqual(["Ada"]);
 
       const path = parseGelGrammarStatement("SELECT Foo.name;");
       const pathArtifact = new CompilerService().compile(schema, path);
-      const pathRows = db.prepare(pathArtifact.sql.sql).all(...pathArtifact.sql.params) as Array<{ value: string }>;
+      const pathRows = db.prepare(pathArtifact.sql.sql).all(...pathArtifact.sql.params) as Array<{
+        value: string;
+      }>;
       expect(pathRows.map((row) => row.value)).toEqual(["Ada", "Bea"]);
     } finally {
       db.close();
@@ -496,31 +627,37 @@ describe("grammar-backed SELECT parser", () => {
 
   it("preserves a top-level result alias used by ORDER BY", () => {
     expect(parseEdgeQLGrammar("SELECT _ := (1, 2) ORDER BY _;")).toMatchObject({
-      kind: "select_expr", resultAlias: "_",
+      kind: "select_expr",
+      resultAlias: "_",
       orderBy: { expr: { kind: "binding_ref", name: "_" } },
     });
   });
 
   it("parses DETACHED free-object expressions", () => {
     expect(parseEdgeQLGrammar("SELECT _ := DETACHED {x := (SELECT User)};")).toMatchObject({
-      kind: "select_expr", expr: { kind: "free_object_constructor", detached: true },
+      kind: "select_expr",
+      expr: { kind: "free_object_constructor", detached: true },
     });
   });
 
   it("preserves shape cardinality modifiers", () => {
     expect(parseEdgeQLGrammar("SELECT Issue {multi te := .time_estimate};")).toMatchObject({
-      kind: "select", shape: [{ kind: "computed", name: "te", cardinality: "many" }],
+      kind: "select",
+      shape: [{ kind: "computed", name: "te", cardinality: "many" }],
     });
   });
 
   it("preserves modifiers on free-object fields", () => {
     expect(parseEdgeQLGrammar("SELECT {required user := 1};")).toMatchObject({
-      kind: "select_free", entries: [{ name: "user", required: true }],
+      kind: "select_free",
+      entries: [{ name: "user", required: true }],
     });
   });
 
   it("parses legacy recursive links and colon-computed shape expressions", () => {
-    const recursive = parseEdgeQLGrammar("SELECT Issue { number, related_to *1 } FILTER Issue.number = '2';");
+    const recursive = parseEdgeQLGrammar(
+      "SELECT Issue { number, related_to *1 } FILTER Issue.number = '2';",
+    );
     expect(recursive).toMatchObject({
       kind: "select",
       shape: [
@@ -529,7 +666,9 @@ describe("grammar-backed SELECT parser", () => {
       ],
     });
 
-    const typed = parseEdgeQLGrammar("SELECT Person {name, tag, sub: Person IS DerivedPerson} ORDER BY .name");
+    const typed = parseEdgeQLGrammar(
+      "SELECT Person {name, tag, sub: Person IS DerivedPerson} ORDER BY .name",
+    );
     expect(typed).toMatchObject({
       kind: "select",
       shape: [
@@ -548,19 +687,25 @@ describe("grammar-backed SELECT parser", () => {
   });
 
   it.each([
-    "SELECT 1 +;", "SELECT User {name,,};", "SELECT (1 + 2;", "1 + 2;", "SELECT Movie[IS Film &];",
-    "SELECT call1(suffix := 's1', 1);", "SELECT call1(suffix := 's1', suffix := 's2');",
+    "SELECT 1 +;",
+    "SELECT User {name,,};",
+    "SELECT (1 + 2;",
+    "1 + 2;",
+    "SELECT Movie[IS Film &];",
+    "SELECT call1(suffix := 's1', 1);",
+    "SELECT call1(suffix := 's1', suffix := 's2');",
     "INSERT Person {name := 'Alice'} UNLESS CONFLICT ELSE (Person);",
     "SELECT User ORDER BY .name EMPTY MIDDLE;",
     "SELECT Issue {related_to *5};",
-    "SELECT INTROSPECT;", "SELECT INTROSPECT TYPEOF;",
-    "SELECT 1e999;", "SELECT 1e-324;", "SELECT 111111111111111111111111;",
+    "SELECT INTROSPECT;",
+    "SELECT INTROSPECT TYPEOF;",
+    "SELECT 1e999;",
+    "SELECT 1e-324;",
+    "SELECT 111111111111111111111111;",
     "SELECT 1; SELECT 2;",
-  ])(
-    "rejects malformed syntax: %s", (query) => {
-      expect(() => parseEdgeQLGrammar(query)).toThrow();
-    },
-  );
+  ])("rejects malformed syntax: %s", (query) => {
+    expect(() => parseEdgeQLGrammar(query)).toThrow();
+  });
 
   it("rejects unsupported syntax rather than silently delegating to the old parser", () => {
     expect(() => parseEdgeQLGrammar("CREATE TYPE Foo { BLARG; }; ")).toThrow();
@@ -570,7 +715,11 @@ describe("grammar-backed SELECT parser", () => {
   it("parses multiple statements with accurate source positions", () => {
     const script = "SELECT 'a;b';\n\nINSERT User {name := 'x;y'}; SELECT 1 + 2";
     const statements = parseEdgeQLGrammarScript(script);
-    expect(statements.map((statement) => statement.kind)).toEqual(["select_expr", "insert", "select_expr"]);
+    expect(statements.map((statement) => statement.kind)).toEqual([
+      "select_expr",
+      "insert",
+      "select_expr",
+    ]);
     expect(statements.map((statement) => statement.pos.line)).toEqual([1, 3, 3]);
     expect(statements[2]!.pos.column).toBeGreaterThan(statements[1]!.pos.column);
   });
@@ -591,21 +740,27 @@ describe("grammar-backed SELECT parser", () => {
     "UPDATE User FILTER .name = 'a' SET {name := 'b'};",
     "DELETE User FILTER .name = 'a';",
   ])("compiles a grammar-backed query: %s", (query) => {
-    const schema = schemaFromSdl(fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"));
+    const schema = schemaFromSdl(
+      fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"),
+    );
     const compiler = new CompilerService();
     const artifact = compiler.compile(schema, parseEdgeQLGrammar(query));
     expect(artifact.sql.sql.trim()).not.toBe("");
   });
 
   it("lowers a grammar-backed GROUP over a WITH/FOR binding to SQLite", () => {
-    const schema = schemaFromSdl(fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"));
+    const schema = schemaFromSdl(
+      fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"),
+    );
     const query = "WITH N := (FOR n IN {8,9} SELECT n) GROUP {a := 1, b := N} BY .a;";
     const artifact = new CompilerService().compile(schema, parseEdgeQLGrammar(query));
 
     expect(artifact.sql.loweringMode).toBe("single_statement");
     const database = new Database(":memory:");
     try {
-      const row = database.prepare(artifact.sql.sql).get(...artifact.sql.params) as { value: string };
+      const row = database.prepare(artifact.sql.sql).get(...artifact.sql.params) as {
+        value: string;
+      };
       expect(JSON.parse(row.value)).toEqual({
         key: { a: 1 },
         grouping: ["a"],
@@ -617,7 +772,9 @@ describe("grammar-backed SELECT parser", () => {
   });
 
   it("materializes a grammar-backed object WITH binding before SQLite GROUP lowering", () => {
-    const schema = schemaFromSdl(fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"));
+    const schema = schemaFromSdl(
+      fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"),
+    );
     const query = "WITH I := Issue GROUP I {name} BY .name;";
     const artifact = new CompilerService().compile(schema, parseEdgeQLGrammar(query));
 
@@ -630,12 +787,23 @@ describe("grammar-backed SELECT parser", () => {
       insert.run("issue-2", "2", "same");
       insert.run("issue-3", "3", "other");
 
-      const rows = database.prepare(artifact.sql.sql).all(...artifact.sql.params) as Array<{ value: string }>;
+      const rows = database.prepare(artifact.sql.sql).all(...artifact.sql.params) as Array<{
+        value: string;
+      }>;
       expect(rows.map((row) => JSON.parse(row.value))).toEqual([
-        { key: { name: "other" }, grouping: ["name"], elements: [{ id: "issue-3", name: "other" }] },
-        { key: { name: "same" }, grouping: ["name"], elements: [
-          { id: "issue-1", name: "same" }, { id: "issue-2", name: "same" },
-        ] },
+        {
+          key: { name: "other" },
+          grouping: ["name"],
+          elements: [{ id: "issue-3", name: "other" }],
+        },
+        {
+          key: { name: "same" },
+          grouping: ["name"],
+          elements: [
+            { id: "issue-1", name: "same" },
+            { id: "issue-2", name: "same" },
+          ],
+        },
       ]);
     } finally {
       database.close();

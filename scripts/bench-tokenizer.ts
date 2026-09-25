@@ -6,7 +6,8 @@ import { parseEdgeQL, parseEdgeQLScript } from "../src/edgeql/parser.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const shortQuery = "SELECT User { name, email, friends: { name } } FILTER .name = 'Alice' ORDER BY .name LIMIT 10";
+const shortQuery =
+  "SELECT User { name, email, friends: { name } } FILTER .name = 'Alice' ORDER BY .name LIMIT 10";
 
 const mediumQuery = `
 WITH module default
@@ -72,7 +73,13 @@ const formatNumber = (n: number, digits = 2): string => {
   return n.toFixed(digits);
 };
 
-const bench = (name: string, input: string, op: () => unknown, targetMs = 1500, minIters = 5): BenchResult => {
+const bench = (
+  name: string,
+  input: string,
+  op: () => unknown,
+  targetMs = 1500,
+  minIters = 5,
+): BenchResult => {
   for (let i = 0; i < 3; i += 1) op();
 
   let iters = 0;
@@ -145,19 +152,33 @@ const main = (): void => {
   results.push(bench("tokenize(mediumQuery)", mediumQuery, () => tokenize(mediumQuery)));
   results.push(bench("tokenize(cardsSdl)", cardsSdl, () => tokenize(cardsSdl)));
   results.push(bench("tokenize(longSdl)", longSdl, () => tokenize(longSdl)));
-  results.push(bench("tokenize(longEdgeQLScript)", longEdgeQLScript, () => tokenize(longEdgeQLScript)));
+  results.push(
+    bench("tokenize(longEdgeQLScript)", longEdgeQLScript, () => tokenize(longEdgeQLScript)),
+  );
 
   if (typeof tokenizeToStream === "function") {
-    results.push(bench("tokenizeToStream(shortQuery)", shortQuery, () => tokenizeToStream(shortQuery)));
-    results.push(bench("tokenizeToStream(mediumQuery)", mediumQuery, () => tokenizeToStream(mediumQuery)));
+    results.push(
+      bench("tokenizeToStream(shortQuery)", shortQuery, () => tokenizeToStream(shortQuery)),
+    );
+    results.push(
+      bench("tokenizeToStream(mediumQuery)", mediumQuery, () => tokenizeToStream(mediumQuery)),
+    );
     results.push(bench("tokenizeToStream(cardsSdl)", cardsSdl, () => tokenizeToStream(cardsSdl)));
     results.push(bench("tokenizeToStream(longSdl)", longSdl, () => tokenizeToStream(longSdl)));
-    results.push(bench("tokenizeToStream(longEdgeQLScript)", longEdgeQLScript, () => tokenizeToStream(longEdgeQLScript)));
+    results.push(
+      bench("tokenizeToStream(longEdgeQLScript)", longEdgeQLScript, () =>
+        tokenizeToStream(longEdgeQLScript),
+      ),
+    );
   }
 
   results.push(bench("parseEdgeQL(shortQuery)", shortQuery, () => parseEdgeQL(shortQuery)));
   results.push(bench("parseEdgeQL(mediumQuery)", mediumQuery, () => parseEdgeQL(mediumQuery)));
-  results.push(bench("parseEdgeQLScript(longEdgeQLScript)", longEdgeQLScript, () => parseEdgeQLScript(longEdgeQLScript)));
+  results.push(
+    bench("parseEdgeQLScript(longEdgeQLScript)", longEdgeQLScript, () =>
+      parseEdgeQLScript(longEdgeQLScript),
+    ),
+  );
 
   for (const r of results) printRow(r);
 

@@ -192,40 +192,219 @@ export type TokenKind =
 //   * COMBINED_KEYWORDS      — multi-word keyword sequences treated as
 //                              single tokens (e.g. `order by`)
 export const UNRESERVED_KEYWORDS = [
-  "abort", "abstract", "access", "after", "alias", "allow", "all", "annotation", "applied",
-  "as", "asc", "assignment", "before", "branch", "cardinality", "cast", "committed",
-  "config", "conflict", "constraint", "cube", "current", "data", "database", "ddl", "declare",
-  "default", "deferrable", "deferred", "delegated", "deny", "desc", "each", "empty", "expression",
-  "extension", "final", "first", "force", "from", "function", "future", "implicit", "index", "infix",
-  "inheritable", "instance", "into", "isolation", "json", "last", "link", "migration", "multi",
-  "named", "object", "of", "only", "onto", "operator", "optionality", "order", "orphan", "overloaded",
-  "owned", "package", "permission", "policy", "populate", "postfix", "prefix", "property",
-  "proposed", "pseudo", "read", "reject", "release", "rename", "repeatable", "required", "reset",
-  "restrict", "rewrite", "role", "roles", "rollup", "savepoint", "scalar", "schema", "sdl",
-  "serializable", "session", "source", "superuser", "system", "target", "template", "ternary",
-  "text", "then", "to", "transaction", "trigger", "type", "unless", "using", "verbose", "version",
-  "view", "write",
+  "abort",
+  "abstract",
+  "access",
+  "after",
+  "alias",
+  "allow",
+  "all",
+  "annotation",
+  "applied",
+  "as",
+  "asc",
+  "assignment",
+  "before",
+  "branch",
+  "cardinality",
+  "cast",
+  "committed",
+  "config",
+  "conflict",
+  "constraint",
+  "cube",
+  "current",
+  "data",
+  "database",
+  "ddl",
+  "declare",
+  "default",
+  "deferrable",
+  "deferred",
+  "delegated",
+  "deny",
+  "desc",
+  "each",
+  "empty",
+  "expression",
+  "extension",
+  "final",
+  "first",
+  "force",
+  "from",
+  "function",
+  "future",
+  "implicit",
+  "index",
+  "infix",
+  "inheritable",
+  "instance",
+  "into",
+  "isolation",
+  "json",
+  "last",
+  "link",
+  "migration",
+  "multi",
+  "named",
+  "object",
+  "of",
+  "only",
+  "onto",
+  "operator",
+  "optionality",
+  "order",
+  "orphan",
+  "overloaded",
+  "owned",
+  "package",
+  "permission",
+  "policy",
+  "populate",
+  "postfix",
+  "prefix",
+  "property",
+  "proposed",
+  "pseudo",
+  "read",
+  "reject",
+  "release",
+  "rename",
+  "repeatable",
+  "required",
+  "reset",
+  "restrict",
+  "rewrite",
+  "role",
+  "roles",
+  "rollup",
+  "savepoint",
+  "scalar",
+  "schema",
+  "sdl",
+  "serializable",
+  "session",
+  "source",
+  "superuser",
+  "system",
+  "target",
+  "template",
+  "ternary",
+  "text",
+  "then",
+  "to",
+  "transaction",
+  "trigger",
+  "type",
+  "unless",
+  "using",
+  "verbose",
+  "version",
+  "view",
+  "write",
 ] as const;
 
 export const PARTIAL_RESERVED_KEYWORDS = ["except", "intersect", "union"] as const;
 
 export const FUTURE_RESERVED_KEYWORDS = [
-  "anyarray", "begin", "case", "check", "deallocate", "discard", "end", "explain", "fetch", "get",
-  "global", "grant", "import", "listen", "load", "lock", "match", "move", "notify", "on", "over",
-  "partition", "prepare", "raise", "refresh", "revoke", "single", "when", "window", "never",
+  "anyarray",
+  "begin",
+  "case",
+  "check",
+  "deallocate",
+  "discard",
+  "end",
+  "explain",
+  "fetch",
+  "get",
+  "global",
+  "grant",
+  "import",
+  "listen",
+  "load",
+  "lock",
+  "match",
+  "move",
+  "notify",
+  "on",
+  "over",
+  "partition",
+  "prepare",
+  "raise",
+  "refresh",
+  "revoke",
+  "single",
+  "when",
+  "window",
+  "never",
 ] as const;
 
 export const CURRENT_RESERVED_KEYWORDS = [
-  "__source__", "__subject__", "__type__", "__std__", "__edgedbsys__", "__edgedbtpl__",
-  "__new__", "__old__", "__specified__", "__default__", "administer", "alter", "analyze",
-  "and", "anytuple", "anytype", "anyobject", "by", "commit", "configure", "create", "delete",
-  "describe", "detached", "distinct", "do", "drop", "else", "exists", "extending", "false",
-  "filter", "for", "group", "if", "ilike", "in", "insert", "introspect", "is", "like", "limit",
-  "module", "not", "offset", "optional", "or", "rollback", "select", "set", "start", "true", "typeof",
-  "update", "variadic", "with",
+  "__source__",
+  "__subject__",
+  "__type__",
+  "__std__",
+  "__edgedbsys__",
+  "__edgedbtpl__",
+  "__new__",
+  "__old__",
+  "__specified__",
+  "__default__",
+  "administer",
+  "alter",
+  "analyze",
+  "and",
+  "anytuple",
+  "anytype",
+  "anyobject",
+  "by",
+  "commit",
+  "configure",
+  "create",
+  "delete",
+  "describe",
+  "detached",
+  "distinct",
+  "do",
+  "drop",
+  "else",
+  "exists",
+  "extending",
+  "false",
+  "filter",
+  "for",
+  "group",
+  "if",
+  "ilike",
+  "in",
+  "insert",
+  "introspect",
+  "is",
+  "like",
+  "limit",
+  "module",
+  "not",
+  "offset",
+  "optional",
+  "or",
+  "rollback",
+  "select",
+  "set",
+  "start",
+  "true",
+  "typeof",
+  "update",
+  "variadic",
+  "with",
 ] as const;
 
-export const COMBINED_KEYWORDS = ["named only", "set annotation", "set type", "extension package", "order by"] as const;
+export const COMBINED_KEYWORDS = [
+  "named only",
+  "set annotation",
+  "set type",
+  "extension package",
+  "order by",
+] as const;
 
 export interface Token {
   kind: TokenKind;
@@ -402,7 +581,6 @@ for (const keyword of CURRENT_RESERVED_KEYWORDS) {
   }
 }
 
-
 // Character code constants for the hot tokenizer paths. Using charCodeAt
 // avoids allocating one-character strings for every byte of input.
 const CC_TAB = 9;
@@ -494,9 +672,9 @@ const tokenizeImpl = (input: string): TokenizeResult => {
   // scanEscapeValue: at entry, `i` is just past the leading backslash; the
   // escape character has not been consumed yet. Returns the unescaped char.
   const isHex = (cc: number): boolean =>
-    (cc >= 48 && cc <= 57) // 0-9
-    || (cc >= 97 && cc <= 102) // a-f
-    || (cc >= 65 && cc <= 70); // A-F
+    (cc >= 48 && cc <= 57) || // 0-9
+    (cc >= 97 && cc <= 102) || // a-f
+    (cc >= 65 && cc <= 70); // A-F
   const readHexDigits = (count: number, tokenOffset: number, name: string): number => {
     if (i + count > len) {
       return syntaxError(`Truncated \\${name} escape sequence`, tokenOffset);
@@ -519,27 +697,40 @@ const tokenizeImpl = (input: string): TokenizeResult => {
     const esc = input.charCodeAt(i);
     i += 1;
     switch (esc) {
-      case CC_n: return "\n";
-      case CC_r: return "\r";
+      case CC_n:
+        return "\n";
+      case CC_r:
+        return "\r";
       // 't' is 116
-      case 116: return "\t";
-      case CC_BACKSLASH: return "\\";
-      case CC_SQUOTE: return "'";
-      case CC_DQUOTE: return '"';
+      case 116:
+        return "\t";
+      case CC_BACKSLASH:
+        return "\\";
+      case CC_SQUOTE:
+        return "'";
+      case CC_DQUOTE:
+        return '"';
       // 'x' is 120 — two-digit hex escape \xHH
-      case 120: return String.fromCodePoint(readHexDigits(2, tokenOffset, "x"));
+      case 120:
+        return String.fromCodePoint(readHexDigits(2, tokenOffset, "x"));
       // 'u' is 117 — four-digit hex escape \uHHHH
-      case 117: return String.fromCodePoint(readHexDigits(4, tokenOffset, "u"));
+      case 117:
+        return String.fromCodePoint(readHexDigits(4, tokenOffset, "u"));
       // 'U' is 85 — eight-digit hex escape \UHHHHHHHH
-      case 85: return String.fromCodePoint(readHexDigits(8, tokenOffset, "U"));
+      case 85:
+        return String.fromCodePoint(readHexDigits(8, tokenOffset, "U"));
       // 'b' is 98 — backspace
-      case 98: return "\b";
+      case 98:
+        return "\b";
       // 'f' is 102 — form feed
-      case 102: return "\f";
+      case 102:
+        return "\f";
       // 'v' is 118 — vertical tab
-      case 118: return "\v";
+      case 118:
+        return "\v";
       // '0' is 48 — null char
-      case 48: return "\0";
+      case 48:
+        return "\0";
       // Line continuation: `\` immediately followed by a line break (LF / CR /
       // CRLF) consumes the break AND the next line's leading whitespace — the
       // whole thing contributes nothing to the literal (`'a\<NL>   b'` → "ab").
@@ -551,14 +742,23 @@ const tokenizeImpl = (input: string): TokenizeResult => {
         lineStarts.push(i);
         while (i < len) {
           const whitespace = input.charCodeAt(i);
-          if (whitespace !== CC_SPACE && whitespace !== CC_TAB && whitespace !== CC_CR && whitespace !== CC_LF) break;
+          if (
+            whitespace !== CC_SPACE &&
+            whitespace !== CC_TAB &&
+            whitespace !== CC_CR &&
+            whitespace !== CC_LF
+          )
+            break;
           i += 1;
           if (whitespace === CC_LF) lineStarts.push(i);
         }
         return "";
       }
       default:
-        return syntaxError(`invalid string literal: invalid escape sequence '\\${input[i - 1]}'`, tokenOffset);
+        return syntaxError(
+          `invalid string literal: invalid escape sequence '\\${input[i - 1]}'`,
+          tokenOffset,
+        );
     }
   };
 
@@ -620,7 +820,12 @@ const tokenizeImpl = (input: string): TokenizeResult => {
         if (value.includes("::")) {
           syntaxError("backtick-quoted name cannot contain '::'", tokenOffset);
         }
-        tokens.push({ kind: "backtick_name", lexeme: value, lower: value.toLowerCase(), offset: tokenOffset });
+        tokens.push({
+          kind: "backtick_name",
+          lexeme: value,
+          lower: value.toLowerCase(),
+          offset: tokenOffset,
+        });
         return;
       }
       i += 1;
@@ -670,7 +875,12 @@ const tokenizeImpl = (input: string): TokenizeResult => {
         i += 1;
         if (kind === "string" && i < len && input.charCodeAt(i) === CC_LPAREN) {
           i += 1;
-          tokens.push({ kind: "str_interp_start", lexeme: value, lower: value, offset: tokenOffset });
+          tokens.push({
+            kind: "str_interp_start",
+            lexeme: value,
+            lower: value,
+            offset: tokenOffset,
+          });
           strInterpStack.push({ quote: quoteCC, parenDepth: openParens });
           return;
         }
@@ -681,8 +891,16 @@ const tokenizeImpl = (input: string): TokenizeResult => {
         // produce a byte ≤ 0x7F; higher bytes need \u/\U.
         if (escaped.length > 0) {
           const cp = escaped.codePointAt(0);
-          if (kind === "string" && cp !== undefined && cp > 0x7f && input.charCodeAt(i - 3) === 120) {
-            syntaxError(`invalid \\x escape in string literal: produces non-ASCII byte`, tokenOffset);
+          if (
+            kind === "string" &&
+            cp !== undefined &&
+            cp > 0x7f &&
+            input.charCodeAt(i - 3) === 120
+          ) {
+            syntaxError(
+              `invalid \\x escape in string literal: produces non-ASCII byte`,
+              tokenOffset,
+            );
           }
         }
         value += escaped;
@@ -695,10 +913,7 @@ const tokenizeImpl = (input: string): TokenizeResult => {
     syntaxError("Unterminated string literal", tokenOffset);
   };
 
-  const scanStringInterpolationCont = (
-    quoteCC: number,
-    tokenOffset: number,
-  ): void => {
+  const scanStringInterpolationCont = (quoteCC: number, tokenOffset: number): void => {
     i += 1; // consume ')'
     let segStart = i;
     let value: string | undefined;
@@ -711,7 +926,12 @@ const tokenizeImpl = (input: string): TokenizeResult => {
         i += 1;
         if (i < len && input.charCodeAt(i) === CC_LPAREN) {
           i += 1;
-          tokens.push({ kind: "str_interp_cont", lexeme: value, lower: value, offset: tokenOffset });
+          tokens.push({
+            kind: "str_interp_cont",
+            lexeme: value,
+            lower: value,
+            offset: tokenOffset,
+          });
           return;
         }
         value += scanEscapeValue(tokenOffset);
@@ -793,11 +1013,7 @@ const tokenizeImpl = (input: string): TokenizeResult => {
   const scanNumber = (tokenOffset: number): void => {
     const start = i;
 
-    if (
-      input.charCodeAt(i) === CC_0 &&
-      i + 1 < len &&
-      isDigitCC(input.charCodeAt(i + 1))
-    ) {
+    if (input.charCodeAt(i) === CC_0 && i + 1 < len && isDigitCC(input.charCodeAt(i + 1))) {
       syntaxError("leading zeros are not allowed in numbers", tokenOffset);
     }
 
@@ -854,11 +1070,27 @@ const tokenizeImpl = (input: string): TokenizeResult => {
 
     while (i < len) {
       const cc = input.charCodeAt(i);
-      if (cc >= CC_a && cc <= CC_z) { i += 1; continue; }
-      if (cc >= CC_A && cc <= CC_Z) { hasUppercase = true; i += 1; continue; }
-      if (cc === CC_UNDERSCORE) { i += 1; continue; }
-      if (cc >= CC_0 && cc <= CC_9) { i += 1; continue; }
-      if (cc > 0x7f && !ASCII_NON_LETTER.has(cc)) { i += 1; continue; }
+      if (cc >= CC_a && cc <= CC_z) {
+        i += 1;
+        continue;
+      }
+      if (cc >= CC_A && cc <= CC_Z) {
+        hasUppercase = true;
+        i += 1;
+        continue;
+      }
+      if (cc === CC_UNDERSCORE) {
+        i += 1;
+        continue;
+      }
+      if (cc >= CC_0 && cc <= CC_9) {
+        i += 1;
+        continue;
+      }
+      if (cc > 0x7f && !ASCII_NON_LETTER.has(cc)) {
+        i += 1;
+        continue;
+      }
       break;
     }
 
@@ -870,10 +1102,16 @@ const tokenizeImpl = (input: string): TokenizeResult => {
       // Preserve original case in `lexeme` for context-sensitive keywords
       // (e.g. `Text`, `Number`) that are also valid identifiers. The lowercased
       // form lives in `lower` for case-insensitive matching.
-      const preserveCase = keyword === "kw_unreserved"
-        || keyword === "kw_partial_reserved"
-        || keyword === "kw_future_reserved";
-      tokens.push({ kind: keyword, lexeme: preserveCase ? value : lowered, lower: lowered, offset: tokenOffset });
+      const preserveCase =
+        keyword === "kw_unreserved" ||
+        keyword === "kw_partial_reserved" ||
+        keyword === "kw_future_reserved";
+      tokens.push({
+        kind: keyword,
+        lexeme: preserveCase ? value : lowered,
+        lower: lowered,
+        offset: tokenOffset,
+      });
     } else {
       // For identifiers we keep `lexeme` in its original case but expose a
       // lowercased form via `lower` so parser case-insensitive comparisons
@@ -913,11 +1151,7 @@ const tokenizeImpl = (input: string): TokenizeResult => {
 
     // String interpolation continuation: ')' that closes a held interpolation.
     const interpTop = strInterpStack[strInterpStack.length - 1];
-    if (
-      interpTop !== undefined &&
-      cc === CC_RPAREN &&
-      interpTop.parenDepth === openParens
-    ) {
+    if (interpTop !== undefined && cc === CC_RPAREN && interpTop.parenDepth === openParens) {
       scanStringInterpolationCont(interpTop.quote, tokenOffset);
       continue;
     }
@@ -1086,7 +1320,12 @@ const tokenizeImpl = (input: string): TokenizeResult => {
               i += 1; // consume '>'
               const param = scanParameterLexeme();
               const lex = input.slice(start, i - param.length) + param;
-              tokens.push({ kind: "parameter_and_type", lexeme: lex, lower: lex, offset: tokenOffset });
+              tokens.push({
+                kind: "parameter_and_type",
+                lexeme: lex,
+                lower: lex,
+                offset: tokenOffset,
+              });
               continue;
             }
             // Roll back the digit scan. line/lineStart can't have changed since
@@ -1115,7 +1354,12 @@ const tokenizeImpl = (input: string): TokenizeResult => {
           if (n === CC_QMARK) {
             if (i + 2 < len && input.charCodeAt(i + 2) === CC_GT) {
               i += 3;
-              tokens.push({ kind: "optional_link", lexeme: ".?>", lower: ".?>", offset: tokenOffset });
+              tokens.push({
+                kind: "optional_link",
+                lexeme: ".?>",
+                lower: ".?>",
+                offset: tokenOffset,
+              });
               continue;
             }
             syntaxError(".? is not an operator, did you mean .?> ?", tokenOffset);
@@ -1140,13 +1384,23 @@ const tokenizeImpl = (input: string): TokenizeResult => {
           }
           if (n === CC_EQ) {
             i += 2;
-            tokens.push({ kind: "not_distinct_from", lexeme: "?=", lower: "?=", offset: tokenOffset });
+            tokens.push({
+              kind: "not_distinct_from",
+              lexeme: "?=",
+              lower: "?=",
+              offset: tokenOffset,
+            });
             continue;
           }
           if (n === CC_EXCL) {
             if (i + 2 < len && input.charCodeAt(i + 2) === CC_EQ) {
               i += 3;
-              tokens.push({ kind: "distinct_from", lexeme: "?!=", lower: "?!=", offset: tokenOffset });
+              tokens.push({
+                kind: "distinct_from",
+                lexeme: "?!=",
+                lower: "?!=",
+                offset: tokenOffset,
+              });
               continue;
             }
             syntaxError("?! is not an operator, did you mean ?!= ?", tokenOffset);
@@ -1215,15 +1469,12 @@ const tokenizeImpl = (input: string): TokenizeResult => {
     }
 
     // Raw byte strings accept either prefix order: rb'...' or br'...'.
-    if (
-      (cc === CC_r || cc === CC_R_UP || cc === CC_b || cc === CC_B_UP) &&
-      i + 2 < len
-    ) {
+    if ((cc === CC_r || cc === CC_R_UP || cc === CC_b || cc === CC_B_UP) && i + 2 < len) {
       const second = input.charCodeAt(i + 1);
       const quote = input.charCodeAt(i + 2);
       const hasRawBytePrefixes =
-        (cc === CC_r || cc === CC_R_UP) && (second === CC_b || second === CC_B_UP)
-        || (cc === CC_b || cc === CC_B_UP) && (second === CC_r || second === CC_R_UP);
+        ((cc === CC_r || cc === CC_R_UP) && (second === CC_b || second === CC_B_UP)) ||
+        ((cc === CC_b || cc === CC_B_UP) && (second === CC_r || second === CC_R_UP));
       if (hasRawBytePrefixes && (quote === CC_SQUOTE || quote === CC_DQUOTE)) {
         i += 2;
         scanString(quote, tokenOffset, "bytes_string", true);

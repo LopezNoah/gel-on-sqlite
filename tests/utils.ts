@@ -30,9 +30,9 @@ const cloneSchemaSnapshot = (schema: SchemaSnapshot): SchemaSnapshot =>
   SchemaSnapshot.cloneShared(schema);
 
 export interface HarnessOptions {
-  schema?: string;      // Name of .esdl file in tests/schemas/
-  setup?: string;       // Name of .edgeql file in tests/schemas/
-  dbFile?: string;      // Optional SQLite file path for inspection
+  schema?: string; // Name of .esdl file in tests/schemas/
+  setup?: string; // Name of .edgeql file in tests/schemas/
+  dbFile?: string; // Optional SQLite file path for inspection
   resetDbFile?: boolean;
   reuseExistingDb?: boolean;
   runSetupOnReuse?: boolean;
@@ -61,7 +61,11 @@ function inferredModuleNameFromSchema(schemaName: string): string {
   if (idx < 0) {
     return "default";
   }
-  return schemaName.slice(idx + 1).toLowerCase().split("_").join("::");
+  return schemaName
+    .slice(idx + 1)
+    .toLowerCase()
+    .split("_")
+    .join("::");
 }
 
 function stripHashComments(source: string): string {
@@ -97,7 +101,11 @@ function wrapModule(moduleName: string, source: string): string {
   return `module ${moduleName} {\n${cleanSource}\n}`;
 }
 
-function loadSchemaSource(schemaDir: string, schemaName: string, extraModules?: Record<string, string>): string {
+function loadSchemaSource(
+  schemaDir: string,
+  schemaName: string,
+  extraModules?: Record<string, string>,
+): string {
   const parts: Array<{ fileName: string; moduleName: string }> = [];
   const primaryModule = inferredModuleNameFromSchema(schemaName);
   const idx = schemaName.lastIndexOf("_");
@@ -219,7 +227,11 @@ export class QueryHarness {
     }
     // The suite also exercises bare SDL declarations inside script(). They
     // are parsed by the schema grammar, not the EdgeQL block grammar.
-    if (/^\s*(?:(?:abstract\s+)?(?:type|function|scalar|alias|constraint|annotation|global|module))\b/i.test(source)) {
+    if (
+      /^\s*(?:(?:abstract\s+)?(?:type|function|scalar|alias|constraint|annotation|global|module))\b/i.test(
+        source,
+      )
+    ) {
       try {
         loadSchema(source, { legacySyntaxCompat: true });
         return;
@@ -228,7 +240,9 @@ export class QueryHarness {
       }
     }
     const example = source.replace(/\s+/g, " ").trim().slice(0, 160);
-    throw new Error(`Gel-generated, grammar-reducer, and compatibility parsers rejected ${example}: ${errors.join("; ")}`);
+    throw new Error(
+      `Gel-generated, grammar-reducer, and compatibility parsers rejected ${example}: ${errors.join("; ")}`,
+    );
   }
 
   private runSetupScript(source: string) {
@@ -270,10 +284,11 @@ export class QueryHarness {
     }
 
     const { db } = openSQLite(dbFile);
-    const shouldReuseExistingDb = Boolean(options.dbFile)
-      && options.resetDbFile === false
-      && options.reuseExistingDb === true
-      && hadExistingDbFile;
+    const shouldReuseExistingDb =
+      Boolean(options.dbFile) &&
+      options.resetDbFile === false &&
+      options.reuseExistingDb === true &&
+      hadExistingDbFile;
 
     let snapshot = null as ReturnType<typeof schemaSnapshotFromDeclarative> | null;
 
@@ -300,8 +315,8 @@ export class QueryHarness {
       : "default";
     const harness = new QueryHarness(db, snapshot, fallbackModule);
 
-    const shouldRunSetup = Boolean(options.setup)
-      && (!shouldReuseExistingDb || options.runSetupOnReuse === true);
+    const shouldRunSetup =
+      Boolean(options.setup) && (!shouldReuseExistingDb || options.runSetupOnReuse === true);
 
     if (shouldRunSetup && options.setup) {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
@@ -327,7 +342,12 @@ export class QueryHarness {
    * back to the slow path.
    */
   private static tryCreateFromSnapshot(options: HarnessOptions): QueryHarness | null {
-    const key = snapshotCacheKey(options.schema, options.setup, options.extraModules, options.extraSetups);
+    const key = snapshotCacheKey(
+      options.schema,
+      options.setup,
+      options.extraModules,
+      options.extraSetups,
+    );
     const cached = snapshotCache.get(key);
     const fallbackModule = options.schema
       ? defaultModuleForSchema(path.join(__dirname, "schemas"), options.schema)

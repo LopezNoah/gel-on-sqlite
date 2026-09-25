@@ -18,7 +18,13 @@ const lit = (value: unknown): FunctionCallArgExpr =>
   ({ kind: "literal", value }) as unknown as FunctionCallArgExpr;
 
 const fnDef = (over: Partial<FunctionDef> & { params: unknown[] }): FunctionDef =>
-  ({ module: "default", name: "foo", volatility: "Immutable", returnSetOf: false, ...over }) as unknown as FunctionDef;
+  ({
+    module: "default",
+    name: "foo",
+    volatility: "Immutable",
+    returnSetOf: false,
+    ...over,
+  }) as unknown as FunctionDef;
 
 const schemaWith = (fns: FunctionDef[]): SchemaSnapshot =>
   ({ listFunctions: () => fns }) as unknown as SchemaSnapshot;
@@ -50,7 +56,9 @@ describe("resolveUserFunctionOverload", () => {
   });
 
   it("returns undefined when no overload by that name exists", () => {
-    expect(resolveUserFunctionOverload(schemaWith([fooStr]), "default", "bar", [1])).toBeUndefined();
+    expect(
+      resolveUserFunctionOverload(schemaWith([fooStr]), "default", "bar", [1]),
+    ).toBeUndefined();
   });
 });
 
@@ -58,7 +66,11 @@ describe("executeFunctionCall — stdlib dispatch", () => {
   it("routes std::count through the injected cardinality counter", () => {
     const schema = schemaWith([]);
     const out = executeFunctionCall(
-      schema, {} as never, {} as never, "std::count", [{ kind: "set", values: [1, 2, 3] }],
+      schema,
+      {} as never,
+      {} as never,
+      "std::count",
+      [{ kind: "set", values: [1, 2, 3] }],
       deps({ countRuntimeSetCardinality: (v) => (v as { values: unknown[] }).values.length }),
     );
     expect(out).toBe(3);

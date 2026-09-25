@@ -72,7 +72,9 @@ export const buildExecutor = (
   async queryRequired<T = unknown>(query: string, args?: QueryArgs): Promise<[T, ...T[]]> {
     const rows = (await fetchRows(query, args)) as T[];
     if (rows.length === 0) {
-      throw new ResultCardinalityMismatchError("query returned no elements, at least one was expected");
+      throw new ResultCardinalityMismatchError(
+        "query returned no elements, at least one was expected",
+      );
     }
     return rows as [T, ...T[]];
   },

@@ -144,7 +144,9 @@ describe("PathId Gel parity — object & pointer paths (computable_33)", () => {
     // and chains `.todo.id` across two steps.
     expect(live.has("(default::User)")).toBe(true);
     expect(live.has("(default::User).>(default::__|name@default|User)[IS std::str]")).toBe(true);
-    expect(live.has("(default::User).>(default::__|todo@default|User)[IS default::Issue]")).toBe(true);
+    expect(live.has("(default::User).>(default::__|todo@default|User)[IS default::Issue]")).toBe(
+      true,
+    );
     expect(
       live.has(
         "(default::User).>(default::__|todo@default|User)[IS default::Issue]" +

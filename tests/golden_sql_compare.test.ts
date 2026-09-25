@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it, beforeAll } from "vitest";
-import {
-  gelFactsOf,
-  inspect,
-} from "../src/compiler/inspect.js";
+import { gelFactsOf, inspect } from "../src/compiler/inspect.js";
 import { loadSchema as loadSchemaSnapshot } from "../src/schema/load.js";
 import type { SchemaSnapshot } from "../src/schema/schema.js";
 import { QueryHarness, type HarnessOptions } from "./utils.js";
@@ -118,7 +115,9 @@ function parseHarnessOptions(sourceGroup: string, className: string): HarnessOpt
   const extraSetupsText = body.match(/\bextraSetups:\s*\[([^\]]+)\]/s)?.[1];
   if (extraSetupsText) {
     options.extraSetups = [];
-    for (const match of extraSetupsText.matchAll(/\{\s*module:\s*"([^"]+)",\s*setup:\s*"([^"]+)"\s*\}/g)) {
+    for (const match of extraSetupsText.matchAll(
+      /\{\s*module:\s*"([^"]+)",\s*setup:\s*"([^"]+)"\s*\}/g,
+    )) {
       options.extraSetups.push({ module: match[1], setup: match[2] });
     }
   }
@@ -175,7 +174,11 @@ function hasExplicitModuleDeclaration(source: string): boolean {
 function inferredModuleNameFromSchema(schemaName: string): string {
   const idx = schemaName.lastIndexOf("_");
   if (idx < 0) return "default";
-  return schemaName.slice(idx + 1).toLowerCase().split("_").join("::");
+  return schemaName
+    .slice(idx + 1)
+    .toLowerCase()
+    .split("_")
+    .join("::");
 }
 
 function wrapModule(moduleName: string, source: string): string {
@@ -191,7 +194,9 @@ function buildSchemaSourceFromFiles(schemaFiles: string[]): string | null {
     const fullPath = path.join(ROOT_DIR, schemaFile);
     if (!fs.existsSync(fullPath)) return null;
     const schemaName = path.basename(schemaFile, ".esdl");
-    parts.push(wrapModule(inferredModuleNameFromSchema(schemaName), fs.readFileSync(fullPath, "utf8")));
+    parts.push(
+      wrapModule(inferredModuleNameFromSchema(schemaName), fs.readFileSync(fullPath, "utf8")),
+    );
   }
   return parts.join("\n\n");
 }
@@ -215,7 +220,10 @@ async function loadSchemaForCase(
   className: string,
   schemaFile: string,
 ): Promise<SchemaSnapshot | null> {
-  async function schemaFromHarnessOptions(options: HarnessOptions, keyPrefix: string): Promise<SchemaSnapshot | null> {
+  async function schemaFromHarnessOptions(
+    options: HarnessOptions,
+    keyPrefix: string,
+  ): Promise<SchemaSnapshot | null> {
     const key = `${keyPrefix}:${JSON.stringify(options)}`;
     if (schemaCache.has(key)) return schemaCache.get(key)!;
     try {
@@ -282,7 +290,7 @@ const PG_PATTERNS = [
 ];
 
 function detectPgFeatures(sql: string): string[] {
-  return PG_PATTERNS.filter(p => p.pattern.test(sql)).map(p => p.note);
+  return PG_PATTERNS.filter((p) => p.pattern.test(sql)).map((p) => p.note);
 }
 
 // Normalize SQL for comparison: strip volatile parts
@@ -315,7 +323,7 @@ describe("golden postgres_sql vs sqlite_sql comparison", () => {
     allResults = new Map();
 
     // Filter to cases that have postgres_sql
-    const casesWithSql = manifest.cases.filter(c => {
+    const casesWithSql = manifest.cases.filter((c) => {
       if (c.status === "error" || c.error) return false;
       const golden = loadGolden(c.output);
       return golden?.ok && golden?.postgres_sql;
@@ -349,7 +357,8 @@ describe("golden postgres_sql vs sqlite_sql comparison", () => {
               compileError = `gelFactsOf failed`;
             }
           } else {
-            compileError = result.error?.message || `compile failed (phase: ${result.error?.phase})`;
+            compileError =
+              result.error?.message || `compile failed (phase: ${result.error?.phase})`;
           }
         } catch (e: any) {
           compileError = e.message || String(e);
@@ -407,11 +416,17 @@ describe("golden postgres_sql vs sqlite_sql comparison", () => {
 
     const summaryRows: [string, number, number, number, number, number][] = [];
 
-    for (const [sourceGroup, cases] of [...allResults.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-      const matched = cases.filter(c => c.sqlMatch === true).length;
-      const mismatched = cases.filter(c => c.sqlMatch === false).length;
-      const compileFailed = cases.filter(c => c.compileError && !c.compileError.includes("schema not found")).length;
-      const schemaMissing = cases.filter(c => c.compileError?.includes("schema not found")).length;
+    for (const [sourceGroup, cases] of [...allResults.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    )) {
+      const matched = cases.filter((c) => c.sqlMatch === true).length;
+      const mismatched = cases.filter((c) => c.sqlMatch === false).length;
+      const compileFailed = cases.filter(
+        (c) => c.compileError && !c.compileError.includes("schema not found"),
+      ).length;
+      const schemaMissing = cases.filter((c) =>
+        c.compileError?.includes("schema not found"),
+      ).length;
 
       totalCompared += cases.length;
       totalMatched += matched;
@@ -441,7 +456,14 @@ describe("golden postgres_sql vs sqlite_sql comparison", () => {
       md += `## Cases\n\n`;
 
       for (const c of cases) {
-        const status = c.sqlMatch === true ? "MATCH" : c.sqlMatch === false ? "DIFF" : c.compileError ? "ERROR" : "UNKNOWN";
+        const status =
+          c.sqlMatch === true
+            ? "MATCH"
+            : c.sqlMatch === false
+              ? "DIFF"
+              : c.compileError
+                ? "ERROR"
+                : "UNKNOWN";
         const statusEmoji = status === "MATCH" ? "✅" : status === "DIFF" ? "❌" : "⚠️";
 
         md += `### Case ${c.caseIndex} ${statusEmoji}\n\n`;
@@ -472,9 +494,18 @@ describe("golden postgres_sql vs sqlite_sql comparison", () => {
 
       const fileMdName = `${sourceGroup}.md`;
       fs.writeFileSync(path.join(OUT_DIR, fileMdName), md);
-      console.log(`  → ${fileMdName} (${cases.length} cases, ${matched} match, ${mismatched} diff)`);
+      console.log(
+        `  → ${fileMdName} (${cases.length} cases, ${matched} match, ${mismatched} diff)`,
+      );
 
-      summaryRows.push([sourceGroup, cases.length, matched, mismatched, compileFailed, schemaMissing]);
+      summaryRows.push([
+        sourceGroup,
+        cases.length,
+        matched,
+        mismatched,
+        compileFailed,
+        schemaMissing,
+      ]);
     }
 
     // Add summary before per-file table

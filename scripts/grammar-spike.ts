@@ -18,7 +18,12 @@ const cases: { source: string; gel: boolean; mapped?: boolean }[] = [
   { source: "SELECT call1('-', suffix := 's1');", gel: true, mapped: true },
   { source: "SELECT (INTROSPECT TYPEOF sum({1, 2, 3})).name;", gel: true, mapped: true },
   { source: "SELECT (INTROSPECT std::float64).name;", gel: true, mapped: true },
-  { source: "INSERT Y { l := (INSERT X { n := <str>$n } UNLESS CONFLICT ON (.n) ELSE (X)) } UNLESS CONFLICT ON (.l);", gel: true, mapped: true },
+  {
+    source:
+      "INSERT Y { l := (INSERT X { n := <str>$n } UNLESS CONFLICT ON (.n) ELSE (X)) } UNLESS CONFLICT ON (.l);",
+    gel: true,
+    mapped: true,
+  },
   { source: "SELECT User {name};", gel: true, mapped: true },
   { source: "SELECT User {name, age} FILTER .name = 'alice';", gel: true, mapped: true },
   { source: "SELECT Ba { [IS Bb].bb };", gel: true, mapped: true },
@@ -49,7 +54,7 @@ const grammarCases = [
   "SELECT 1 ?? 2 ?? 3;",
   "SELECT 1 = 2 OR 3 = 4;",
   "SELECT 'a' ++ 'b';",
-  "SELECT \"1 + 1 = \\(1 + 1)\";",
+  'SELECT "1 + 1 = \\(1 + 1)";',
   "SELECT len('hello');",
   "SELECT std::len('hello');",
   "SELECT (INTROSPECT TYPEOF sum({1, 2, 3})).name;",
@@ -136,13 +141,14 @@ if (run.error || run.status !== 0) {
   throw new Error(`Gel parser failed: ${run.error ?? run.stderr}`);
 }
 const verdicts = JSON.parse(run.stdout) as Verdict[];
-if (verdicts.length !== cases.length + grammarCases.length) throw new Error("Incorrect verdict count");
+if (verdicts.length !== cases.length + grammarCases.length)
+  throw new Error("Incorrect verdict count");
 
 let mapped = 0;
 let different = 0;
 let unexpected = 0;
 for (const [i, { source, gel: expectGel, mapped: expectMapped }] of cases.entries()) {
-  const gel = verdicts[i]!;
+  const gel = verdicts[i];
   let grammarAst: unknown;
   try {
     grammarAst = parseEdgeQLGrammar(source);
@@ -152,26 +158,35 @@ for (const [i, { source, gel: expectGel, mapped: expectMapped }] of cases.entrie
   const grammarAccepted = grammarAst !== undefined;
   // The Python bridge uses JSON; optional AST keys with undefined values
   // disappear during transport.
-  const grammarJson = grammarAst === undefined ? undefined : JSON.parse(JSON.stringify(grammarAst)) as unknown;
+  const grammarJson =
+    grammarAst === undefined ? undefined : (JSON.parse(JSON.stringify(grammarAst)) as unknown);
   const sameAst = gel.ast !== undefined && isDeepStrictEqual(gel.ast, grammarJson);
   if (sameAst) mapped++;
   if (gel.accepted !== grammarAccepted || (gel.ast !== undefined && !sameAst)) different++;
-  if (gel.accepted !== expectGel || grammarAccepted !== expectGel
-      || (expectMapped === true && !sameAst) || (!expectMapped && gel.ast !== undefined)) {
+  if (
+    gel.accepted !== expectGel ||
+    grammarAccepted !== expectGel ||
+    (expectMapped === true && !sameAst) ||
+    (!expectMapped && gel.ast !== undefined)
+  ) {
     unexpected++;
   }
   console.log(`${gel.accepted === grammarAccepted ? "=" : "!"} ${source}`);
-  console.log(`  Gel: ${gel.accepted ? gel.ast !== undefined ? sameAst ? "mapped AST matches" : "mapped AST DIFFERS" : `accepted (AST subset unmapped: ${gel.unmapped})` : `rejected (${gel.error})`}`);
+  console.log(
+    `  Gel: ${gel.accepted ? (gel.ast !== undefined ? (sameAst ? "mapped AST matches" : "mapped AST DIFFERS") : `accepted (AST subset unmapped: ${gel.unmapped})`) : `rejected (${gel.error})`}`,
+  );
   console.log(`  grammar parser: ${grammarAccepted ? "accepted" : "rejected"}`);
   if (gel.ast !== undefined && !sameAst) {
     console.log(`  Gel AST: ${JSON.stringify(gel.ast)}`);
     console.log(`  grammar AST: ${JSON.stringify(grammarAst)}`);
   }
 }
-console.log(`\n${mapped} Gel AST mappings match; ${different} Gel/parser differences; ${unexpected} unexpected; ${cases.length} cases`);
+console.log(
+  `\n${mapped} Gel AST mappings match; ${different} Gel/parser differences; ${unexpected} unexpected; ${cases.length} cases`,
+);
 let grammarMatches = 0;
 for (const [i, source] of grammarCases.entries()) {
-  const gel = verdicts[cases.length + i]!;
+  const gel = verdicts[cases.length + i];
   let grammarAccepted = true;
   try {
     parseEdgeQLGrammar(source);
@@ -181,8 +196,12 @@ for (const [i, source] of grammarCases.entries()) {
   if (gel.accepted === grammarAccepted) grammarMatches++;
   else {
     unexpected++;
-    console.log(`TS grammar mismatch: ${source} (Gel ${gel.accepted ? "accepts" : "rejects"}, TS ${grammarAccepted ? "accepts" : "rejects"})`);
+    console.log(
+      `TS grammar mismatch: ${source} (Gel ${gel.accepted ? "accepts" : "rejects"}, TS ${grammarAccepted ? "accepts" : "rejects"})`,
+    );
   }
 }
-console.log(`TS grammar: ${grammarMatches}/${grammarCases.length} Gel syntax acceptance verdicts match`);
+console.log(
+  `TS grammar: ${grammarMatches}/${grammarCases.length} Gel syntax acceptance verdicts match`,
+);
 if (unexpected) process.exitCode = 1;

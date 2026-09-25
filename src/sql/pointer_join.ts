@@ -58,18 +58,20 @@ export const pointerStepJoinSql = (step: PointerStepJoin): string => {
 
   if (step.usesLinkTable) {
     const { linkAlias, linkTable } = step;
-    const linkTableRef = step.linkTableExpr ?? quoteIdent(linkTable!);
+    const linkTableRef = step.linkTableExpr ?? (linkTable ? quoteIdent(linkTable) : undefined);
+    if (!linkTableRef) throw new Error("Link-table joins require a table reference");
     const onPrev = inbound ? "target" : "source";
     const onTarget = inbound ? "source" : "target";
     return (
-      ` JOIN ${linkTableRef} ${linkAlias}`
-      + ` ON ${linkAlias}.${quoteIdent(onPrev)} = ${prevId}`
-      + ` JOIN ${targetSource}`
-      + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent(onTarget)}`
+      ` JOIN ${linkTableRef} ${linkAlias}` +
+      ` ON ${linkAlias}.${quoteIdent(onPrev)} = ${prevId}` +
+      ` JOIN ${targetSource}` +
+      ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent(onTarget)}`
     );
   }
 
-  const inlineColumn = step.inlineColumn!;
+  const inlineColumn = step.inlineColumn;
+  if (!inlineColumn) throw new Error("Inline pointer joins require a column name");
   return inbound
     ? ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent(inlineColumn)} = ${prevId}`
     : ` JOIN ${targetSource} ON ${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;

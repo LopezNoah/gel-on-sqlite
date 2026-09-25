@@ -82,14 +82,44 @@ describe("GelTableDecoder.functionParams", () => {
 
   it("maps kinds, typemods and JSON defaults", () => {
     const params: NonNullable<FunctionMetadata["params"]> = [
-      { name: "a", type_id: "scalar_int64", kind: "PositionalParam", typemod: "SingletonType", default: "7" },
+      {
+        name: "a",
+        type_id: "scalar_int64",
+        kind: "PositionalParam",
+        typemod: "SingletonType",
+        default: "7",
+      },
       { name: "b", type_id: "type_default__User", kind: "VariadicParam", typemod: "SetOfType" },
       { name: "c", type_id: "scalar_str", kind: "NamedOnlyParam", typemod: "OptionalType" },
     ];
     expect(dec.functionParams(params)).toEqual([
-      { name: "a", type: "int64", optional: false, setOf: false, variadic: false, namedOnly: false, default: 7 },
-      { name: "b", type: "default::User", optional: false, setOf: true, variadic: true, namedOnly: false, default: undefined },
-      { name: "c", type: "str", optional: true, setOf: false, variadic: false, namedOnly: true, default: undefined },
+      {
+        name: "a",
+        type: "int64",
+        optional: false,
+        setOf: false,
+        variadic: false,
+        namedOnly: false,
+        default: 7,
+      },
+      {
+        name: "b",
+        type: "default::User",
+        optional: false,
+        setOf: true,
+        variadic: true,
+        namedOnly: false,
+        default: undefined,
+      },
+      {
+        name: "c",
+        type: "str",
+        optional: true,
+        setOf: false,
+        variadic: false,
+        namedOnly: true,
+        default: undefined,
+      },
     ]);
   });
 });
@@ -123,7 +153,11 @@ describe("parseComputedLinkExpr", () => {
   });
 
   it("reads an untyped backlink", () => {
-    expect(parseComputedLinkExpr(".<children")).toEqual({ kind: "backlink", link: "children", sourceType: undefined });
+    expect(parseComputedLinkExpr(".<children")).toEqual({
+      kind: "backlink",
+      link: "children",
+      sourceType: undefined,
+    });
   });
 
   it("reads a forward link reference", () => {

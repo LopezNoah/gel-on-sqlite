@@ -5,7 +5,7 @@ import {
   queryRows,
   querySingle,
   unorderedBag,
-  unorderedSet
+  unorderedSet,
 } from "./python_query_test_helpers.js";
 
 describe("TestDelete", () => {
@@ -21,7 +21,7 @@ describe("TestDelete", () => {
     expect(() => {
       h.script(
         `                DELETE 42;
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot delete non-ObjectType object"));
   });
@@ -31,13 +31,13 @@ describe("TestDelete", () => {
       h.script(
         `                WITH foo := {bar := 1}
                 DELETE foo
-            `
+            `,
       );
     }).toThrow(new RegExp("free objects cannot be deleted"));
     expect(() => {
       h.script(
         `                DELETE std::FreeObject
-            `
+            `,
       );
     }).toThrow(new RegExp("free objects cannot be deleted"));
   });
@@ -46,13 +46,13 @@ describe("TestDelete", () => {
     expect(() => {
       h.script(
         `                DELETE schema::Object;
-            `
+            `,
       );
     }).toThrow(new RegExp("delete standard library type"));
     expect(() => {
       h.script(
         `                DELETE {default::LinkingType, schema::Object};
-            `
+            `,
       );
     }).toThrow(new RegExp("delete standard library type"));
   });
@@ -61,55 +61,63 @@ describe("TestDelete", () => {
     h.script(
       `
             DELETE DeleteTest;
-        `
+        `,
     );
     h.script(
       `
             INSERT DeleteTest {
                 name := 'delete-test'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT DeleteTest;
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     h.script(
       `
             DELETE DeleteTest;
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT DeleteTest;
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_delete_simple_02", () => {
-    let id1 = String(querySingle<{ id: string }>(h, "\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ").id);
-    let id2 = String(querySingle<{ id: string }>(h, "\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test2'\n            }) LIMIT 1;\n        ").id);
+    let id1 = String(
+      querySingle<{ id: string }>(
+        h,
+        "\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ",
+      ).id,
+    );
+    let id2 = String(
+      querySingle<{ id: string }>(
+        h,
+        "\n            SELECT(INSERT DeleteTest {\n                name := 'delete-test2'\n            }) LIMIT 1;\n        ",
+      ).id,
+    );
     assertQueryResult(
       h,
       `
                 DELETE (SELECT DeleteTest
                         FILTER DeleteTest.name = 'bad name');
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 SELECT DeleteTest ORDER BY DeleteTest.name;
             `,
-      [{"id": id1}, {"id": id2}]
+      [{ id: id1 }, { id: id2 }],
     );
     assertQueryResult(
       h,
@@ -117,14 +125,14 @@ describe("TestDelete", () => {
                 SELECT (DELETE (SELECT DeleteTest
                         FILTER DeleteTest.name = 'delete-test1'));
             `,
-      [{"id": id1}]
+      [{ id: id1 }],
     );
     assertQueryResult(
       h,
       `
                 SELECT DeleteTest ORDER BY DeleteTest.name;
             `,
-      [{"id": id2}]
+      [{ id: id2 }],
     );
     assertQueryResult(
       h,
@@ -132,19 +140,24 @@ describe("TestDelete", () => {
                 SELECT (DELETE (SELECT DeleteTest
                         FILTER DeleteTest.name = 'delete-test2'));
             `,
-      [{"id": id2}]
+      [{ id: id2 }],
     );
     assertQueryResult(
       h,
       `
                 SELECT DeleteTest ORDER BY DeleteTest.name;
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_delete_returning_01", () => {
-    let id1 = String(querySingle<{ id: string }>(h, "\n            SELECT (INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ").id);
+    let id1 = String(
+      querySingle<{ id: string }>(
+        h,
+        "\n            SELECT (INSERT DeleteTest {\n                name := 'delete-test1'\n            }) LIMIT 1;\n        ",
+      ).id,
+    );
     h.script(
       `
             INSERT DeleteTest {
@@ -153,7 +166,7 @@ describe("TestDelete", () => {
             INSERT DeleteTest {
                 name := 'delete-test3'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -161,7 +174,7 @@ describe("TestDelete", () => {
                 SELECT (DELETE DeleteTest
                         FILTER DeleteTest.name = 'delete-test1');
             `,
-      [{"id": id1}]
+      [{ id: id1 }],
     );
     assertQueryResult(
       h,
@@ -172,10 +185,10 @@ describe("TestDelete", () => {
                 SELECT D {name};
             `,
       [
-            {
-              "name": "delete-test2",
-            },
-          ]
+        {
+          name: "delete-test2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -185,7 +198,7 @@ describe("TestDelete", () => {
                      FILTER DeleteTest.name = 'delete-test3'
                     ).name ++ '--DELETED';
             `,
-      ["delete-test3--DELETED"]
+      ["delete-test3--DELETED"],
     );
   });
 
@@ -201,7 +214,7 @@ describe("TestDelete", () => {
             INSERT DeleteTest {
                 name := 'delete-test3'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -209,7 +222,7 @@ describe("TestDelete", () => {
                 WITH D := (DELETE DeleteTest)
                 SELECT count(D);
             `,
-      [3]
+      [3],
     );
   });
 
@@ -233,7 +246,7 @@ describe("TestDelete", () => {
             INSERT DeleteTest2 {
                 name := 'delete test2.2'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -246,13 +259,16 @@ describe("TestDelete", () => {
                 } FILTER any(DeleteTest2.name LIKE D.name[:2] ++ '%');
             `,
       [
-            {
-              "name": "dt2.1",
-              "foo": "bar",
-            },
-          ]
+        {
+          name: "dt2.1",
+          foo: "bar",
+        },
+      ],
     );
-    let deleted = queryRows<Record<string, unknown>>(h, "\n                DELETE DeleteTest2;\n            ");
+    let deleted = queryRows<Record<string, unknown>>(
+      h,
+      "\n                DELETE DeleteTest2;\n            ",
+    );
     expect(Object.prototype.hasOwnProperty.call(deleted[0], "__tid__")).toBeTruthy();
     expect(deleted[0].__tname__).toEqual("default::DeleteTest2");
   });
@@ -273,7 +289,7 @@ describe("TestDelete", () => {
             INSERT DeleteTest2 {
                 name := 'dt2.1'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -288,11 +304,11 @@ describe("TestDelete", () => {
                 } FILTER DeleteTest2.name = 'dt2.1';
             `,
       [
-            {
-              "name": "dt2.1",
-              "count": 3,
-            },
-          ]
+        {
+          name: "dt2.1",
+          count: 3,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -300,10 +316,10 @@ describe("TestDelete", () => {
                 SELECT (DELETE DeleteTest2) {name};
             `,
       [
-            {
-              "name": "dt2.1",
-            },
-          ]
+        {
+          name: "dt2.1",
+        },
+      ],
     );
   });
 
@@ -323,7 +339,7 @@ describe("TestDelete", () => {
             INSERT DeleteTest2 {
                 name := 'dt2.1'
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -339,11 +355,11 @@ describe("TestDelete", () => {
                 } FILTER DeleteTest2.name = 'dt2.1';
             `,
       [
-            {
-              "name": "dt2.1",
-              "count": 3,
-            },
-          ]
+        {
+          name: "dt2.1",
+          count: 3,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -351,10 +367,10 @@ describe("TestDelete", () => {
                 SELECT (DELETE DeleteTest2) {name};
             `,
       [
-            {
-              "name": "dt2.1",
-            },
-          ]
+        {
+          name: "dt2.1",
+        },
+      ],
     );
   });
 
@@ -365,7 +381,7 @@ describe("TestDelete", () => {
             UNION (INSERT DeleteTest {
                 name := 'sugar delete ' ++ x
             });
-        `
+        `,
     );
     h.script(
       `
@@ -376,14 +392,14 @@ describe("TestDelete", () => {
             ORDER BY .name
             OFFSET 2 LIMIT 2;
             # should delete 4 and 5
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT DeleteTest.name;
             `,
-      unorderedSet(["sugar delete 1", "sugar delete 2", "sugar delete 3", "sugar delete 6"])
+      unorderedSet(["sugar delete 1", "sugar delete 2", "sugar delete 3", "sugar delete 6"]),
     );
   });
 
@@ -403,7 +419,7 @@ describe("TestDelete", () => {
             INSERT DeleteTest { name := 'not delete union 1' };
 
             INSERT DeleteTest2 { name := 'not delete union 2' };
-        `
+        `,
     );
     h.script(
       `
@@ -414,7 +430,7 @@ describe("TestDelete", () => {
                     (SELECT DeleteTest2 FILTER .name ILIKE 'delete union%')
                 )
             DELETE ToDelete;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -425,7 +441,7 @@ describe("TestDelete", () => {
                     .name ILIKE 'delete union%';
 
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -437,10 +453,10 @@ describe("TestDelete", () => {
 
             `,
       [
-            {
-              "name": "not delete union 1",
-            },
-          ]
+        {
+          name: "not delete union 1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -451,7 +467,7 @@ describe("TestDelete", () => {
                     .name ILIKE 'delete union%';
 
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -463,10 +479,10 @@ describe("TestDelete", () => {
 
             `,
       [
-            {
-              "name": "not delete union 2",
-            },
-          ]
+        {
+          name: "not delete union 2",
+        },
+      ],
     );
   });
 
@@ -476,7 +492,7 @@ describe("TestDelete", () => {
 
             INSERT DeleteTest { name := 'child of abstract 1' };
             INSERT DeleteTest2 { name := 'child of abstract 2' };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -491,13 +507,13 @@ describe("TestDelete", () => {
                 SELECT D { name } ORDER BY .name;
             `,
       [
-            {
-              "name": "child of abstract 1",
-            },
-            {
-              "name": "child of abstract 2",
-            },
-          ]
+        {
+          name: "child of abstract 1",
+        },
+        {
+          name: "child of abstract 2",
+        },
+      ],
     );
   });
 
@@ -505,16 +521,14 @@ describe("TestDelete", () => {
     h.script(
       `
             INSERT DeleteTest2 { name := 'x' };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
             select assert_exists((delete DeleteTest2 filter .name = 'x'));
             `,
-      [
-            {},
-          ]
+      [{}],
     );
   });
 
@@ -523,7 +537,7 @@ describe("TestDelete", () => {
       `
             INSERT DeleteTest2 { name := 'x' };
             INSERT DeleteTest2 { name := 'y' };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -533,10 +547,7 @@ describe("TestDelete", () => {
             delete2 := assert_exists((delete DeleteTest2 filter .name = 'y')),
             select {delete1, delete2};
             `,
-      [
-            {},
-            {},
-          ]
+      [{}, {}],
     );
   });
 
@@ -552,7 +563,10 @@ describe("TestDelete", () => {
       a: "(DELETE DeleteTest)",
       b: "(DELETE LinkingType)",
     } as const;
-    const perms = [["a", "b"], ["b", "a"]] as const;
+    const perms = [
+      ["a", "b"],
+      ["b", "a"],
+    ] as const;
 
     for (const bindOrder of perms) {
       for (const useOrder of perms) {
@@ -578,7 +592,7 @@ describe("TestDelete", () => {
               b := (insert DeleteTest2 { name := '2' }),
               c := (insert LinkingType { objs := {a, b} })
             select c;
-        `
+        `,
     );
     h.script(
       `
@@ -586,7 +600,7 @@ describe("TestDelete", () => {
                a := (DELETE AbstractDeleteTest),
                b := (DELETE LinkingType),
              select {a, b};
-        `
+        `,
     );
     h.script(
       `
@@ -595,7 +609,7 @@ describe("TestDelete", () => {
               b := (insert DeleteTest2 { name := '2' }),
               c := (insert LinkingType { objs := {a, b} })
             select c;
-        `
+        `,
     );
     h.script(
       `
@@ -603,7 +617,7 @@ describe("TestDelete", () => {
                a := (DELETE AbstractDeleteTest),
                b := (DELETE LinkingType),
              select {b, a};
-        `
+        `,
     );
   });
 
@@ -616,7 +630,7 @@ describe("TestDelete", () => {
                         (INSERT DeleteTest {
                             name := 't1'
                         })
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT statements cannot be used in a FILTER clause"));
     expect(() => {
@@ -627,7 +641,7 @@ describe("TestDelete", () => {
                         (UPDATE DeleteTest set {
                             name := 't1'
                         })
-            `
+            `,
       );
     }).toThrow(new RegExp("UPDATE statements cannot be used in a FILTER clause"));
     expect(() => {
@@ -636,7 +650,7 @@ describe("TestDelete", () => {
                 delete DeleteTest
                 filter
                         (DELETE DeleteTest filter .name = 't1')
-            `
+            `,
       );
     }).toThrow(new RegExp("DELETE statements cannot be used in a FILTER clause"));
     expect(() => {
@@ -648,7 +662,7 @@ describe("TestDelete", () => {
                             name := 't1'
                         })
                 limit 1
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT statements cannot be used in an ORDER BY clause"));
     expect(() => {
@@ -660,7 +674,7 @@ describe("TestDelete", () => {
                             name := 't1'
                         })
                 limit 1
-            `
+            `,
       );
     }).toThrow(new RegExp("UPDATE statements cannot be used in an ORDER BY clause"));
     expect(() => {
@@ -670,7 +684,7 @@ describe("TestDelete", () => {
                 order by
                         (DELETE DeleteTest filter .name = 't1')
                 limit 1
-            `
+            `,
       );
     }).toThrow(new RegExp("DELETE statements cannot be used in an ORDER BY clause"));
   });

@@ -1,6 +1,14 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
-import type { FilterExpr, FreeObjectExpr, InsertValue, SelectStatement, Statement, TypeExpr, WithBindingValue } from "../edgeql/ast.js";
+import type {
+  FilterExpr,
+  FreeObjectExpr,
+  InsertValue,
+  SelectStatement,
+  Statement,
+  TypeExpr,
+  WithBindingValue,
+} from "../edgeql/ast.js";
 import type {
   DeleteIR,
   InferenceResult,
@@ -12,7 +20,12 @@ import type {
   UpdateIR,
   UpdateLinkAssignmentIR,
 } from "../ir/model.js";
-import { fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
+import {
+  fieldSequenceName,
+  normalizeLinkTargetNames,
+  qualifiedTypeName,
+  type SchemaSnapshot,
+} from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
 import { tableNameForType } from "../codegen/sql.js";
 import type { ScalarType, ScalarValue, TypeDef } from "../types.js";
@@ -69,7 +82,7 @@ export interface DmlCompileContext {
 // into the required-property error (test_edgeql_insert_explicit_id_06).
 const resolveExplicitInsertId = (value: unknown): string | undefined => {
   if (typeof value === "string") {
-    if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
       const parsed = tryResult(() => JSON.parse(value) as unknown, { captureAll: true });
       if (parsed.ok && typeof parsed.value === "string") return parsed.value;
     }
@@ -109,7 +122,9 @@ export const validateDeleteStatement = (
   };
   const activeModule = statement.withModule ? resolveModuleName(statement.withModule) : "default";
   const moduleAliases = new Map(
-    (statement.withModuleAliases ?? []).map((entry) => [entry.alias, resolveModuleName(entry.module)] as const),
+    (statement.withModuleAliases ?? []).map(
+      (entry) => [entry.alias, resolveModuleName(entry.module)] as const,
+    ),
   );
   const normalizeTypeName = (name: string, fallbackModule: string = activeModule): string => {
     if (!name.includes("::")) return `${fallbackModule}::${name}`;
@@ -119,7 +134,9 @@ export const validateDeleteStatement = (
     return rest.length === 0 ? aliasedModule : `${aliasedModule}::${rest.join("::")}`;
   };
 
-  const exprContainsMutation = (expr: FreeObjectExpr | undefined): MutationValueKind | undefined => {
+  const exprContainsMutation = (
+    expr: FreeObjectExpr | undefined,
+  ): MutationValueKind | undefined => {
     if (!expr) return undefined;
     if (expr.kind === "mutation_expr") return expr.statement.kind;
     if (expr.kind === "set_expr" || expr.kind === "tuple" || expr.kind === "array_literal_expr") {
@@ -136,14 +153,36 @@ export const validateDeleteStatement = (
       }
       return undefined;
     }
-    if (expr.kind === "shape_projection" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "exists" || expr.kind === "field_access" || expr.kind === "index_access" || expr.kind === "slice_access" || expr.kind === "is_type" || expr.kind === "unary" || expr.kind === "select_expr_subquery") {
+    if (
+      expr.kind === "shape_projection" ||
+      expr.kind === "distinct" ||
+      expr.kind === "cast" ||
+      expr.kind === "exists" ||
+      expr.kind === "field_access" ||
+      expr.kind === "index_access" ||
+      expr.kind === "slice_access" ||
+      expr.kind === "is_type" ||
+      expr.kind === "unary" ||
+      expr.kind === "select_expr_subquery"
+    ) {
       return exprContainsMutation((expr as { expr: FreeObjectExpr }).expr);
     }
-    if (expr.kind === "compare" || expr.kind === "math" || expr.kind === "logical" || expr.kind === "coalesce" || expr.kind === "and" || expr.kind === "or") {
+    if (
+      expr.kind === "compare" ||
+      expr.kind === "math" ||
+      expr.kind === "logical" ||
+      expr.kind === "coalesce" ||
+      expr.kind === "and" ||
+      expr.kind === "or"
+    ) {
       return exprContainsMutation(expr.left) ?? exprContainsMutation(expr.right);
     }
     if (expr.kind === "if_else") {
-      return exprContainsMutation(expr.condition) ?? exprContainsMutation(expr.thenExpr) ?? exprContainsMutation(expr.elseExpr);
+      return (
+        exprContainsMutation(expr.condition) ??
+        exprContainsMutation(expr.thenExpr) ??
+        exprContainsMutation(expr.elseExpr)
+      );
     }
     if (expr.kind === "concat") {
       for (const part of expr.parts) {
@@ -162,10 +201,13 @@ export const validateDeleteStatement = (
     return undefined;
   };
 
-  const filterContainsMutation = (filter: FilterExpr | undefined): MutationValueKind | undefined => {
+  const filterContainsMutation = (
+    filter: FilterExpr | undefined,
+  ): MutationValueKind | undefined => {
     if (!filter) return undefined;
     if (filter.kind === "free_expr") return exprContainsMutation(filter.expr);
-    if (filter.kind === "and" || filter.kind === "or") return filterContainsMutation(filter.left) ?? filterContainsMutation(filter.right);
+    if (filter.kind === "and" || filter.kind === "or")
+      return filterContainsMutation(filter.left) ?? filterContainsMutation(filter.right);
     if (filter.kind === "not") return filterContainsMutation(filter.expr);
     return undefined;
   };
@@ -179,17 +221,25 @@ export const validateDeleteStatement = (
     fail(`${mutationInOrder.toUpperCase()} statements cannot be used in an ORDER BY clause`);
   }
 
-  const bindingValue = (name: string): WithBindingValue | undefined => statement.with?.find((binding) => binding.name === name)?.value;
+  const bindingValue = (name: string): WithBindingValue | undefined =>
+    statement.with?.find((binding) => binding.name === name)?.value;
   const bindingExpr = (value: WithBindingValue | undefined): FreeObjectExpr | undefined => {
     if (!value) return undefined;
     if (value.kind === "subquery_expr") return value.expr;
-    if (value.kind === "subquery") return { kind: "select", typeName: value.query.typeName, shape: value.query.shape, clauses: value.query.clauses };
+    if (value.kind === "subquery")
+      return {
+        kind: "select",
+        typeName: value.query.typeName,
+        shape: value.query.shape,
+        clauses: value.query.clauses,
+      };
     return undefined;
   };
   const isFreeObjectDeleteTarget = (expr: FreeObjectExpr | undefined): boolean => {
     if (!expr) return false;
     if (expr.kind === "free_object_constructor") return true;
-    if (expr.kind === "binding_ref") return isFreeObjectDeleteTarget(bindingExpr(bindingValue(expr.name)));
+    if (expr.kind === "binding_ref")
+      return isFreeObjectDeleteTarget(bindingExpr(bindingValue(expr.name)));
     if (expr.kind === "select_expr_subquery") return isFreeObjectDeleteTarget(expr.expr);
     return false;
   };
@@ -197,24 +247,44 @@ export const validateDeleteStatement = (
     if (!expr) return false;
     if (expr.kind === "select") {
       const normalized = normalizeTypeName(expr.typeName, activeModule);
-      return normalized.startsWith("schema::") || (normalized.startsWith("std::") && normalized !== "std::FreeObject");
+      return (
+        normalized.startsWith("schema::") ||
+        (normalized.startsWith("std::") && normalized !== "std::FreeObject")
+      );
     }
     if (expr.kind === "set_expr") return expr.values.some(containsStdlibDeleteTarget);
     if (expr.kind === "select_expr_subquery") return containsStdlibDeleteTarget(expr.expr);
-    if (expr.kind === "shape_projection" || expr.kind === "distinct" || expr.kind === "cast" || expr.kind === "is_type" || expr.kind === "field_access") {
+    if (
+      expr.kind === "shape_projection" ||
+      expr.kind === "distinct" ||
+      expr.kind === "cast" ||
+      expr.kind === "is_type" ||
+      expr.kind === "field_access"
+    ) {
       return containsStdlibDeleteTarget((expr as { expr: FreeObjectExpr }).expr);
     }
-    if (expr.kind === "binding_ref") return containsStdlibDeleteTarget(bindingExpr(bindingValue(expr.name)));
+    if (expr.kind === "binding_ref")
+      return containsStdlibDeleteTarget(bindingExpr(bindingValue(expr.name)));
     return false;
   };
   const normalizedDeleteType = normalizeTypeName(statement.typeName, activeModule);
   if (normalizedDeleteType === "std::FreeObject" || isFreeObjectDeleteTarget(statement.target)) {
     fail("free objects cannot be deleted");
   }
-  if (normalizedDeleteType.startsWith("schema::") || (normalizedDeleteType.startsWith("std::") && normalizedDeleteType !== "std::Object") || containsStdlibDeleteTarget(statement.target)) {
+  if (
+    normalizedDeleteType.startsWith("schema::") ||
+    (normalizedDeleteType.startsWith("std::") && normalizedDeleteType !== "std::Object") ||
+    containsStdlibDeleteTarget(statement.target)
+  ) {
     fail("cannot delete standard library type");
   }
-  if (statement.target && (statement.target.kind === "literal" || statement.target.kind === "set_literal" || statement.target.kind === "array_literal_expr" || statement.target.kind === "tuple")) {
+  if (
+    statement.target &&
+    (statement.target.kind === "literal" ||
+      statement.target.kind === "set_literal" ||
+      statement.target.kind === "array_literal_expr" ||
+      statement.target.kind === "tuple")
+  ) {
     fail("cannot delete non-ObjectType object");
   }
 };
@@ -262,7 +332,9 @@ export const compileDmlToIR = (
 
   const activeModule = statement.withModule ? resolveModuleName(statement.withModule) : "default";
   const moduleAliases = new Map(
-    (statement.withModuleAliases ?? []).map((entry) => [entry.alias, resolveModuleName(entry.module)] as const),
+    (statement.withModuleAliases ?? []).map(
+      (entry) => [entry.alias, resolveModuleName(entry.module)] as const,
+    ),
   );
 
   const normalizeTypeName = (name: string, fallbackModule: string = activeModule): string => {
@@ -279,7 +351,10 @@ export const compileDmlToIR = (
     return rest.length === 0 ? aliasedModule : `${aliasedModule}::${rest.join("::")}`;
   };
 
-  const resolveObjectTypeOrAliasSource = (name: string, fallbackModule: string = activeModule): TypeDef | undefined => {
+  const resolveObjectTypeOrAliasSource = (
+    name: string,
+    fallbackModule: string = activeModule,
+  ): TypeDef | undefined => {
     const normalizedName = normalizeTypeName(name, fallbackModule);
     const alias = schema.getAlias(normalizedName);
     if (alias?.sourceType) {
@@ -288,32 +363,36 @@ export const compileDmlToIR = (
     return schema.getType(normalizedName);
   };
 
-  const withBindings = new Map((statement.with ?? []).map((binding) => [binding.name, binding.value] as const));
+  const withBindings = new Map(
+    (statement.with ?? []).map((binding) => [binding.name, binding.value] as const),
+  );
   const resolvedBindingValues = new Map<string, ScalarValue>();
   const resolvingBindingValues = new Set<string>();
 
   const validateCastType = (castType: string, bindingName: string): void => {
-    if (![
-      "str",
-      "int",
-      "float",
-      "bool",
-      "json",
-      "datetime",
-      "duration",
-      "local_datetime",
-      "local_date",
-      "local_time",
-      "relative_duration",
-      "date_duration",
-      "uuid",
-      // cal:: namespaced builtin scalar aliases.
-      "cal::local_datetime",
-      "cal::local_date",
-      "cal::local_time",
-      "cal::relative_duration",
-      "cal::date_duration",
-    ].includes(castType)) {
+    if (
+      ![
+        "str",
+        "int",
+        "float",
+        "bool",
+        "json",
+        "datetime",
+        "duration",
+        "local_datetime",
+        "local_date",
+        "local_time",
+        "relative_duration",
+        "date_duration",
+        "uuid",
+        // cal:: namespaced builtin scalar aliases.
+        "cal::local_datetime",
+        "cal::local_date",
+        "cal::local_time",
+        "cal::relative_duration",
+        "cal::date_duration",
+      ].includes(castType)
+    ) {
       fail(`Unsupported cast type '${castType}' in with binding '${bindingName}'`);
     }
   };
@@ -357,7 +436,10 @@ export const compileDmlToIR = (
           if (!Object.prototype.hasOwnProperty.call(globals, binding.name)) {
             fail(`Unknown query parameter '$${binding.name}'`);
           }
-          const raw = requireDefined(globals[binding.name], `Unknown query parameter '$${binding.name}'`);
+          const raw = requireDefined(
+            globals[binding.name],
+            `Unknown query parameter '$${binding.name}'`,
+          );
           return binding.castType
             ? coerceCastScalarValue(binding.castType, raw, `$${binding.name}`)
             : coerceRuntimeScalarValue(raw, `$${binding.name}`);
@@ -367,7 +449,9 @@ export const compileDmlToIR = (
         case "path_chain":
           return fail(`With binding '${name}' is a path and cannot be used as a scalar value`);
         case "backlink_path":
-          return fail(`With binding '${name}' is a backlink path and cannot be used as a scalar value`);
+          return fail(
+            `With binding '${name}' is a backlink path and cannot be used as a scalar value`,
+          );
         case "enum_path": {
           const normalizedEnumType = normalizeTypeName(binding.enumType, activeModule);
           const enumTypeDef = schema.getType(normalizedEnumType);
@@ -398,7 +482,7 @@ export const compileDmlToIR = (
               // EdgeQL casts coerce the value to the target scalar type.
               // Without applying it here, `<str>random()` returns a JS number
               // which then fails INSERT field validation ("Type mismatch").
-              const stripModule = (t: string): string => t.startsWith("std::") ? t.slice(5) : t;
+              const stripModule = (t: string): string => (t.startsWith("std::") ? t.slice(5) : t);
               const target = stripModule(e.castType ?? "").toLowerCase();
               if (inner === null || inner === undefined) return inner as ScalarValue;
               if (target === "str") return String(inner);
@@ -413,10 +497,12 @@ export const compileDmlToIR = (
               return inner;
             }
             if (e.kind === "concat") {
-              return e.parts.map((part) => {
-                const value = resolveExpr(part);
-                return value === null || value === undefined ? "" : String(value);
-              }).join("");
+              return e.parts
+                .map((part) => {
+                  const value = resolveExpr(part);
+                  return value === null || value === undefined ? "" : String(value);
+                })
+                .join("");
             }
             if (e.kind === "function_call") {
               const fnName = e.call.name;
@@ -460,8 +546,17 @@ export const compileDmlToIR = (
   };
 
   const resolveFilterValue = (
-    value: ScalarValue | { kind: "binding_ref"; name: string } | { kind: "set_literal"; values: ScalarValue[] } | { kind: "field_ref"; field: string } | { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string },
-  ): ScalarValue | ScalarValue[] | { kind: "field_ref"; field: string } | { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string } => {
+    value:
+      | ScalarValue
+      | { kind: "binding_ref"; name: string }
+      | { kind: "set_literal"; values: ScalarValue[] }
+      | { kind: "field_ref"; field: string }
+      | { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string },
+  ):
+    | ScalarValue
+    | ScalarValue[]
+    | { kind: "field_ref"; field: string }
+    | { kind: "backlink_property_ref"; link: string; sourceType?: string; property: string } => {
     if (typeof value === "object" && value !== null && "kind" in value) {
       if (value.kind === "binding_ref") {
         return resolveWithBindingScalar(value.name);
@@ -522,8 +617,10 @@ export const compileDmlToIR = (
         // coercion here; other targets keep the same JS representation or defer
         // to SQL lowering (PENDING) when the inner can't be folded.
         const target = expr.castType.split("::").pop()?.trim().toLowerCase();
-        if (target === "str"
-          && (typeof inner === "number" || typeof inner === "boolean" || typeof inner === "bigint")) {
+        if (
+          target === "str" &&
+          (typeof inner === "number" || typeof inner === "boolean" || typeof inner === "bigint")
+        ) {
           return String(inner);
         }
         return inner;
@@ -538,7 +635,10 @@ export const compileDmlToIR = (
       if (expr.kind === "math") {
         const leftValue = resolveFreeObjectScalar(expr.left);
         const rightValue = resolveFreeObjectScalar(expr.right);
-        if (leftValue === PENDING_INSERT_SQL_EXPR_VALUE || rightValue === PENDING_INSERT_SQL_EXPR_VALUE) {
+        if (
+          leftValue === PENDING_INSERT_SQL_EXPR_VALUE ||
+          rightValue === PENDING_INSERT_SQL_EXPR_VALUE
+        ) {
           return PENDING_INSERT_SQL_EXPR_VALUE;
         }
         const left = Number(leftValue);
@@ -603,7 +703,9 @@ export const compileDmlToIR = (
     if (parseAttempt.ok && Array.isArray(parseAttempt.value)) {
       const parsed = parseAttempt.value;
       const obj: Record<string, unknown> = {};
-      coll.elementNames.forEach((name, idx) => { obj[name] = parsed[idx]; });
+      coll.elementNames.forEach((name, idx) => {
+        obj[name] = parsed[idx];
+      });
       return JSON.stringify(obj);
     }
     return scalar;
@@ -639,8 +741,10 @@ export const compileDmlToIR = (
     if (expr.kind === "binding_ref") {
       const directBinding = withBindings.get(expr.name);
       if (directBinding) {
-        if (directBinding.kind === "subquery_expr") return resolveShapeSourceObjectType(directBinding.expr);
-        if (directBinding.kind === "subquery") return resolveObjectTypeOrAliasSource(directBinding.query.typeName);
+        if (directBinding.kind === "subquery_expr")
+          return resolveShapeSourceObjectType(directBinding.expr);
+        if (directBinding.kind === "subquery")
+          return resolveObjectTypeOrAliasSource(directBinding.query.typeName);
         if (directBinding.kind === "subquery_statement") {
           const stmt = directBinding.statement;
           if (stmt.kind === "select" || stmt.kind === "insert" || stmt.kind === "update") {
@@ -696,9 +800,12 @@ export const compileDmlToIR = (
       return { kind: "type_name", name: expr.name };
     }
     if (expr.kind === "select") {
-      const hasOnlyDefaultId = !expr.shape
-        || expr.shape.length === 0
-        || expr.shape.every((el) => el.kind === "field" && el.name === "id" && el.origin === "default");
+      const hasOnlyDefaultId =
+        !expr.shape ||
+        expr.shape.length === 0 ||
+        expr.shape.every(
+          (el) => el.kind === "field" && el.name === "id" && el.origin === "default",
+        );
       if (hasOnlyDefaultId) {
         return { kind: "type_name", name: expr.typeName };
       }
@@ -763,9 +870,12 @@ export const compileDmlToIR = (
     }
 
     if (binding.kind === "subquery_expr") {
-      const peelSelect = (expr: FreeObjectExpr): Extract<FreeObjectExpr, { kind: "select" }> | undefined => {
+      const peelSelect = (
+        expr: FreeObjectExpr,
+      ): Extract<FreeObjectExpr, { kind: "select" }> | undefined => {
         if (expr.kind === "select") return expr;
-        if (expr.kind === "select_expr_subquery" || expr.kind === "distinct") return peelSelect(expr.expr);
+        if (expr.kind === "select_expr_subquery" || expr.kind === "distinct")
+          return peelSelect(expr.expr);
         return undefined;
       };
       const selectExpr = peelSelect(binding.expr);
@@ -795,25 +905,39 @@ export const compileDmlToIR = (
 
   const resolvedRootType = {
     typeDef: (() => {
-      const rawTypeName = requireValue(statement.typeName, `Statement kind '${statement.kind}' requires typeName`);
+      const rawTypeName = requireValue(
+        statement.typeName,
+        `Statement kind '${statement.kind}' requires typeName`,
+      );
       const bindingSource = resolveWithBindingTypeSource(rawTypeName);
       const norm = normalizeTypeName(bindingSource?.typeName ?? rawTypeName, activeModule);
       if (norm === "default::Object" || norm === "std::Object") {
-        return { name: "Object", module: activeModule, fields: [], abstract: true, extends: [] } as TypeDef;
+        return {
+          name: "Object",
+          module: activeModule,
+          fields: [],
+          abstract: true,
+          extends: [],
+        } as TypeDef;
       }
       if (norm === "std::FreeObject") {
-        return { name: "FreeObject", module: "std", fields: [], abstract: true, extends: [] } as TypeDef;
+        return {
+          name: "FreeObject",
+          module: "std",
+          fields: [],
+          abstract: true,
+          extends: [],
+        } as TypeDef;
       }
       if (statement.kind === "insert" && schema.getAlias(norm)) {
         fail(`cannot insert into expression alias '${norm}'`);
       }
-      return requireValue(
-        schema.getType(norm),
-        `Unknown type '${norm}'`,
-      );
+      return requireValue(schema.getType(norm), `Unknown type '${norm}'`);
     })(),
     clauses: {
-      filter: resolveWithBindingTypeSource(requireValue(statement.typeName, `Statement kind '${statement.kind}' requires typeName`))?.filter,
+      filter: resolveWithBindingTypeSource(
+        requireValue(statement.typeName, `Statement kind '${statement.kind}' requires typeName`),
+      )?.filter,
     },
   };
   const typeDef = resolvedRootType.typeDef;
@@ -835,22 +959,30 @@ export const compileDmlToIR = (
         collected.push(field);
       }
       for (const baseName of def.extends ?? []) {
-        visit(schema.getType(baseName.includes("::") ? baseName : `${def.module ?? "default"}::${baseName}`), guard);
+        visit(
+          schema.getType(
+            baseName.includes("::") ? baseName : `${def.module ?? "default"}::${baseName}`,
+          ),
+          guard,
+        );
       }
     };
     visit(root, new Set());
     return collected;
   };
-  const allFields = (typeDef.extends ?? []).length > 0 ? collectInheritedFields(typeDef) : typeDef.fields;
+  const allFields =
+    (typeDef.extends ?? []).length > 0 ? collectInheritedFields(typeDef) : typeDef.fields;
   const userFields = allFields.filter((field) => field.name !== "id");
   const knownFields = new Set(["id", ...userFields.map((f) => f.name)]);
   const fieldByName = new Map([
     ["id", { name: "id", type: "uuid" as const, required: true }],
     ...userFields.map((field) => [field.name, field] as const),
   ]);
-  const insertRewriteFields = new Set((typeDef.mutationRewrites ?? [])
-    .filter((rewrite) => Boolean(rewrite.onInsert))
-    .map((rewrite) => rewrite.field));
+  const insertRewriteFields = new Set(
+    (typeDef.mutationRewrites ?? [])
+      .filter((rewrite) => Boolean(rewrite.onInsert))
+      .map((rewrite) => rewrite.field),
+  );
 
   const typeName = statement.typeName;
 
@@ -862,7 +994,10 @@ export const compileDmlToIR = (
 
   const validateFieldValue = (fieldName: string, value: ScalarValue): void => {
     ensureField(fieldName);
-    const field = requireValue(fieldByName.get(fieldName), `Unknown field '${fieldName}' on '${typeName}'`);
+    const field = requireValue(
+      fieldByName.get(fieldName),
+      `Unknown field '${fieldName}' on '${typeName}'`,
+    );
 
     if (field.multi) {
       if (typeof value !== "string") {
@@ -870,9 +1005,10 @@ export const compileDmlToIR = (
       }
 
       try {
-        const serialized = typeof value === "string"
-          ? value
-          : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
+        const serialized =
+          typeof value === "string"
+            ? value
+            : fail(`Type mismatch for '${fieldName}': expected multi ${field.type}`);
         const parsed: unknown = JSON.parse(serialized);
         const parsedArray = Array.isArray(parsed)
           ? parsed
@@ -950,9 +1086,10 @@ export const compileDmlToIR = (
       // `std::Object`/`std::FreeObject` in error messages. Rewrite the
       // qualified name so tests assertioning the upstream wording match.
       const qualified = qualifiedTypeName(typeDef);
-      const reported = (typeDef.name === "Object" || typeDef.name === "FreeObject")
-        ? `std::${typeDef.name}`
-        : qualified;
+      const reported =
+        typeDef.name === "Object" || typeDef.name === "FreeObject"
+          ? `std::${typeDef.name}`
+          : qualified;
       // `std::FreeObject` has a distinct upstream error ("free objects cannot
       // be inserted") even though it's also abstract.
       if (typeDef.name === "FreeObject") {
@@ -1035,12 +1172,15 @@ export const compileDmlToIR = (
       }
 
       if (knownFields.has(field)) {
-        const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
+        const fieldDef = requireValue(
+          fieldByName.get(field),
+          `Unknown field '${field}' on '${statement.typeName}'`,
+        );
         const setValues = fieldDef.multi ? resolveInsertSetValues(value) : undefined;
         const scalar = setValues
-          ? (setValues.includes(PENDING_INSERT_SQL_EXPR_VALUE)
-              ? PENDING_INSERT_SQL_EXPR_VALUE
-              : JSON.stringify(encodeMultiSetForStorage(setValues, fieldDef.type)))
+          ? setValues.includes(PENDING_INSERT_SQL_EXPR_VALUE)
+            ? PENDING_INSERT_SQL_EXPR_VALUE
+            : JSON.stringify(encodeMultiSetForStorage(setValues, fieldDef.type))
           : encodeNamedTupleForStorage(resolveInsertScalarValue(value), fieldDef);
         if (scalar !== PENDING_INSERT_SQL_EXPR_VALUE) {
           validateFieldValue(field, scalar);
@@ -1050,7 +1190,10 @@ export const compileDmlToIR = (
       }
 
       if (linkByName.has(field)) {
-        const linkDef = requireValue(linkByName.get(field), `Unknown link '${field}' on '${statement.typeName}'`);
+        const linkDef = requireValue(
+          linkByName.get(field),
+          `Unknown link '${field}' on '${statement.typeName}'`,
+        );
         validateInsertLinkExpr(field, value);
 
         const usesLinkTable = Boolean(linkDef.multi) || (linkDef.properties?.length ?? 0) > 0;
@@ -1085,8 +1228,8 @@ export const compileDmlToIR = (
           // the rewrite sentinel so the engine's default application replaces
           // them — typed placeholders (0/false/…) would be indistinguishable
           // from real values there.
-          const engineEvaluable = field.defaultExpr !== undefined
-            || (field.defaultExprText ?? "").length > 0;
+          const engineEvaluable =
+            field.defaultExpr !== undefined || (field.defaultExprText ?? "").length > 0;
           scalarValues[field.name] = field.multi
             ? "[]"
             : engineEvaluable
@@ -1100,11 +1243,18 @@ export const compileDmlToIR = (
           scalarValues[field.name] = PENDING_INSERT_SEQUENCE_VALUE;
           continue;
         }
-        fail(`missing value for required property '${field.name}' of object type '${qualifiedTypeName(typeDef)}'`);
+        fail(
+          `missing value for required property '${field.name}' of object type '${qualifiedTypeName(typeDef)}'`,
+        );
       }
     }
 
-    const linkAssignments = buildInsertLinkAssignments(schema, typeDef, statement.values, linkByName);
+    const linkAssignments = buildInsertLinkAssignments(
+      schema,
+      typeDef,
+      statement.values,
+      linkByName,
+    );
     const linkDefaults = buildInsertLinkDefaults(schema, typeDef, statement.values);
 
     // Cardinality of an INSERT:
@@ -1165,19 +1315,29 @@ export const compileDmlToIR = (
       if (e.kind === "literal" && typeof e.value === "boolean") {
         filterExpr = e.value
           ? undefined
-          : { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: "__never__" };
+          : {
+              kind: "predicate",
+              target: { kind: "field", field: "id" },
+              op: "=",
+              value: "__never__",
+            };
       } else if (e.kind === "compare" && e.op === "=") {
         const targetName = statement.typeName;
         const pickField = (s: FreeObjectExpr): string | undefined => {
           if (s.kind === "path" && s.head === targetName) return s.tail;
-          if (s.kind === "field_access" && s.expr.kind === "binding_ref" && s.expr.name === targetName) return s.field;
+          if (
+            s.kind === "field_access" &&
+            s.expr.kind === "binding_ref" &&
+            s.expr.name === targetName
+          )
+            return s.field;
           if (s.kind === "field_access" && s.expr.kind === "current_item") return s.field;
           return undefined;
         };
         const leftField = pickField(e.left);
         const rightField = pickField(e.right);
         const fieldName = leftField ?? rightField;
-        const valueSide = leftField ? e.right : (rightField ? e.left : undefined);
+        const valueSide = leftField ? e.right : rightField ? e.left : undefined;
         if (fieldName && valueSide && valueSide.kind === "literal") {
           filterExpr = {
             kind: "predicate",
@@ -1200,7 +1360,10 @@ export const compileDmlToIR = (
           fail("Update filters do not support backlink targets");
         }
         predicateFilter = filterExpr as FieldEqPredicate;
-        validateFieldValue(predicateFilter.target.field, resolveFilterValue(predicateFilter.value) as ScalarValue);
+        validateFieldValue(
+          predicateFilter.target.field,
+          resolveFilterValue(predicateFilter.value) as ScalarValue,
+        );
       }
     }
 
@@ -1214,7 +1377,12 @@ export const compileDmlToIR = (
         return;
       }
 
-      if (value.kind === "binding_ref" || value.kind === "select" || value.kind === "insert" || value.kind === "for") {
+      if (
+        value.kind === "binding_ref" ||
+        value.kind === "select" ||
+        value.kind === "insert" ||
+        value.kind === "for"
+      ) {
         return;
       }
       // An object-returning expression wrapper — `assert_exists((select T …))`,
@@ -1246,15 +1414,23 @@ export const compileDmlToIR = (
       }
 
       if (knownFields.has(field)) {
-        if (typeof value === "object" && value !== null && "kind" in value && value.kind === "expr") {
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          "kind" in value &&
+          value.kind === "expr"
+        ) {
           continue;
         }
-        const fieldDef = requireValue(fieldByName.get(field), `Unknown field '${field}' on '${statement.typeName}'`);
+        const fieldDef = requireValue(
+          fieldByName.get(field),
+          `Unknown field '${field}' on '${statement.typeName}'`,
+        );
         const setValues = fieldDef.multi ? resolveInsertSetValues(value) : undefined;
         const scalar = setValues
-          ? (setValues.includes(PENDING_INSERT_SQL_EXPR_VALUE)
-              ? PENDING_INSERT_SQL_EXPR_VALUE
-              : JSON.stringify(encodeMultiSetForStorage(setValues, fieldDef.type)))
+          ? setValues.includes(PENDING_INSERT_SQL_EXPR_VALUE)
+            ? PENDING_INSERT_SQL_EXPR_VALUE
+            : JSON.stringify(encodeMultiSetForStorage(setValues, fieldDef.type))
           : encodeNamedTupleForStorage(resolveInsertScalarValue(value), fieldDef);
         if (scalar !== PENDING_INSERT_SQL_EXPR_VALUE) {
           validateFieldValue(field, scalar);
@@ -1271,7 +1447,13 @@ export const compileDmlToIR = (
       fail(`Unknown field '${field}' on '${statement.typeName}'`);
     }
 
-    const updateLinkAssignments = buildUpdateLinkAssignments(schema, typeDef, statement.values, statement.operations, linkByName);
+    const updateLinkAssignments = buildUpdateLinkAssignments(
+      schema,
+      typeDef,
+      statement.values,
+      statement.operations,
+      linkByName,
+    );
 
     return {
       kind: "update",
@@ -1309,9 +1491,16 @@ export const compileDmlToIR = (
   const deleteFilterExpr = statement.filter;
   let deletePredicateFilter: FieldEqPredicate | undefined;
   if (deleteFilterExpr) {
-    if (deleteFilterExpr.kind === "predicate" && deleteFilterExpr.op === "=" && deleteFilterExpr.target.kind === "field") {
+    if (
+      deleteFilterExpr.kind === "predicate" &&
+      deleteFilterExpr.op === "=" &&
+      deleteFilterExpr.target.kind === "field"
+    ) {
       deletePredicateFilter = deleteFilterExpr as FieldEqPredicate;
-      validateFieldValue(deletePredicateFilter.target.field, resolveFilterValue(deletePredicateFilter.value) as ScalarValue);
+      validateFieldValue(
+        deletePredicateFilter.target.field,
+        resolveFilterValue(deletePredicateFilter.value) as ScalarValue,
+      );
     }
   }
 
@@ -1354,9 +1543,11 @@ export const compileDmlToIR = (
 // reject the reference, matching upstream. Applied recursively so nested
 // INSERTs inside value expressions get the same treatment.
 const isDunderDefaultRef = (node: unknown): boolean =>
-  typeof node === "object" && node !== null
-  && ((node as { kind?: unknown }).kind === "binding_ref" || (node as { kind?: unknown }).kind === "global_ref")
-  && (node as { name?: unknown }).name === "__default__";
+  typeof node === "object" &&
+  node !== null &&
+  ((node as { kind?: unknown }).kind === "binding_ref" ||
+    (node as { kind?: unknown }).kind === "global_ref") &&
+  (node as { name?: unknown }).name === "__default__";
 
 const containsDunderDefaultRef = (node: unknown): boolean => {
   if (isDunderDefaultRef(node)) return true;
@@ -1370,7 +1561,8 @@ const substituteDunderDefaultRef = (node: unknown, literal: ScalarValue): unknow
   if (Array.isArray(node)) return node.map((item) => substituteDunderDefaultRef(item, literal));
   if (typeof node !== "object" || node === null) return node;
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) out[key] = substituteDunderDefaultRef(value, literal);
+  for (const [key, value] of Object.entries(node))
+    out[key] = substituteDunderDefaultRef(value, literal);
   return out;
 };
 
@@ -1386,10 +1578,12 @@ export const rewriteDunderDefaults = <T>(schema: SchemaSnapshot, node: T): T => 
     const values = { ...(stmt.values as Record<string, unknown>) };
     for (const [field, value] of Object.entries(values)) {
       if (!containsDunderDefaultRef(value)) continue;
-      const bare = isDunderDefaultRef(value)
-        || (typeof value === "object" && value !== null
-            && (value as { kind?: unknown }).kind === "expr"
-            && isDunderDefaultRef((value as { expr?: unknown }).expr));
+      const bare =
+        isDunderDefaultRef(value) ||
+        (typeof value === "object" &&
+          value !== null &&
+          (value as { kind?: unknown }).kind === "expr" &&
+          isDunderDefaultRef((value as { expr?: unknown }).expr));
       const fieldDef = typeDef?.fields.find((f) => f.name === field);
       const linkDef = (typeDef?.links ?? []).find((l) => l.name === field);
       if (fieldDef) {
@@ -1416,7 +1610,9 @@ export const rewriteDunderDefaults = <T>(schema: SchemaSnapshot, node: T): T => 
           if (!text) return false;
           // Probe: parse the schema default's expression text to classify it;
           // unparsable text is simply "not a DML default".
-          const parsed = tryResult(() => parseEdgeQL(text.replace(/^\(\s*/, "").replace(/\s*\)$/, "")));
+          const parsed = tryResult(() =>
+            parseEdgeQL(text.replace(/^\(\s*/, "").replace(/\s*\)$/, "")),
+          );
           if (!parsed.ok) return false;
           const stmt = Array.isArray(parsed.value) ? parsed.value[0] : parsed.value;
           return stmt?.kind === "insert" || stmt?.kind === "update" || stmt?.kind === "delete";
@@ -1437,7 +1633,10 @@ export const rewriteDunderDefaults = <T>(schema: SchemaSnapshot, node: T): T => 
     // an enclosing insert never mistakes them for refs to its own pointers.
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(n)) out[key] = walk(value);
-    return out.kind === "insert" && typeof out.typeName === "string" && out.values && typeof out.values === "object"
+    return out.kind === "insert" &&
+      typeof out.typeName === "string" &&
+      out.values &&
+      typeof out.values === "object"
       ? rewriteInsertValues(out)
       : out;
   };
@@ -1583,12 +1782,14 @@ const buildInsertLinkDefaults = (
     if (Object.prototype.hasOwnProperty.call(values, link.name)) continue;
     if (!link.hasDefault) continue;
 
-    const targetQualified = normalizeLinkTargetNames(link.targetType, typeDef.module ?? "default")[0]
-      ?? `${typeDef.module ?? "default"}::${link.targetType}`;
+    const targetQualified =
+      normalizeLinkTargetNames(link.targetType, typeDef.module ?? "default")[0] ??
+      `${typeDef.module ?? "default"}::${link.targetType}`;
     const targetType = schema.getType(targetQualified);
     const parsedFilter = link.defaultTargetFilter;
-    const lookupColumn = parsedFilter?.column
-      ?? (targetType?.fields.some((field) => field.name === "val")
+    const lookupColumn =
+      parsedFilter?.column ??
+      (targetType?.fields.some((field) => field.name === "val")
         ? "val"
         : targetType?.fields.some((field) => field.name === "name")
           ? "name"
@@ -1601,17 +1802,20 @@ const buildInsertLinkDefaults = (
     // has no lookup filter; carry the nested INSERT text so the runtime
     // executes it and links the freshly-created row.
     const trimmedDefault = link.defaultExprText?.trim();
-    const insertExprText = !parsedFilter
-      && (link.defaultTargetValues?.length ?? 0) === 0
-      && trimmedDefault
-      && /^\(?\s*insert\b/i.test(trimmedDefault)
-      ? trimmedDefault
-      : undefined;
+    const insertExprText =
+      !parsedFilter &&
+      (link.defaultTargetValues?.length ?? 0) === 0 &&
+      trimmedDefault &&
+      /^\(?\s*insert\b/i.test(trimmedDefault)
+        ? trimmedDefault
+        : undefined;
     const base = {
       linkName: link.name,
       ownerTable,
       targetTable: tableNameForType(targetQualified),
-      defaultTargetValues: parsedFilter ? [...parsedFilter.values] : [...(link.defaultTargetValues ?? [])],
+      defaultTargetValues: parsedFilter
+        ? [...parsedFilter.values]
+        : [...(link.defaultTargetValues ?? [])],
       lookupColumn,
       insertExprText,
     };
@@ -1639,7 +1843,12 @@ const buildInsertLinkDefaults = (
 /* ---------------------------------- */
 
 export const coerceRuntimeScalarValue = (value: unknown, context: string): ScalarValue => {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return value;
   }
 
@@ -1650,7 +1859,11 @@ export const coerceRuntimeScalarValue = (value: unknown, context: string): Scala
 // runtime scalar *values* (ISO-8601 datetime/date/time/duration text). Regex
 // on a value's textual form is the right tool — these are data formats, not
 // IR/type structure being recovered from a string.
-export const coerceCastScalarValue = (castType: string, value: unknown, context: string): ScalarValue => {
+export const coerceCastScalarValue = (
+  castType: string,
+  value: unknown,
+  context: string,
+): ScalarValue => {
   const scalar = coerceRuntimeScalarValue(value, context);
 
   switch (castType) {
@@ -1694,7 +1907,10 @@ export const coerceCastScalarValue = (castType: string, value: unknown, context:
         throw new AppError("E_SEMANTIC", `Cannot cast ${context} to json`, 1, 1);
       }
     case "datetime": {
-      if (typeof scalar !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/.test(scalar)) {
+      if (
+        typeof scalar !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/.test(scalar)
+      ) {
         throw new AppError("E_SEMANTIC", `Cannot cast ${context} to datetime`, 1, 1);
       }
       const date = new Date(scalar);
@@ -1726,7 +1942,10 @@ export const coerceCastScalarValue = (castType: string, value: unknown, context:
       }
       throw new AppError("E_SEMANTIC", `Cannot cast ${context} to ${castType}`, 1, 1);
     case "uuid":
-      if (typeof scalar === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scalar)) {
+      if (
+        typeof scalar === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scalar)
+      ) {
         return scalar;
       }
       throw new AppError("E_SEMANTIC", `Cannot cast ${context} to uuid`, 1, 1);
@@ -1793,7 +2012,9 @@ export const isValidLocalDate = (value: string): boolean => {
   const month = Number(matched[2]);
   const day = Number(matched[3]);
   const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day;
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day
+  );
 };
 
 export const isValidLocalDateTime = (value: string): boolean => {

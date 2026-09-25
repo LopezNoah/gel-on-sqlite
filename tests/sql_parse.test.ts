@@ -34,10 +34,13 @@ describe("TestSQLParse", () => {
   });
 
   it.skip("test_sql_parse_select_01 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT col1 FROM my_table WHERE
-        my_attribute LIKE 'condition' AND other = 5.6 AND extra > 5`, `SELECT col1 FROM my_table WHERE
+    runParseRoundTrip(
+      `SELECT col1 FROM my_table WHERE
+        my_attribute LIKE 'condition' AND other = 5.6 AND extra > 5`,
+      `SELECT col1 FROM my_table WHERE
         (((my_attribute LIKE 'condition') AND
-        (other = 5.6)) AND (extra > 5))`);
+        (other = 5.6)) AND (extra > 5))`,
+    );
   });
 
   it.skip("test_sql_parse_select_02 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -45,13 +48,16 @@ describe("TestSQLParse", () => {
   });
 
   it.skip("test_sql_parse_select_03 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`WITH fake_table AS (
+    runParseRoundTrip(
+      `WITH fake_table AS (
             SELECT SUM(countable) AS total FROM inner_table
             GROUP BY groupable
-        ) SELECT * FROM fake_table`, `WITH fake_table AS ((
+        ) SELECT * FROM fake_table`,
+      `WITH fake_table AS ((
             SELECT sum(countable) AS total FROM inner_table
             GROUP BY groupable
-        )) SELECT * FROM fake_table`);
+        )) SELECT * FROM fake_table`,
+    );
   });
 
   it.skip("test_sql_parse_select_04 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -59,27 +65,42 @@ describe("TestSQLParse", () => {
   });
 
   it.skip("test_sql_parse_select_05 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT a, CASE WHEN a=1 THEN 'one' WHEN a=2
-        THEN 'two' ELSE 'other' END FROM test`, `SELECT a, (CASE WHEN (a = 1) THEN 'one' WHEN (a = 2)
-        THEN 'two' ELSE 'other' END) FROM test`);
+    runParseRoundTrip(
+      `SELECT a, CASE WHEN a=1 THEN 'one' WHEN a=2
+        THEN 'two' ELSE 'other' END FROM test`,
+      `SELECT a, (CASE WHEN (a = 1) THEN 'one' WHEN (a = 2)
+        THEN 'two' ELSE 'other' END) FROM test`,
+    );
   });
 
   it.skip("test_sql_parse_select_06 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT CASE a.value WHEN 0 THEN '1' ELSE '2' END
-        FROM sometable a`, `SELECT (CASE a.value WHEN 0 THEN '1' ELSE '2' END)
-        FROM sometable AS a`);
+    runParseRoundTrip(
+      `SELECT CASE a.value WHEN 0 THEN '1' ELSE '2' END
+        FROM sometable a`,
+      `SELECT (CASE a.value WHEN 0 THEN '1' ELSE '2' END)
+        FROM sometable AS a`,
+    );
   });
 
   it.skip("test_sql_parse_select_07 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM table_one UNION select * FROM table_two`, `(SELECT * FROM table_one) UNION (SELECT * FROM table_two)`);
+    runParseRoundTrip(
+      `SELECT * FROM table_one UNION select * FROM table_two`,
+      `(SELECT * FROM table_one) UNION (SELECT * FROM table_two)`,
+    );
   });
 
   it.skip("test_sql_parse_select_08 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM my_table WHERE ST_Intersects(geo1, geo2)`, `SELECT * FROM my_table WHERE st_intersects(geo1, geo2)`);
+    runParseRoundTrip(
+      `SELECT * FROM my_table WHERE ST_Intersects(geo1, geo2)`,
+      `SELECT * FROM my_table WHERE st_intersects(geo1, geo2)`,
+    );
   });
 
   it.skip("test_sql_parse_select_09 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT 'accbf276-705b-11e7-b8e4-0242ac120002'::UUID`, `SELECT ('accbf276-705b-11e7-b8e4-0242ac120002')::uuid`);
+    runParseRoundTrip(
+      `SELECT 'accbf276-705b-11e7-b8e4-0242ac120002'::UUID`,
+      `SELECT ('accbf276-705b-11e7-b8e4-0242ac120002')::uuid`,
+    );
   });
 
   it.skip("test_sql_parse_select_10 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -105,31 +126,49 @@ OVER (PARTITION BY depname) FROM empsalary`);
   });
 
   it.skip("test_sql_parse_select_15 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT m.* FROM mytable m WHERE m.foo IS NULL`, `SELECT m.* FROM mytable AS m WHERE (m.foo IS NULL)`);
+    runParseRoundTrip(
+      `SELECT m.* FROM mytable m WHERE m.foo IS NULL`,
+      `SELECT m.* FROM mytable AS m WHERE (m.foo IS NULL)`,
+    );
   });
 
   it.skip("test_sql_parse_select_16 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT m.* FROM mytable m WHERE m.foo IS NOT NULL`, `SELECT m.* FROM mytable AS m WHERE (m.foo IS NOT NULL)`);
+    runParseRoundTrip(
+      `SELECT m.* FROM mytable m WHERE m.foo IS NOT NULL`,
+      `SELECT m.* FROM mytable AS m WHERE (m.foo IS NOT NULL)`,
+    );
   });
 
   it.skip("test_sql_parse_select_17 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT m.* FROM mytable m WHERE m.foo IS TRUE`, `SELECT m.* FROM mytable AS m WHERE (m.foo IS TRUE)`);
+    runParseRoundTrip(
+      `SELECT m.* FROM mytable m WHERE m.foo IS TRUE`,
+      `SELECT m.* FROM mytable AS m WHERE (m.foo IS TRUE)`,
+    );
   });
 
   it.skip("test_sql_parse_select_18 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT m.name AS mname, pname FROM manufacturers m,
-        LATERAL get_product_names(m.id) pname`, `SELECT m.name AS mname, pname FROM manufacturers AS m,
-        LATERAL get_product_names(m.id) AS pname`);
+    runParseRoundTrip(
+      `SELECT m.name AS mname, pname FROM manufacturers m,
+        LATERAL get_product_names(m.id) pname`,
+      `SELECT m.name AS mname, pname FROM manufacturers AS m,
+        LATERAL get_product_names(m.id) AS pname`,
+    );
   });
 
   it.skip("test_sql_parse_select_19 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM unnest(ARRAY['a','b','c','d','e','f'])`, `SELECT * FROM unnest(ARRAY['a', 'b', 'c', 'd', 'e', 'f'])`);
+    runParseRoundTrip(
+      `SELECT * FROM unnest(ARRAY['a','b','c','d','e','f'])`,
+      `SELECT * FROM unnest(ARRAY['a', 'b', 'c', 'd', 'e', 'f'])`,
+    );
   });
 
   it.skip("test_sql_parse_select_20 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM my_table
-        WHERE (a, b) in (('a', 'b'), ('c', 'd'))`, `SELECT * FROM my_table
-        WHERE ((a, b) IN (('a', 'b'), ('c', 'd')))`);
+    runParseRoundTrip(
+      `SELECT * FROM my_table
+        WHERE (a, b) in (('a', 'b'), ('c', 'd'))`,
+      `SELECT * FROM my_table
+        WHERE ((a, b) IN (('a', 'b'), ('c', 'd')))`,
+    );
   });
 
   it.skip("test_sql_parse_select_21 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -150,9 +189,12 @@ WHEN a=2 THEN ELSE 'other' END FROM test`);
   });
 
   it.skip("test_sql_parse_select_25 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`WITH fake_table AS (SELECT * FROM inner_table)
-        SELECT * FROM fake_table`, `WITH fake_table AS ((SELECT * FROM inner_table))
-        SELECT * FROM fake_table`);
+    runParseRoundTrip(
+      `WITH fake_table AS (SELECT * FROM inner_table)
+        SELECT * FROM fake_table`,
+      `WITH fake_table AS ((SELECT * FROM inner_table))
+        SELECT * FROM fake_table`,
+    );
   });
 
   it.skip("test_sql_parse_select_26 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -161,17 +203,26 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_select_27 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`select * FROM table_one UNION select * FROM table_two`, `(SELECT * FROM table_one) UNION (SELECT * FROM table_two)`);
+    runParseRoundTrip(
+      `select * FROM table_one UNION select * FROM table_two`,
+      `(SELECT * FROM table_one) UNION (SELECT * FROM table_two)`,
+    );
   });
 
   it.skip("test_sql_parse_select_28 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM my_table WHERE (a, b) in ('a', 'b')`, `SELECT * FROM my_table WHERE ((a, b) IN ('a', 'b'))`);
+    runParseRoundTrip(
+      `SELECT * FROM my_table WHERE (a, b) in ('a', 'b')`,
+      `SELECT * FROM my_table WHERE ((a, b) IN ('a', 'b'))`,
+    );
   });
 
   it.skip("test_sql_parse_select_29 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM my_table
-        WHERE (a, b) in (('a', 'b'), ('c', 'd'))`, `SELECT * FROM my_table
-        WHERE ((a, b) IN (('a', 'b'), ('c', 'd')))`);
+    runParseRoundTrip(
+      `SELECT * FROM my_table
+        WHERE (a, b) in (('a', 'b'), ('c', 'd'))`,
+      `SELECT * FROM my_table
+        WHERE ((a, b) IN (('a', 'b'), ('c', 'd')))`,
+    );
   });
 
   it.skip("test_sql_parse_select_30 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -179,7 +230,10 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_select_31 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT my_func((select * from table_one))`, `SELECT my_func(((SELECT * FROM table_one)))`);
+    runParseRoundTrip(
+      `SELECT my_func((select * from table_one))`,
+      `SELECT my_func(((SELECT * FROM table_one)))`,
+    );
   });
 
   it.skip("test_sql_parse_select_32 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -199,11 +253,14 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_select_36 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT COUNT(DISTINCT id), * FROM targets
+    runParseRoundTrip(
+      `SELECT COUNT(DISTINCT id), * FROM targets
         WHERE something IS NOT NULL
-        AND elsewhere::interval < now()`, `SELECT count(DISTINCT id), * FROM targets
+        AND elsewhere::interval < now()`,
+      `SELECT count(DISTINCT id), * FROM targets
         WHERE ((something IS NOT NULL)
-        AND ((elsewhere)::pg_catalog.interval < now()))`);
+        AND ((elsewhere)::pg_catalog.interval < now()))`,
+    );
   });
 
   it.skip("test_sql_parse_select_37 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -211,9 +268,12 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_select_38 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`WITH a AS (SELECT * FROM x WHERE x.y = $1 AND x.z = 1)
-        SELECT * FROM a`, `WITH a AS ((SELECT * FROM x WHERE ((x.y = $1) AND (x.z = 1))))
-        SELECT * FROM a`);
+    runParseRoundTrip(
+      `WITH a AS (SELECT * FROM x WHERE x.y = $1 AND x.z = 1)
+        SELECT * FROM a`,
+      `WITH a AS ((SELECT * FROM x WHERE ((x.y = $1) AND (x.z = 1))))
+        SELECT * FROM a`,
+    );
   });
 
   it.skip("test_sql_parse_select_39 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -221,17 +281,26 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_select_40 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM x WHERE y IN ($1, $2, $3)`, `SELECT * FROM x WHERE (y IN ($1, $2, $3))`);
+    runParseRoundTrip(
+      `SELECT * FROM x WHERE y IN ($1, $2, $3)`,
+      `SELECT * FROM x WHERE (y IN ($1, $2, $3))`,
+    );
   });
 
   it.skip("test_sql_parse_select_41 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM x WHERE y IN ( $1::uuid )`, `SELECT * FROM x WHERE (y IN (($1)::uuid))`);
+    runParseRoundTrip(
+      `SELECT * FROM x WHERE y IN ( $1::uuid )`,
+      `SELECT * FROM x WHERE (y IN (($1)::uuid))`,
+    );
   });
 
   it.skip("test_sql_parse_select_42 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM x
-        WHERE y IN ( $1::uuid, $2::uuid, $3::uuid )`, `SELECT * FROM x
-        WHERE (y IN (($1)::uuid, ($2)::uuid, ($3)::uuid))`);
+    runParseRoundTrip(
+      `SELECT * FROM x
+        WHERE y IN ( $1::uuid, $2::uuid, $3::uuid )`,
+      `SELECT * FROM x
+        WHERE (y IN (($1)::uuid, ($2)::uuid, ($3)::uuid))`,
+    );
   });
 
   it.skip("test_sql_parse_select_43 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -275,11 +344,17 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_select_53 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM t WHERE t.a IN (1, 2) AND t.b = 3`, `SELECT * FROM t WHERE ((t.a IN (1, 2)) AND (t.b = 3))`);
+    runParseRoundTrip(
+      `SELECT * FROM t WHERE t.a IN (1, 2) AND t.b = 3`,
+      `SELECT * FROM t WHERE ((t.a IN (1, 2)) AND (t.b = 3))`,
+    );
   });
 
   it.skip("test_sql_parse_select_54 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM t WHERE t.b = 3 AND t.a IN (1, 2)`, `SELECT * FROM t WHERE ((t.b = 3) AND (t.a IN (1, 2)))`);
+    runParseRoundTrip(
+      `SELECT * FROM t WHERE t.b = 3 AND t.a IN (1, 2)`,
+      `SELECT * FROM t WHERE ((t.b = 3) AND (t.a IN (1, 2)))`,
+    );
   });
 
   it.skip("test_sql_parse_select_55 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -287,7 +362,10 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_select_56 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT * FROM t WHERE a && '[1,2]'::int4range`, `SELECT * FROM t WHERE (a && ('[1,2]')::int4range)`);
+    runParseRoundTrip(
+      `SELECT * FROM t WHERE a && '[1,2]'::int4range`,
+      `SELECT * FROM t WHERE (a && ('[1,2]')::int4range)`,
+    );
   });
 
   it.skip("test_sql_parse_select_57 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -315,7 +393,10 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_insert_01 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO my_table (id, name) SELECT 1, 'some'`, `INSERT INTO my_table (id, name) ((SELECT 1, 'some'))`);
+    runParseRoundTrip(
+      `INSERT INTO my_table (id, name) SELECT 1, 'some'`,
+      `INSERT INTO my_table (id, name) ((SELECT 1, 'some'))`,
+    );
   });
 
   it.skip("test_sql_parse_insert_02 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -323,11 +404,17 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_insert_03 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO my_table (id) VALUES (5) RETURNING id, "date"`, `INSERT INTO my_table (id) VALUES (5) RETURNING id, date`);
+    runParseRoundTrip(
+      `INSERT INTO my_table (id) VALUES (5) RETURNING id, "date"`,
+      `INSERT INTO my_table (id) VALUES (5) RETURNING id, date`,
+    );
   });
 
   it.skip("test_sql_parse_insert_04 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO my_table (id) VALUES(1); SELECT * FROM my_table`, `INSERT INTO my_table (id) VALUES (1); SELECT * FROM my_table`);
+    runParseRoundTrip(
+      `INSERT INTO my_table (id) VALUES(1); SELECT * FROM my_table`,
+      `INSERT INTO my_table (id) VALUES (1); SELECT * FROM my_table`,
+    );
   });
 
   it.skip("test_sql_parse_insert_05 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -335,23 +422,32 @@ JOIN table_three USING (common_2)`);
   });
 
   it.skip("test_sql_parse_insert_06 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO table_one (id, name) SELECT * from table_two`, `INSERT INTO table_one (id, name) ((SELECT * FROM table_two))`);
+    runParseRoundTrip(
+      `INSERT INTO table_one (id, name) SELECT * from table_two`,
+      `INSERT INTO table_one (id, name) ((SELECT * FROM table_two))`,
+    );
   });
 
   it.skip("test_sql_parse_insert_07 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`WITH fake as (SELECT * FROM inner_table)
-        INSERT INTO dataset SELECT * FROM fake`, `WITH fake AS ((SELECT * FROM inner_table))
-        INSERT INTO dataset ((SELECT * FROM fake))`);
+    runParseRoundTrip(
+      `WITH fake as (SELECT * FROM inner_table)
+        INSERT INTO dataset SELECT * FROM fake`,
+      `WITH fake AS ((SELECT * FROM inner_table))
+        INSERT INTO dataset ((SELECT * FROM fake))`,
+    );
   });
 
   it.skip("test_sql_parse_insert_08 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO test (a, b) VALUES
+    runParseRoundTrip(
+      `INSERT INTO test (a, b) VALUES
         (ARRAY[$1, $1, $2, $3], $4::timestamptz),
         (ARRAY[$1, $1, $2, $3], $4::timestamptz),
-        ($5, $6::timestamptz)`, `INSERT INTO test (a, b) VALUES
+        ($5, $6::timestamptz)`,
+      `INSERT INTO test (a, b) VALUES
         (ARRAY[$1, $1, $2, $3], ($4)::timestamptz),
         (ARRAY[$1, $1, $2, $3], ($4)::timestamptz),
-        ($5, ($6)::timestamptz)`);
+        ($5, ($6)::timestamptz)`,
+    );
   });
 
   it.skip("test_sql_parse_insert_09 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -370,19 +466,25 @@ SET (a, b) = ('a', 'b'), c = 'c', (d, e) = ('d', 'e')`);
   });
 
   it.skip("test_sql_parse_insert_12 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO foo DEFAULT VALUES
-        RETURNING a[1:3] AS a, b.x AS b`, `INSERT INTO foo DEFAULT VALUES
-        RETURNING (a)[1:3] AS a, b.x AS b`);
+    runParseRoundTrip(
+      `INSERT INTO foo DEFAULT VALUES
+        RETURNING a[1:3] AS a, b.x AS b`,
+      `INSERT INTO foo DEFAULT VALUES
+        RETURNING (a)[1:3] AS a, b.x AS b`,
+    );
   });
 
   it.skip("test_sql_parse_insert_13 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO map (key, value) VALUES ('x', 3)
+    runParseRoundTrip(
+      `INSERT INTO map (key, value) VALUES ('x', 3)
         ON CONFLICT (key)
         DO UPDATE SET value = map.value + excluded.value
-        WHERE map.value < 20`, `INSERT INTO map (key, value) VALUES ('x', 3)
+        WHERE map.value < 20`,
+      `INSERT INTO map (key, value) VALUES ('x', 3)
         ON CONFLICT (key)
         DO UPDATE SET value = (map.value + excluded.value)
-        WHERE (map.value < 20)`);
+        WHERE (map.value < 20)`,
+    );
   });
 
   it.skip("test_sql_parse_insert_14 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -392,11 +494,14 @@ DO UPDATE SET value = 42`);
   });
 
   it.skip("test_sql_parse_insert_15 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`INSERT INTO map VALUES ('x', 3)
+    runParseRoundTrip(
+      `INSERT INTO map VALUES ('x', 3)
         ON CONFLICT (key) WHERE key < 100
-        DO UPDATE SET value = 42`, `INSERT INTO map VALUES ('x', 3)
+        DO UPDATE SET value = 42`,
+      `INSERT INTO map VALUES ('x', 3)
         ON CONFLICT (key) WHERE (key < 100)
-        DO UPDATE SET value = 42`);
+        DO UPDATE SET value = 42`,
+    );
   });
 
   it.skip("test_sql_parse_insert_16 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -422,19 +527,25 @@ DO NOTHING`);
   });
 
   it.skip("test_sql_parse_update_01 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`UPDATE tictactoe SET board[1:3][1:3] = '{{,,},{,,},{,,}}'
-        WHERE game = 1`, `UPDATE tictactoe SET board[1:3][1:3] = '{{,,},{,,},{,,}}'
-        WHERE (game = 1)`);
+    runParseRoundTrip(
+      `UPDATE tictactoe SET board[1:3][1:3] = '{{,,},{,,},{,,}}'
+        WHERE game = 1`,
+      `UPDATE tictactoe SET board[1:3][1:3] = '{{,,},{,,},{,,}}'
+        WHERE (game = 1)`,
+    );
   });
 
   it.skip("test_sql_parse_update_02 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`UPDATE accounts SET
+    runParseRoundTrip(
+      `UPDATE accounts SET
         (contact_first_name, contact_last_name) =
         (SELECT first_name, last_name
-        FROM salesmen WHERE salesmen.id = accounts.sales_id)`, `UPDATE accounts SET
+        FROM salesmen WHERE salesmen.id = accounts.sales_id)`,
+      `UPDATE accounts SET
         (contact_first_name, contact_last_name) =
         ((SELECT first_name, last_name
-        FROM salesmen WHERE (salesmen.id = accounts.sales_id)))`);
+        FROM salesmen WHERE (salesmen.id = accounts.sales_id)))`,
+    );
   });
 
   it.skip("test_sql_parse_update_03 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -442,33 +553,48 @@ DO NOTHING`);
   });
 
   it.skip("test_sql_parse_update_04 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`UPDATE dataset SET a = 5
+    runParseRoundTrip(
+      `UPDATE dataset SET a = 5
         WHERE id IN (SELECT * from table_one)
-        OR age IN (select * from table_two)`, `UPDATE dataset SET a = 5
+        OR age IN (select * from table_two)`,
+      `UPDATE dataset SET a = 5
         WHERE (id = ANY ((SELECT * FROM table_one))
-        OR age = ANY ((SELECT * FROM table_two)))`);
+        OR age = ANY ((SELECT * FROM table_two)))`,
+    );
   });
 
   it.skip("test_sql_parse_update_05 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`UPDATE dataset SET a = 5 FROM extra WHERE b = c`, `UPDATE dataset SET a = 5 FROM extra WHERE (b = c)`);
+    runParseRoundTrip(
+      `UPDATE dataset SET a = 5 FROM extra WHERE b = c`,
+      `UPDATE dataset SET a = 5 FROM extra WHERE (b = c)`,
+    );
   });
 
   it.skip("test_sql_parse_update_06 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`UPDATE users SET one_thing = $1, second_thing = $2
-        WHERE users.id = $1`, `UPDATE users SET one_thing = $1, second_thing = $2
-        WHERE (users.id = $1)`);
+    runParseRoundTrip(
+      `UPDATE users SET one_thing = $1, second_thing = $2
+        WHERE users.id = $1`,
+      `UPDATE users SET one_thing = $1, second_thing = $2
+        WHERE (users.id = $1)`,
+    );
   });
 
   it.skip("test_sql_parse_update_07 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`UPDATE users SET something_else = $1 WHERE users.id = $1`, `UPDATE users SET something_else = $1 WHERE (users.id = $1)`);
+    runParseRoundTrip(
+      `UPDATE users SET something_else = $1 WHERE users.id = $1`,
+      `UPDATE users SET something_else = $1 WHERE (users.id = $1)`,
+    );
   });
 
   it.skip("test_sql_parse_update_08 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`UPDATE users SET something_else =
+    runParseRoundTrip(
+      `UPDATE users SET something_else =
         (SELECT a FROM x WHERE uid = users.id LIMIT 1)
-        WHERE users.id = $1`, `UPDATE users SET something_else =
+        WHERE users.id = $1`,
+      `UPDATE users SET something_else =
         ((SELECT a FROM x WHERE (uid = users.id) LIMIT 1))
-        WHERE (users.id = $1)`);
+        WHERE (users.id = $1)`,
+    );
   });
 
   it.skip("test_sql_parse_update_09 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -493,9 +619,12 @@ DO NOTHING`);
   });
 
   it.skip("test_sql_parse_delete [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`DELETE FROM dataset USING table_one
-        WHERE x = y OR x IN (SELECT * from table_two)`, `DELETE FROM dataset USING table_one
-        WHERE ((x = y) OR x = ANY ((SELECT * FROM table_two)))`);
+    runParseRoundTrip(
+      `DELETE FROM dataset USING table_one
+        WHERE x = y OR x IN (SELECT * from table_two)`,
+      `DELETE FROM dataset USING table_one
+        WHERE ((x = y) OR x = ANY ((SELECT * FROM table_two)))`,
+    );
   });
 
   it.skip("test_sql_parse_transaction_00 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -648,9 +777,12 @@ DO NOTHING`);
   });
 
   it.skip("test_sql_parse_query_09 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`PREPARE fooplan (int, text, bool, numeric) AS (SELECT $1, $2, $3, $4)`, `PREPARE fooplan(pg_catalog.int4, text, bool, pg_catalog.numeric) AS (
+    runParseRoundTrip(
+      `PREPARE fooplan (int, text, bool, numeric) AS (SELECT $1, $2, $3, $4)`,
+      `PREPARE fooplan(pg_catalog.int4, text, bool, pg_catalog.numeric) AS (
             SELECT $1, $2, $3, $4
-        )`);
+        )`,
+    );
   });
 
   it.skip("test_sql_parse_query_10 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -700,11 +832,14 @@ SELECT * FROM test WHERE id = 123`);
   });
 
   it.skip("test_sql_parse_query_24 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`CREATE TEMPORARY TABLE my_temp_table (
+    runParseRoundTrip(
+      `CREATE TEMPORARY TABLE my_temp_table (
             test_id integer NOT NULL
-        ) ON COMMIT DROP`, `CREATE TEMPORARY TABLE my_temp_table (
+        ) ON COMMIT DROP`,
+      `CREATE TEMPORARY TABLE my_temp_table (
             test_id pg_catalog.int4 NOT NULL
-        ) ON COMMIT DROP`);
+        ) ON COMMIT DROP`,
+    );
   });
 
   it.skip("test_sql_parse_query_25 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -712,10 +847,12 @@ SELECT * FROM test WHERE id = 123`);
   });
 
   it.skip("test_sql_parse_query_26 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`CREATE TABLE types (
+    runParseRoundTrip(
+      `CREATE TABLE types (
         a float(2), b float(49),
         c NUMERIC(2, 3), d character(4), e char(5),
-        f varchar(6), g character varying(7))`, `CREATE TABLE types (
+        f varchar(6), g character varying(7))`,
+      `CREATE TABLE types (
             a pg_catalog.float4,
             b pg_catalog.float8,
             c pg_catalog.numeric,
@@ -723,7 +860,8 @@ SELECT * FROM test WHERE id = 123`);
             e pg_catalog.bpchar,
             f pg_catalog.varchar,
             g pg_catalog.varchar
-        )`);
+        )`,
+    );
   });
 
   it.skip("test_sql_parse_query_27 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -731,7 +869,10 @@ SELECT * FROM test WHERE id = 123`);
   });
 
   it.skip("test_sql_parse_query_28 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SET SESSION datestyle TO postgres, dmy`, `SET datestyle TO 'postgres', 'dmy'`);
+    runParseRoundTrip(
+      `SET SESSION datestyle TO postgres, dmy`,
+      `SET datestyle TO 'postgres', 'dmy'`,
+    );
   });
 
   it.skip("test_sql_parse_query_29 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -788,7 +929,10 @@ SELECT sum(n) FROM t`);
   });
 
   it.skip("test_sql_parse_query_41 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT 1 FROM t WHERE ia.attnum > 0 AND NOT ia.attisdropped`, `SELECT 1 FROM t WHERE ((ia.attnum > 0) AND (NOT ia.attisdropped))`);
+    runParseRoundTrip(
+      `SELECT 1 FROM t WHERE ia.attnum > 0 AND NOT ia.attisdropped`,
+      `SELECT 1 FROM t WHERE ((ia.attnum > 0) AND (NOT ia.attisdropped))`,
+    );
   });
 
   it.skip("test_sql_parse_query_42 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -824,7 +968,10 @@ SELECT sum(n) FROM t`);
   });
 
   it.skip("test_sql_parse_query_50 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SELECT 'a'::char, 'a'::"char"`, `SELECT ('a')::pg_catalog.bpchar, ('a')::pg_catalog.char`);
+    runParseRoundTrip(
+      `SELECT 'a'::char, 'a'::"char"`,
+      `SELECT ('a')::pg_catalog.bpchar, ('a')::pg_catalog.char`,
+    );
   });
 
   it.skip("test_sql_parse_query_51 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -896,15 +1043,24 @@ SELECT sum(n) FROM t`);
   });
 
   it.skip("test_sql_parse_transaction_29 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SET SESSION transaction_isolation = serializable`, `SET LOCAL transaction_isolation TO 'serializable'`);
+    runParseRoundTrip(
+      `SET SESSION transaction_isolation = serializable`,
+      `SET LOCAL transaction_isolation TO 'serializable'`,
+    );
   });
 
   it.skip("test_sql_parse_transaction_30 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`RESET transaction_deferrable`, `SET LOCAL transaction_deferrable TO DEFAULT`);
+    runParseRoundTrip(
+      `RESET transaction_deferrable`,
+      `SET LOCAL transaction_deferrable TO DEFAULT`,
+    );
   });
 
   it.skip("test_sql_parse_transaction_31 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
-    runParseRoundTrip(`SET transaction_read_only TO DEFAULT`, `SET LOCAL transaction_read_only TO DEFAULT`);
+    runParseRoundTrip(
+      `SET transaction_read_only TO DEFAULT`,
+      `SET LOCAL transaction_read_only TO DEFAULT`,
+    );
   });
 
   it.skip("test_sql_parse_copy_01 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
@@ -974,5 +1130,4 @@ SELECT sum(n) FROM t`);
   it.skip("test_sql_parse_select_locking_06 [unconverted: SQL parser/codegen not implemented in sqlite-ts]", () => {
     runParseRoundTrip(`SELECT id FROM a FOR UPDATE OF b`);
   });
-
 });

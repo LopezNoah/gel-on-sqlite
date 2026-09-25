@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseAlterTypeBody, parseCreateTypeBody, type CreateTypeBodyEntry } from "../src/edgeql/ddl_body.js";
+import {
+  parseAlterTypeBody,
+  parseCreateTypeBody,
+  type CreateTypeBodyEntry,
+} from "../src/edgeql/ddl_body.js";
 
 // Parse one body and return the single entry (asserts exactly one).
 const one = (body: string): CreateTypeBodyEntry => {
@@ -27,7 +31,10 @@ describe("parseCreateTypeBody — properties", () => {
   });
 
   it("colon separator is accepted", () => {
-    expect(one("CREATE PROPERTY n: int64;")).toMatchObject({ kind: "property", targetType: "int64" });
+    expect(one("CREATE PROPERTY n: int64;")).toMatchObject({
+      kind: "property",
+      targetType: "int64",
+    });
   });
 
   it("collection target type is preserved verbatim", () => {
@@ -38,7 +45,9 @@ describe("parseCreateTypeBody — properties", () => {
   });
 
   it("inline exclusive constraint", () => {
-    expect(one("CREATE PROPERTY email -> std::str { CREATE CONSTRAINT exclusive; };")).toMatchObject({
+    expect(
+      one("CREATE PROPERTY email -> std::str { CREATE CONSTRAINT exclusive; };"),
+    ).toMatchObject({
       kind: "property",
       name: "email",
       constraints: [{ delegated: false, onExpr: undefined, exceptExpr: undefined }],
@@ -53,7 +62,9 @@ describe("parseCreateTypeBody — properties", () => {
   // behaviour-changing fix because dropped exclusive constraints would start
   // being enforced. See docs/adr/0026.
   it("inline delegated exclusive constraint is dropped (parity)", () => {
-    expect(one("CREATE PROPERTY x -> str { CREATE DELEGATED CONSTRAINT exclusive; };")).toMatchObject({
+    expect(
+      one("CREATE PROPERTY x -> str { CREATE DELEGATED CONSTRAINT exclusive; };"),
+    ).toMatchObject({
       kind: "property",
       constraints: [],
     });
@@ -74,10 +85,12 @@ describe("parseCreateTypeBody — properties", () => {
   });
 
   it("non-exclusive constraints are dropped", () => {
-    expect(one("CREATE PROPERTY s -> str { CREATE CONSTRAINT max_len_value(10); };")).toMatchObject({
-      kind: "property",
-      constraints: [],
-    });
+    expect(one("CREATE PROPERTY s -> str { CREATE CONSTRAINT max_len_value(10); };")).toMatchObject(
+      {
+        kind: "property",
+        constraints: [],
+      },
+    );
   });
 });
 
@@ -103,7 +116,11 @@ describe("parseCreateTypeBody — links", () => {
   });
 
   it("link with link-properties", () => {
-    expect(one("CREATE MULTI LINK cards -> Card { CREATE PROPERTY count -> int64; CREATE REQUIRED PROPERTY note -> str; };")).toMatchObject({
+    expect(
+      one(
+        "CREATE MULTI LINK cards -> Card { CREATE PROPERTY count -> int64; CREATE REQUIRED PROPERTY note -> str; };",
+      ),
+    ).toMatchObject({
       kind: "link",
       name: "cards",
       properties: [
@@ -142,7 +159,9 @@ describe("parseCreateTypeBody — ALTER + type-level constraints", () => {
   it("ALTER LINK with a delegated exclusive constraint drops it (parity, see note above)", () => {
     // The delegated constraint is dropped, so no constraints remain and no
     // alter_pointer entry is emitted.
-    expect(parseCreateTypeBody("ALTER LINK owner { CREATE DELEGATED CONSTRAINT exclusive; };")).toEqual([]);
+    expect(
+      parseCreateTypeBody("ALTER LINK owner { CREATE DELEGATED CONSTRAINT exclusive; };"),
+    ).toEqual([]);
   });
 
   it("ALTER without a body produces no entry", () => {
@@ -205,13 +224,19 @@ describe("parseCreateTypeBody — multi-member bodies", () => {
 describe("parseAlterTypeBody — ALTER TYPE tail (after the type name)", () => {
   it("braced type-level create constraint", () => {
     expect(parseAlterTypeBody("{ CREATE CONSTRAINT exclusive ON (.name); }")).toEqual([
-      { kind: "create_constraint", constraint: { delegated: false, onExpr: ".name", exceptExpr: undefined } },
+      {
+        kind: "create_constraint",
+        constraint: { delegated: false, onExpr: ".name", exceptExpr: undefined },
+      },
     ]);
   });
 
   it("braced drop constraint", () => {
     expect(parseAlterTypeBody("{ DROP CONSTRAINT exclusive ON (.email); }")).toEqual([
-      { kind: "drop_constraint", constraint: { delegated: false, onExpr: ".email", exceptExpr: undefined } },
+      {
+        kind: "drop_constraint",
+        constraint: { delegated: false, onExpr: ".email", exceptExpr: undefined },
+      },
     ]);
   });
 
@@ -227,8 +252,14 @@ describe("parseAlterTypeBody — ALTER TYPE tail (after the type name)", () => {
     // shorter paths (a benign quirk preserved verbatim from the prior
     // parser — applyAlterTypeDDL applies set_default idempotently and the
     // shorter paths match no real field). Assert the real op is present.
-    const ops = parseAlterTypeBody("{ ALTER LINK owner { ALTER PROPERTY note { SET default := 'x'; }; }; }");
-    expect(ops).toContainEqual({ kind: "set_default", pointerPath: ["owner", "note"], exprText: "'x'" });
+    const ops = parseAlterTypeBody(
+      "{ ALTER LINK owner { ALTER PROPERTY note { SET default := 'x'; }; }; }",
+    );
+    expect(ops).toContainEqual({
+      kind: "set_default",
+      pointerPath: ["owner", "note"],
+      exprText: "'x'",
+    });
   });
 
   it("chained form (no outer braces)", () => {

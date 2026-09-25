@@ -1,6 +1,7 @@
 # 0061 — Shared-prefix tuple `count` is a factoring decision; the fence is lost at IR inlining
 
 ## Status
+
 Accepted and IMPLEMENTED. Phase 0 (gate disabled) → Phase 1 layer 1 (scope-tree
 population) → layer 2 (view-namespace discriminator) → layer 3 (factoring-query
 authority + count-gate wiring). The shared-prefix tuple-count collapse is now
@@ -11,14 +12,14 @@ sound: it fires for CORRELATED prefixes and declines for FACTORED ones.
 `count((S.a, S.b, …))` where every tuple element is a single-valued scalar
 pointer off the same object set `S` can be lowered two ways:
 
-- **Correlated (zip):** the references to `S` are the *same* iteration, so the
+- **Correlated (zip):** the references to `S` are the _same_ iteration, so the
   tuple has one row per `S` and `count = |S|`.
-- **Factored (cross):** the references to `S` are *independent* iterations, so
+- **Factored (cross):** the references to `S` are _independent_ iterations, so
   the tuple is the cartesian product and `count = |S.a| × |S.b| × …`.
 
 EdgeQL distinguishes these by **scope factoring**: two path references factor
-(correlate) at their longest common prefix that is visible across *at most one
-fence*. A prefix reached through a factored `WITH`/computable sits behind a
+(correlate) at their longest common prefix that is visible across _at most one
+fence_. A prefix reached through a factored `WITH`/computable sits behind a
 fence, so it does **not** correlate.
 
 ```edgeql
@@ -48,7 +49,7 @@ full count-argument subtree for both queries:
   `Card` type-root, exactly like plain `Card.name`)
 - `namespace`: empty for both
 - `isWithBinding` / `isFactoringProtected` / any binding residue: **absent** on
-  every set in the subtree (the ADR 0059 mark is stamped only on a *direct*
+  every set in the subtree (the ADR 0059 mark is stamped only on a _direct_
   scalar count argument, never in the tuple/nested case)
 - `views` / `viewShapes`: empty for both
 - `Statement.scopeTree`: an **empty stub** — `ast_to_ir.ts` sets
@@ -57,18 +58,18 @@ full count-argument subtree for both queries:
 So the factoring fence is **destroyed during `ast_to_ir` WITH-inlining**. No
 analysis that runs after the IR is built — neither the `Relation` path resolver
 nor a reconstructed `buildScopeAnalysis` tree — can recover it. The Relation
-answers *"can I resolve this prefix once?"* (yes); it cannot answer *"is
-correlating it here semantically allowed?"* — and right now nothing can.
+answers _"can I resolve this prefix once?"_ (yes); it cannot answer _"is
+correlating it here semantically allowed?"_ — and right now nothing can.
 
 ## How Gel does it
 
 Gel builds its scope tree **during** `ast_to_ir`, attaching paths and fences at
-each scope boundary *before* inlining can erase anything, then queries it:
+each scope boundary _before_ inlining can erase anything, then queries it:
 
 - `attach_path()` / `attach_fence()` — `edb/ir/scopetree.py:405`
 - `find_visible()` / `is_visible()` — `:800`
 - `find_factorable_nodes()` — `:936`: "search up the tree for an ancestor with
-  `path_id` as a descendant such that *at most one* of self and that descendant
+  `path_id` as a descendant such that _at most one_ of self and that descendant
   are fenced." That descendant is factorable; the ancestor is the factoring
   point.
 
@@ -112,7 +113,7 @@ is already exercised by detached-EXISTS via `existence_proof.ts`).
 2. **Factoring-query authority** in `src/ir/scope_tree.ts` — **DONE**:
    `analyzeTreeFactoring(root)` ports `find_factorable_nodes` over the populated
    tree → `sharedFactorPrefix` / `shouldFactorTogether` / `isAcrossFactoringFence`
-   + `pathLeaves`.
+   - `pathLeaves`.
 3. **Wire the count gate through it** — **DONE**, resolving the PathId question:
    the AST walker can't know the lowered PathId because WITH-inlining erases the
    alias spelling (07b→`Card`, 07a→`User.deck`, 07c→global `Card`), so we DON'T

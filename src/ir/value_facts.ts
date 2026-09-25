@@ -89,7 +89,8 @@ export const valueFactsOf = (set: Set): ValueFacts => {
 
   // Literal collections — a tuple's typeref doesn't always carry `.collection`,
   // so key off the expr kind.
-  if (e.kind === "tuple") return { category: "collection", typeName: name || "std::tuple", collection: "tuple" };
+  if (e.kind === "tuple")
+    return { category: "collection", typeName: name || "std::tuple", collection: "tuple" };
   if (e.kind === "array") return { category: "collection", typeName: name, collection: "array" };
 
   // Index/slice of a str/bytes preserves the scalar kind though the result
@@ -97,7 +98,10 @@ export const valueFactsOf = (set: Set): ValueFacts => {
   // result typeref below.
   if (e.kind === "index_expr" || e.kind === "slice_expr") {
     const inner = valueFactsOf((e as IndexExpr | SliceExpr).expr);
-    if (inner.category === "scalar" && (inner.typeName === "std::str" || inner.typeName === "std::bytes")) {
+    if (
+      inner.category === "scalar" &&
+      (inner.typeName === "std::str" || inner.typeName === "std::bytes")
+    ) {
       return scalarFacts(inner.typeName);
     }
   }

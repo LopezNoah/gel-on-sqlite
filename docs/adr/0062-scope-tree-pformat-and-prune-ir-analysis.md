@@ -1,6 +1,7 @@
 # 0062 — Scope-tree pformat serializer; prune the IR-derived scope analysis
 
 ## Status
+
 Accepted and IMPLEMENTED. Behaviour-neutral. Follows ADR 0061 (the scope-tree
 factoring work) and mirrors the `pathid_format.ts` precedent.
 
@@ -14,17 +15,17 @@ The scope cluster had accumulated three things that look alike but are not:
    (the live tuple verdict) and `countArgIsFactored` (the live single-pointer
    count signal).
 2. **`analyzeTreeFactoring`** (`scope_tree.ts`) — the `find_factorable_nodes`
-   port that queries the *populated* tree. Test-pinned (`scope_builder.test.ts`)
+   port that queries the _populated_ tree. Test-pinned (`scope_builder.test.ts`)
    as reproducing the live verdict; the convergence target for ADR 0061 layer 3.
 3. **`buildScopeAnalysis` + `ScopeAnalysis`** (`scope_tree.ts`) — a second tree
    builder, this one over the **finished Live IR**. **Zero callers.**
 
 Two frictions:
 
-- **The dead builder is the *wrong half*.** ADR 0061 established that the
+- **The dead builder is the _wrong half_.** ADR 0061 established that the
   factoring fence is erased during `ast_to_ir` WITH-inlining — the factored and
   correlated forms compile to byte-identical IR. So a tree built from the IR
-  (`buildScopeAnalysis`) is *structurally incapable* of separating factored from
+  (`buildScopeAnalysis`) is _structurally incapable_ of separating factored from
   correlated; the fences only survive in the AST. It is not merely unused, it
   could never have worked for its stated purpose. It also duplicated
   `analyzeTreeFactoring`'s method names (`sharedFactorPrefix`, `pathLeavesUnder`)
@@ -74,7 +75,7 @@ derived names), so a node renders as `(Card.name)`, not Gel's
 derived **names** do not yet. Real names land when the tree is wired with real
 PathIds (the Gel-parity naming work + ADR 0061 layer-3 convergence) — at which
 point `scope_tree_format.ts` renders them through `serializePathId` with no
-change here. The golden test pins sqlite-ts's *own* output, not a 1:1 match
+change here. The golden test pins sqlite-ts's _own_ output, not a 1:1 match
 against Gel's `scopetree.py` goldens; the latter is the layer-3 milestone.
 
 ## Consequences

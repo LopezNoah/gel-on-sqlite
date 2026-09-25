@@ -6,14 +6,15 @@
 > **(2) where do I start reading each part?**
 >
 > **How this fits with the other docs:**
+>
 > - `CONTEXT.md` is the **glossary** — it defines the vocabulary (Live IR, scope tree,
 >   polymorphic source…) and assumes you already know the shape of the system. Reference, not a tour.
-> - `docs/adr/*` are **decision records** — they explain *why* a given module is shaped the
+> - `docs/adr/*` are **decision records** — they explain _why_ a given module is shaped the
 >   way it is. Great when you ask "why is this split out?", not for "what runs when?".
 > - **This file** is the **map and the tour.** Read it first, then dip into the glossary
 >   and ADRs for depth.
 >
-> **About the line numbers below:** they are anchors as of 2026-06-26 and *will drift* as you
+> **About the line numbers below:** they are anchors as of 2026-06-26 and _will drift_ as you
 > edit. The **function names are the durable reference** — if a line number is stale,
 > `grep -n "functionName" path/to/file.ts` will find it again. Every name in this doc is a
 > real top-level `export const` / `export function` you can jump to.
@@ -56,7 +57,7 @@ Stages ③ and ④ are wrapped together by **`CompilerService.compile`**
 (`src/runtime/engine.ts:1578`). If you only remember two function names, remember those two.
 
 The single most important design decision: **EdgeQL lowers to one SQLite SQL statement
-whenever possible** (the fast, correct path). Constructs that *can't* be expressed as SQL —
+whenever possible** (the fast, correct path). Constructs that _can't_ be expressed as SQL —
 free objects, `FOR` loops, inlined user functions — fall back to a **TypeScript interpreter**
 (`src/runtime/evaluator.ts`). This is not a slow-path fallback for failures; it's a required
 second execution mode. See §6.
@@ -77,7 +78,7 @@ consumes and produces, and the honest hard parts.
   `charCodeAt`) optimized for speed, but the keyword tables at the top
   (`UNRESERVED_KEYWORDS`, `CURRENT_RESERVED_KEYWORDS`, …) read like configuration and the
   scan loop is conventional. Start at the keyword tables, then read the main loop.
-- **Note:** the *schema* language (SDL) has its own separate tokenizer
+- **Note:** the _schema_ language (SDL) has its own separate tokenizer
   (`src/schema/schema_tokenizer.ts`) — see §5. They deliberately don't share code (ADR 0025).
 
 ### ② Parse — `Token[]` → AST
@@ -98,7 +99,7 @@ consumes and produces, and the honest hard parts.
 ### ③ Compile AST → Live IR
 
 - **Entry:** `compileASTToGelIR(statement, options)` — `src/compiler/ast_to_ir.ts:10703`
-- This is where EdgeQL *semantics* get resolved: paths are bound to schema pointers, types are
+- This is where EdgeQL _semantics_ get resolved: paths are bound to schema pointers, types are
   inferred, shapes are expanded, `WITH` bindings inlined. The output is the **Live IR** — a
   recursive graph of `Set` nodes (`src/ir/gel_ir.ts`), each wrapping an `Expr` tagged by
   `.expr.kind` (`pointer`, `operator_call`, `function_call`, `select_expr`, `type_root`, …).
@@ -109,10 +110,10 @@ consumes and produces, and the honest hard parts.
 - **Useful sub-entry points:** `resolvePointerRef` (`:1088`, bind a `.field` to a schema
   pointer), `extendPathSetDirectional` (`:935`, extend a path chain), `resolveBinding`
   (`:1937`, look up a `WITH` name), `compileFreeObjectExpr` (`:3587`).
-- **Readability:** **C** — and arguably the single hardest file to *learn*. It's one large
+- **Readability:** **C** — and arguably the single hardest file to _learn_. It's one large
   **mutually-recursive builder**: most functions call most other functions, so there's no clean
   layering to follow (ADRs 0040/0041 record why the expr/shape "seams" people expect don't
-  actually exist here). The entry point is near the *bottom* (`:10703`); the building blocks are
+  actually exist here). The entry point is near the _bottom_ (`:10703`); the building blocks are
   above it. Read `compileASTToGelIR` first to see the top-level shape, then follow it down into
   the helpers it calls.
 
@@ -124,16 +125,16 @@ consumes and produces, and the honest hard parts.
   construct can't be lowered, the relevant function returns `null` and `loweringMode` becomes
   `"fallback_multi_query"` — the signal to the engine to interpret it instead.
 - **The four engines you'll keep returning to** (they call each other constantly):
-  - `compileScalarSelectSQLInner` (`:2516`) — *Set → rows* (one row per element of a set)
-  - `compileValueSetSQL` (`:10582`) — *Set → a single scalar value* (a column / operand)
-  - `compilePredicateSetSQL` (`:9904`) — *Set → a `WHERE` boolean* (FILTER clauses)
-  - `compileShapeProjection` (`:8947`) — *one shape element → a JSON projection* (`Foo { bar }`)
+  - `compileScalarSelectSQLInner` (`:2516`) — _Set → rows_ (one row per element of a set)
+  - `compileValueSetSQL` (`:10582`) — _Set → a single scalar value_ (a column / operand)
+  - `compilePredicateSetSQL` (`:9904`) — _Set → a `WHERE` boolean_ (FILTER clauses)
+  - `compileShapeProjection` (`:8947`) — _one shape element → a JSON projection_ (`Foo { bar }`)
 - **Read `sqlLoweringContext` (`:83`) early.** It's a frozen bundle of ~40 of this file's
   functions, handed to the extracted sibling modules (`group_lowering.ts`, `existence_proof.ts`,
   `optional_comparison.ts`) so they can call back in without a circular import. It's the map of
   how this file connects to its neighbours.
 - **Readability:** **C.** Detailed assessment in §4 — this is the biggest file (13,004 lines)
-  and the navigation is grep-driven. The saving grace: ~20% of lines are *why*-comments, almost
+  and the navigation is grep-driven. The saving grace: ~20% of lines are _why_-comments, almost
   every one anchored to a concrete EdgeQL example.
 - DML (`insert`/`update`/`delete`) has a parallel lowering: `compileDmlToIR`
   (`src/compiler/dml_lowering.ts`) produces a mutation plan (the "DML IR") that the engine's
@@ -143,7 +144,7 @@ consumes and produces, and the honest hard parts.
 
 - **Entry:** `classifyExecutionStrategy(ast, artifact, schema)` — `src/compiler/execution_strategy.ts:205`
 - Returns one of three strategies: **`sql`** (run the SQL artifact), **`runtime`** (interpret in
-  TS), or **`reject`** (raise `E_UNSUPPORTED`). This is the *single source of truth* the engine
+  TS), or **`reject`** (raise `E_UNSUPPORTED`). This is the _single source of truth_ the engine
   dispatches on — so the engine and the inspection tool can never disagree (ADR 0004).
 - The related predicate `lowersToSingleSql` (the "SQL gate", in `compiler_types.ts`) answers the
   narrower "did this compile to exactly one runnable SQL statement?".
@@ -184,9 +185,10 @@ exactly what the engine compiles.
 
 **A worked example.** Run `npx tsx bin/inspect.ts sql "SELECT Issue { name }" --schema issues`.
 You'll get the SQL. Now you can:
+
 1. See it's a `json_object(...)` projection over a `SELECT ... FROM "Issue"` — that's
    `compileShapeProjection` (stage ④) at work.
-2. Want to know *why* it shaped that way? Grep `gel_ir_compiler.ts` for `compileShapeProjection`
+2. Want to know _why_ it shaped that way? Grep `gel_ir_compiler.ts` for `compileShapeProjection`
    and read the guard your query hit (each has a why-comment).
 3. Want the IR it came from? Re-run with `raw` and you'll see the `Set` graph that stage ③ built.
 
@@ -205,14 +207,15 @@ answers definitively, every time.
 ~43,000 of the ~90,000 lines of `src/` live in **four files**. This is the honest weak point of
 the codebase, so it gets its own section.
 
-| File | Lines | Role | Grade |
-|------|------:|------|:-----:|
-| `src/sql/gel_ir_compiler.ts` | 13,004 | Live IR → SQL | C |
-| `src/compiler/ast_to_ir.ts` | 10,911 | AST → Live IR | C |
-| `src/runtime/engine.ts` | 10,777 | execute / route / write | C |
-| `src/edgeql/parser.ts` | 9,200 | tokens → AST | B |
+| File                         |  Lines | Role                    | Grade |
+| ---------------------------- | -----: | ----------------------- | :---: |
+| `src/sql/gel_ir_compiler.ts` | 13,004 | Live IR → SQL           |   C   |
+| `src/compiler/ast_to_ir.ts`  | 10,911 | AST → Live IR           |   C   |
+| `src/runtime/engine.ts`      | 10,777 | execute / route / write |   C   |
+| `src/edgeql/parser.ts`       |  9,200 | tokens → AST            |   B   |
 
-**What's *good* about them** (this is real, not consolation):
+**What's _good_ about them** (this is real, not consolation):
+
 - **Naming is excellent and grep-able.** A consistent vocabulary: `compile*` emits SQL,
   `tryCompile*` attempts one narrow case and returns `null` to bail, `collect*` walks the tree,
   `is*/has*/reaches*` are predicates. You can find the handler for almost anything by guessing
@@ -221,16 +224,17 @@ the codebase, so it gets its own section.
   almost every tricky branch opens with a concrete EdgeQL example and the SQLite-semantics gap it
   works around. These comments are the most trustworthy thing in the files.
 
-**What's *hard* about them** (be honest with yourself here):
+**What's _hard_ about them** (be honest with yourself here):
+
 - **They're too big to read top-to-bottom, and have no section banners.** You navigate by
   symbol search, not by reading. There is no map inside the file telling you where things are.
 - **The core functions are guard cascades, not dispatch tables.** `compileScalarSelectSQLInner`
   (~1,966 lines) is ~100 sequential `if (very-specific-IR-pattern) { return hand-built SQL }`
-  blocks. Two guards can both plausibly match a query; *which one wins depends on source order*,
+  blocks. Two guards can both plausibly match a query; _which one wins depends on source order_,
   and nothing makes that explicit. To know what a query compiles to, you mentally execute the
   guards in order.
 - **The IR is matched by string then hand-cast.** `set.expr.kind === "operator_call"` followed
-  by `set.expr as OperatorCall` — 400+ unchecked casts. TypeScript is *not* verifying these for
+  by `set.expr as OperatorCall` — 400+ unchecked casts. TypeScript is _not_ verifying these for
   you, and some structural casts (`set as { dynamicTypeName?: boolean }`) read fields the
   declared IR type doesn't even expose. Part of the true IR shape lives only in these scattered
   casts. (This is the highest-value thing you could harden later — see §8.)
@@ -248,31 +252,35 @@ the codebase, so it gets its own section.
 // EdgeQL `A EXCEPT B` / `A INTERSECT B` are MULTISET operators — they keep
 // per-element multiplicity, unlike SQLite's set-deduping EXCEPT/INTERSECT.
 // ... `{1,1,1,2,2,3} except {1,3,3,2}` → `{1,1,2}` ...
-if (sourceSet.expr.kind === "operator_call"
-  && ((sourceSet.expr as OperatorCall).operator === "except"
-    || (sourceSet.expr as OperatorCall).operator === "intersect")) {
+if (
+  sourceSet.expr.kind === "operator_call" &&
+  ((sourceSet.expr as OperatorCall).operator === "except" ||
+    (sourceSet.expr as OperatorCall).operator === "intersect")
+) {
   const setOp = sourceSet.expr as OperatorCall;
   const opArgs = orderedCallArgs(setOp.args);
   if (opArgs.length === 2) {
-    const cp = params.length;                                   // checkpoint
+    const cp = params.length; // checkpoint
     const leftRows = compileScalarSelectSQL(opArgs[0].expr, params, target, options);
-    const rightRows = leftRows ? compileScalarSelectSQL(opArgs[1].expr, params, target, options) : null;
+    const rightRows = leftRows
+      ? compileScalarSelectSQL(opArgs[1].expr, params, target, options)
+      : null;
     if (leftRows && rightRows) {
       const cmp = setOp.operator === "except" ? ">" : "<=";
       const v = quoteIdent("value");
       return `SELECT ${v} FROM (SELECT ${v}, ROW_NUMBER() OVER (PARTITION BY ${v}) AS __rn FROM (${leftRows})) lx WHERE lx.__rn ${cmp} (SELECT COUNT(*) FROM (${rightRows}) rx WHERE rx.${v} IS lx.${v})`;
     }
-    params.length = cp;                                         // rollback on bail
+    params.length = cp; // rollback on bail
   }
 }
 ```
 
-**How to survive these files:** don't read them; *query* them. Use `bin/inspect.ts` to see what
+**How to survive these files:** don't read them; _query_ them. Use `bin/inspect.ts` to see what
 a query produces, grep for the function name in the output, read that one function and its
 comment. The files reward targeted lookups, not linear reading.
 
 **Why aren't they split up?** They've been worked on (see the ADRs — dozens of focused modules
-*have* been carved out of them). The remaining cores resist splitting because they're
+_have_ been carved out of them). The remaining cores resist splitting because they're
 genuinely, irreducibly mutually-recursive: `ast_to_ir`'s builder and `gel_ir_compiler`'s engines
 each form one tangled call graph. ADRs 0040/0041 document specific cases where a split was
 attempted and rejected as a false seam. The pragmatic fix is navigation aids (this doc, the
@@ -282,7 +290,7 @@ inspect tool, the naming convention), not forcing a split.
 
 ## 5. The schema subsystem (a parallel front end)
 
-Schema definition (SDL) is parsed by a *completely separate* front end from EdgeQL queries —
+Schema definition (SDL) is parsed by a _completely separate_ front end from EdgeQL queries —
 don't confuse the two. The conversion chain:
 
 ```
@@ -297,7 +305,7 @@ SchemaSnapshot                    src/schema/schema.ts   ← the authoritative, 
 
 - **`loadSchema(source)`** (`src/schema/load.ts`) is the one-step facade for the whole chain —
   use it rather than wiring the two steps by hand (ADR 0005).
-- **`SchemaSnapshot`** (`schema.ts`) is the frozen object *every* compile and runtime read goes
+- **`SchemaSnapshot`** (`schema.ts`) is the frozen object _every_ compile and runtime read goes
   through. Key methods: `getType`, `listTypes`, `concreteTypeNamesUnder` (subtype closure),
   `qualifiedTypeName`.
 - **Physical layout** (`src/schema/physical_layout.ts`) answers "given the logical schema, what
@@ -335,7 +343,7 @@ object** (`SelectExprEvaluatorDeps`) — so the coupling between interpreter and
 and listed, not hidden (ADR 0044). If that dependency set ever grows, that's the signal a
 construct should probably lower to SQL instead.
 
-Many small, focused, *individually readable* modules support the runtime — these are the model of
+Many small, focused, _individually readable_ modules support the runtime — these are the model of
 what "good" looks like in this codebase, mostly carved out behind documented seams and pinned by
 unit tests: `row_codec.ts`, `co_iteration.ts`, `type_narrowing.ts`, `access_policy.ts`,
 `default_resolution.ts`, `conflict_detection.ts`, `dml_sql.ts`. Backends are adapter modules:
@@ -349,21 +357,21 @@ unit tests: `row_codec.ts`, `co_iteration.ts`, `type_narrowing.ts`, `access_poli
 Grade scale: **A** = read top-to-bottom and follow it · **B** = readable with modest effort ·
 **C** = readable in pieces, needs grep + context · **D/F** = needs the author.
 
-| Area | Key files | Lines | Grade | Where to start |
-|------|-----------|------:|:-----:|----------------|
-| **edgeql** (lex/parse/AST) | `tokenizer.ts`, `parser.ts`, `ast.ts`, `qlast.ts` | 13,560 | B | `parseEdgeQL` → `parseStatement()` |
-| **ir** (the data model) | `gel_ir.ts`, `pathid.ts`, `scope_builder.ts`, `model.ts` | 2,482 | B+ | `gel_ir.ts` (the `Set`/`Expr` types) |
-| **compiler/ast_to_ir** | `ast_to_ir.ts` | 10,911 | C | `compileASTToGelIR` (:10703) |
-| **compiler** (rest) | `inference.ts`, `dml_lowering.ts`, `service.ts`, `execution_strategy.ts`, `inspect.ts` | 5,345 | B (service/inspect/strategy: A) | `service.ts` then `execution_strategy.ts` |
-| **sql/gel_ir_compiler** | `gel_ir_compiler.ts` | 13,004 | C | `compileGelIRToSQL` (:129) + `sqlLoweringContext` (:83) |
-| **sql** (helpers) | `function_lowering.ts`, `optional_comparison.ts`, `existence_proof.ts`, `group_lowering.ts`, `pointer_join.ts` | 3,562 | B+ | `pointer_join.ts` (small, self-contained) |
-| **runtime/engine** | `engine.ts` | 10,777 | C | `executeQuery` (:1578) |
-| **runtime** (rest) | `evaluator.ts`, `row_codec.ts`, `access_policy.ts`, `conflict_detection.ts`, adapters | 7,588 | A–/B+ | `row_codec.ts`, `co_iteration.ts` (tiny, model code) |
-| **schema** (front end) | `sdl_adapter.ts`, `schema_tokenizer.ts`, `declarative.ts` | ~6,000 | B | `loadSchema` (`load.ts`) |
-| **schema** (model/migrate) | `schema.ts`, `physical_layout.ts`, `type_member_resolver.ts`, `migrations.ts` | ~4,000 | B (small ones: A) | `schema.ts` |
-| **schema** (persistence) | `gel_persistence.ts`, `gel_table_decoder.ts`, `schema_introspection.ts` | ~3,400 | B | `gel_table_decoder.ts` |
-| **stdlib** | `registry.ts`, `functions.ts` | 1,518 | A | `registry.ts` (reads like a config table) |
-| **client / codegen / migrate / http** | `client/index.ts`, `codegen/sql.ts`, `migrate/migrator.ts`, `http/server.ts` | ~2,800 | A/B | `client/index.ts` |
+| Area                                  | Key files                                                                                                      |  Lines |              Grade              | Where to start                                          |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -----: | :-----------------------------: | ------------------------------------------------------- |
+| **edgeql** (lex/parse/AST)            | `tokenizer.ts`, `parser.ts`, `ast.ts`, `qlast.ts`                                                              | 13,560 |                B                | `parseEdgeQL` → `parseStatement()`                      |
+| **ir** (the data model)               | `gel_ir.ts`, `pathid.ts`, `scope_builder.ts`, `model.ts`                                                       |  2,482 |               B+                | `gel_ir.ts` (the `Set`/`Expr` types)                    |
+| **compiler/ast_to_ir**                | `ast_to_ir.ts`                                                                                                 | 10,911 |                C                | `compileASTToGelIR` (:10703)                            |
+| **compiler** (rest)                   | `inference.ts`, `dml_lowering.ts`, `service.ts`, `execution_strategy.ts`, `inspect.ts`                         |  5,345 | B (service/inspect/strategy: A) | `service.ts` then `execution_strategy.ts`               |
+| **sql/gel_ir_compiler**               | `gel_ir_compiler.ts`                                                                                           | 13,004 |                C                | `compileGelIRToSQL` (:129) + `sqlLoweringContext` (:83) |
+| **sql** (helpers)                     | `function_lowering.ts`, `optional_comparison.ts`, `existence_proof.ts`, `group_lowering.ts`, `pointer_join.ts` |  3,562 |               B+                | `pointer_join.ts` (small, self-contained)               |
+| **runtime/engine**                    | `engine.ts`                                                                                                    | 10,777 |                C                | `executeQuery` (:1578)                                  |
+| **runtime** (rest)                    | `evaluator.ts`, `row_codec.ts`, `access_policy.ts`, `conflict_detection.ts`, adapters                          |  7,588 |              A–/B+              | `row_codec.ts`, `co_iteration.ts` (tiny, model code)    |
+| **schema** (front end)                | `sdl_adapter.ts`, `schema_tokenizer.ts`, `declarative.ts`                                                      | ~6,000 |                B                | `loadSchema` (`load.ts`)                                |
+| **schema** (model/migrate)            | `schema.ts`, `physical_layout.ts`, `type_member_resolver.ts`, `migrations.ts`                                  | ~4,000 |        B (small ones: A)        | `schema.ts`                                             |
+| **schema** (persistence)              | `gel_persistence.ts`, `gel_table_decoder.ts`, `schema_introspection.ts`                                        | ~3,400 |                B                | `gel_table_decoder.ts`                                  |
+| **stdlib**                            | `registry.ts`, `functions.ts`                                                                                  |  1,518 |                A                | `registry.ts` (reads like a config table)               |
+| **client / codegen / migrate / http** | `client/index.ts`, `codegen/sql.ts`, `migrate/migrator.ts`, `http/server.ts`                                   | ~2,800 |               A/B               | `client/index.ts`                                       |
 
 > `src/codegen/generated/schema_model.ts` (3,535 lines) is **generated output**, not
 > hand-written — don't read it; regenerate it with `npm run codegen:schema-model`.
@@ -374,20 +382,21 @@ Grade scale: **A** = read top-to-bottom and follow it · **B** = readable with m
 
 **Mostly yes, with four real hazards. Overall grade: B.**
 
-You *can* understand this codebase without an AI assistant — but how hard it is depends entirely
+You _can_ understand this codebase without an AI assistant — but how hard it is depends entirely
 on which part you're in:
 
 - **The small modules (≈85% of the files, ≈55% of the lines) are genuinely good.** Focused,
   well-named, well-commented, many deliberately carved out behind documented seams and pinned by
-  tests. `service.ts` is a model: every non-obvious line has a *why*-comment. The existence of
+  tests. `service.ts` is a model: every non-obvious line has a _why_-comment. The existence of
   **63 ADRs** and a maintained `CONTEXT.md` is strong evidence of sustained design discipline —
   better documentation than most professional codebases have.
-- **The four giant files (≈45% of the lines) are the problem.** They're *micro*-readable (good
-  names, dense comments) but *macro*-hard: you navigate them by grep, not by reading, because
+- **The four giant files (≈45% of the lines) are the problem.** They're _micro_-readable (good
+  names, dense comments) but _macro_-hard: you navigate them by grep, not by reading, because
   they're long guard-cascades and mutually-recursive builders with no internal map. You will
   always spend real effort in `ast_to_ir.ts` and `gel_ir_compiler.ts`.
 
 **What makes it survivable without an AI:**
+
 1. **`bin/inspect.ts`** — dumps AST/IR/SQL/facts for any query. Your definitive
    "what does this do?" tool (§3).
 2. **The naming convention** — `compile*` / `tryCompile*` / `collect*` / `is*` lets you find
@@ -395,14 +404,15 @@ on which part you're in:
 3. **The why-comments** — anchored to concrete EdgeQL examples, right at the hard branches.
 4. **`CONTEXT.md`** (vocabulary) + **`docs/adr/`** (rationale) + **this file** (the map).
 
-**If you want to make it *more* readable later** (highest value first):
+**If you want to make it _more_ readable later** (highest value first):
+
 1. **Turn the IR into a real discriminated union** so `set.expr.kind === "..."` narrows the type
    automatically and the 400+ hand-casts in `gel_ir_compiler.ts` disappear. This is the single
    biggest correctness-and-readability win, and it's the kind of large mechanical change that's
    well-suited to either a careful manual pass or an AI session while you still have one.
 2. **Add section-banner comments** inside the four big files (the file-region maps already exist
    in your head and in this doc's §4 — write them into the files as `// ===== SHAPE PROJECTION
-   =====` dividers).
+=====` dividers).
 3. **Keep option-bag semantics documented** (`isWithBinding`, `groupRowProjection`) where their
    types are defined, and keep generic path/provider state inside `Relation`.
 
@@ -419,4 +429,5 @@ codebase is out of control.
 - **"What does query Z compile to?"** → `npx tsx bin/inspect.ts sql "Z" --schema <name>`
 - **"How do I run / build / test this?"** → `README.md`
 </content>
+
 </invoke>

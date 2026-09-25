@@ -1,7 +1,7 @@
 # Extract function-call dispatch into runtime/function_dispatch.ts
 
-The round-10 review's candidate #3 ("worth exploring", with the caution *"verify
-the dep set stays at ~3 before committing, or the seam reaches too deep"*):
+The round-10 review's candidate #3 ("worth exploring", with the caution _"verify
+the dep set stays at ~3 before committing, or the seam reaches too deep"_):
 engine.ts held the runtime function-call machinery — stdlib lookup, user-function
 overload resolution (`resolveUserFunctionOverload` + `inferStaticArgType` /
 `runtimeArgTypeName` / `paramAcceptsArgType`), argument binding (`bindFunctionArgs`),
@@ -32,7 +32,7 @@ factory (TDZ, as with `globalsDeps`). Two orphaned engine imports
 
 **Scoped out, deliberately:** the AST-level **inline**-DML-UDF expansion helpers
 (`callArgToExpr`, `trivialUdfBodyExpr`, `buildUdfParamSubstitutions`,
-`substituteParamRefs`) are a *different* concern — rewriting the AST to splice a
+`substituteParamRefs`) are a _different_ concern — rewriting the AST to splice a
 DML-bodied UDF call inline (`expandInlineDmlFunctionCalls`), not runtime
 dispatch — and stay in engine.ts. The review's "UDF dispatch" framing lumped
 them together; they are not part of this seam.

@@ -31,7 +31,10 @@ const RULES: CategoryRule[] = [
   { category: "GROUP", test: /\bGROUP\s+[A-Za-z_]/ },
   // `multirange(...)` always unsupported. `range(...)` is partly OK in
   // isolation but range comparisons/contains/unpack are not.
-  { category: "Range", test: /\b(?:multirange|range_unpack|range_contains|range_get_lower|range_get_upper)\s*\(/i },
+  {
+    category: "Range",
+    test: /\b(?:multirange|range_unpack|range_contains|range_get_lower|range_get_upper)\s*\(/i,
+  },
   { category: "Range", test: /\bmultirange\b|\brange\s*::/i },
   // `<decimal>` cast: SQLite has no native decimal precision.
   { category: "Decimal", test: /<\s*decimal\s*>/i },

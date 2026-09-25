@@ -18,7 +18,8 @@ const ROOT = path.resolve(__dirname, "..");
 const ITER = parseInt(process.argv[2] ?? "200", 10);
 
 const { openSQLite, materializeSchema } = await import(path.join(ROOT, "src/runtime/database.ts"));
-const { ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } = await import(path.join(ROOT, "src/schema/gel_persistence.ts"));
+const { ensureGelSchemaTables, serializeSchemaToGelTables, serializeSchemaToInstdata } =
+  await import(path.join(ROOT, "src/schema/gel_persistence.ts"));
 const { executeQuery, executeScript } = await import(path.join(ROOT, "src/runtime/engine.ts"));
 const { schemaSnapshotFromDeclarative } = await import(path.join(ROOT, "src/schema/uiSchema.ts"));
 const { parseDeclarativeSchema } = await import(path.join(ROOT, "src/schema/sdl_adapter.ts"));
@@ -43,9 +44,14 @@ const makeHarness = (schemaName, setupName) => {
 const instrument = (db) => {
   let count = 0;
   const orig = db.prepare.bind(db);
-  db.prepare = (sql) => { count += 1; return orig(sql); };
+  db.prepare = (sql) => {
+    count += 1;
+    return orig(sql);
+  };
   return {
-    reset: () => { count = 0; },
+    reset: () => {
+      count = 0;
+    },
     count: () => count,
   };
 };
@@ -85,35 +91,45 @@ const results = [];
 // --- cards (links / backlinks / aggregates / ORDER BY) ---
 const cards = makeHarness("cards", "cards_setup");
 
-results.push(bench({
-  label: "L7867 nested multi-link {deck: {…}}",
-  harness: cards,
-  query: `SELECT User { name, deck: { name, cost } }`,
-}));
+results.push(
+  bench({
+    label: "L7867 nested multi-link {deck: {…}}",
+    harness: cards,
+    query: `SELECT User { name, deck: { name, cost } }`,
+  }),
+);
 
-results.push(bench({
-  label: "L7903 backlink {owners: {…}}",
-  harness: cards,
-  query: `SELECT Card { name, owners: { name } }`,
-}));
+results.push(
+  bench({
+    label: "L7903 backlink {owners: {…}}",
+    harness: cards,
+    query: `SELECT Card { name, owners: { name } }`,
+  }),
+);
 
-results.push(bench({
-  label: "L7768 link_aggregate sum(.deck.cost)",
-  harness: cards,
-  query: `SELECT User { name, deck_cost := sum(.deck.cost) }`,
-}));
+results.push(
+  bench({
+    label: "L7768 link_aggregate sum(.deck.cost)",
+    harness: cards,
+    query: `SELECT User { name, deck_cost := sum(.deck.cost) }`,
+  }),
+);
 
-results.push(bench({
-  label: "L10791 select_expr ORDER BY",
-  harness: cards,
-  query: `SELECT Card.cost ORDER BY Card.cost DESC`,
-}));
+results.push(
+  bench({
+    label: "L10791 select_expr ORDER BY",
+    harness: cards,
+    query: `SELECT Card.cost ORDER BY Card.cost DESC`,
+  }),
+);
 
-results.push(bench({
-  label: "(control) SELECT Card { name }",
-  harness: cards,
-  query: `SELECT Card { name }`,
-}));
+results.push(
+  bench({
+    label: "(control) SELECT Card { name }",
+    harness: cards,
+    query: `SELECT Card { name }`,
+  }),
+);
 
 // L8161 (access-policy) is covered by the existing edgeql_select policy
 // tests; the SDL adapter in this branch doesn't parse `access policy ...`

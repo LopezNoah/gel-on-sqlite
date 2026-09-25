@@ -27,9 +27,7 @@ export class AsyncSchemaLoadError extends Error {
   }
 }
 
-export const loadSchemaAsync = async (
-  db: AsyncRuntimeDatabaseAdapter,
-): Promise<SchemaSnapshot> => {
+export const loadSchemaAsync = async (db: AsyncRuntimeDatabaseAdapter): Promise<SchemaSnapshot> => {
   const rows = await db.prepare(INSTDATA_SQL).all("schema");
 
   // A synchronous facade over the single prefetched row. Structurally this is

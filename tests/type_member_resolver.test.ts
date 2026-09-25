@@ -14,7 +14,9 @@ import type { TypeMember } from "../src/schema/declarative.js";
 // adding `since` while the base carries `note`).
 const schemaDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "schemas");
 const issuesSrc = fs.readFileSync(path.join(schemaDir, "issues.esdl"), "utf8");
-const schema = parseDeclarativeSchema(`module default {\n${issuesSrc}\n}`, { legacySyntaxCompat: true });
+const schema = parseDeclarativeSchema(`module default {\n${issuesSrc}\n}`, {
+  legacySyntaxCompat: true,
+});
 const registry = new AnnotationRegistry(schema.abstractAnnotations ?? []);
 
 const makeResolver = () => new TypeMemberResolver(schema.types, registry);
@@ -47,7 +49,9 @@ describe("TypeMemberResolver", () => {
 
   it("merges an overloaded property without duplicating it, keeping the added constraint", () => {
     // Dictionary overloads Named.name, adding `delegated constraint exclusive`.
-    const nameMembers = makeResolver().resolveMembers(decl("Dictionary")).filter((m) => m.name === "name");
+    const nameMembers = makeResolver()
+      .resolveMembers(decl("Dictionary"))
+      .filter((m) => m.name === "name");
     expect(nameMembers).toHaveLength(1);
     const nameMember = nameMembers[0];
     expect(nameMember.kind).toBe("property");
@@ -58,7 +62,9 @@ describe("TypeMemberResolver", () => {
 
   it("merges link properties from an overloaded link (overload adds, base preserved)", () => {
     // Issue overloads Owned.owner adding `since`; Owned.owner already has `note`.
-    const owner = makeResolver().resolveMembers(decl("Issue")).find((m) => m.name === "owner");
+    const owner = makeResolver()
+      .resolveMembers(decl("Issue"))
+      .find((m) => m.name === "owner");
     expect(owner?.kind).toBe("link");
     if (owner && owner.kind === "link") {
       const propNames = owner.properties.map((p) => p.name);

@@ -42,12 +42,18 @@ const mkPtr = (name: string, direction?: string): Ptr => ({
   name,
   ...(direction ? { direction } : {}),
 });
-const mkTypeIntersection = (type: QlTypeExpr): TypeIntersection => ({ __kind__: "TypeIntersection", type });
+const mkTypeIntersection = (type: QlTypeExpr): TypeIntersection => ({
+  __kind__: "TypeIntersection",
+  type,
+});
 const mkSplat = (depth: number): Splat => ({ __kind__: "Splat", depth });
 // A link-property step (`@prop`). Gel models this as a Ptr with `type: "property"`.
 const mkPropPtr = (name: string): Ptr => ({ __kind__: "Ptr", name, type: "property" });
 
-const qlTypeName = (name: string): TypeName => ({ __kind__: "TypeName", maintype: mkObjectRef(name) });
+const qlTypeName = (name: string): TypeName => ({
+  __kind__: "TypeName",
+  maintype: mkObjectRef(name),
+});
 
 // The path slice only needs the simple `type_name` case for `[IS T]`; type
 // unions/intersections inside an intersection step are rare and deferred.
@@ -63,7 +69,10 @@ const pathStepToQl = (step: AstPathStep): QlPathStep[] => {
       // ast.ts folds `.foo[IS T]` onto the ptr step via typeFilter/typeFilterExpr;
       // qlast splits it into a Ptr followed by a TypeIntersection.
       if (step.typeFilter || step.typeFilterExpr) {
-        return [ptr, mkTypeIntersection(astTypeExprToQl(step.typeFilterExpr, step.typeFilter ?? ""))];
+        return [
+          ptr,
+          mkTypeIntersection(astTypeExprToQl(step.typeFilterExpr, step.typeFilter ?? "")),
+        ];
       }
       return [ptr];
     }
@@ -101,7 +110,9 @@ const REAL_CLAUSE_KEYS = [
 
 const isBareTypeSelect = (sel: Extract<FreeObjectExpr, { kind: "select" }>): boolean => {
   const clauses = sel.clauses ?? ({} as Record<string, unknown>);
-  const hasClauses = REAL_CLAUSE_KEYS.some((key) => (clauses as Record<string, unknown>)[key] !== undefined);
+  const hasClauses = REAL_CLAUSE_KEYS.some(
+    (key) => (clauses as Record<string, unknown>)[key] !== undefined,
+  );
   // The parser attaches an implicit `{ id }` element (origin "default") to a
   // bare type reference; any non-default element means a real projection.
   const hasExplicitShape = (sel.shape ?? []).some((el) => el.origin !== "default");
@@ -151,12 +162,12 @@ export const astPathExprToQlast = (expr: FreeObjectExpr): Path | null => {
       // Only the plain backlink form (no FILTER/ORDER BY/LIMIT/OFFSET); a real
       // FOR is not a path and returns null (caller uses the legacy compiler).
       if (
-        expr.variable === "__gel_backlink_item__"
-        && expr.body.kind === "backlink_path"
-        && !expr.filter
-        && !expr.orderBy
-        && expr.limit === undefined
-        && expr.offset === undefined
+        expr.variable === "__gel_backlink_item__" &&
+        expr.body.kind === "backlink_path" &&
+        !expr.filter &&
+        !expr.orderBy &&
+        expr.limit === undefined &&
+        expr.offset === undefined
       ) {
         const base = astPathExprToQlast(expr.iterator);
         if (!base) return null;

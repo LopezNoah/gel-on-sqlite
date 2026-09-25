@@ -863,5 +863,4 @@ describe("TestSQLQuery", () => {
   it.skip("test_sql_query_error_13 [unconverted: PostgreSQL SQL frontend not implemented in sqlite-ts]", () => {
     // No inline query string detected in the Python source; see test_sql_query.py::test_sql_query_error_13 for details.
   });
-
 });

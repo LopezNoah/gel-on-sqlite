@@ -40,11 +40,12 @@ function persistentTsTransformCache(): Plugin {
   // otherwise for debuggable failure traces. `VITEST_NO_SOURCEMAP=1|0` forces
   // it either way. The choice is folded into the cache key so the two variants
   // don't clobber each other's entries.
-  const emitSourcemap = process.env.VITEST_NO_SOURCEMAP === "1"
-    ? false
-    : process.env.VITEST_NO_SOURCEMAP === "0"
-      ? true
-      : process.env.VITEST_LOW_MEM !== "1";
+  const emitSourcemap =
+    process.env.VITEST_NO_SOURCEMAP === "1"
+      ? false
+      : process.env.VITEST_NO_SOURCEMAP === "0"
+        ? true
+        : process.env.VITEST_LOW_MEM !== "1";
 
   return {
     name: "persistent-ts-transform-cache",
@@ -55,10 +56,14 @@ function persistentTsTransformCache(): Plugin {
         return null;
       }
       const key = createHash("sha1")
-        .update(VERSION).update("\0")
-        .update(emitSourcemap ? "map" : "nomap").update("\0")
-        .update(salt).update("\0")
-        .update(file).update("\0")
+        .update(VERSION)
+        .update("\0")
+        .update(emitSourcemap ? "map" : "nomap")
+        .update("\0")
+        .update(salt)
+        .update("\0")
+        .update(file)
+        .update("\0")
         .update(code)
         .digest("hex");
       const entryPath = path.join(cacheDir, `${key}.json`);
@@ -162,7 +167,9 @@ const maxForks = process.env.VITEST_MAX_FORKS
     : Math.max(1, Math.min(cpuCount - 1, Math.floor(totalMemGB)));
 
 export default defineConfig({
-  plugins: useDist ? [resolveSrcToDist(), persistentTsTransformCache()] : [persistentTsTransformCache()],
+  plugins: useDist
+    ? [resolveSrcToDist(), persistentTsTransformCache()]
+    : [persistentTsTransformCache()],
   // Our plugin owns the TS→JS transform (and caches it); turn off vite's
   // built-in esbuild pass so it doesn't redundantly re-transform the output.
   esbuild: false,

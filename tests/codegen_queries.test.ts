@@ -35,7 +35,9 @@ describe("generateQueryClient", () => {
     expect(code).toContain("export type AllPeopleResult = {");
     expect(code).toContain("name: string;");
     expect(code).toContain("age?: number;");
-    expect(code).toContain("export function allPeople(client: Executor): Promise<AllPeopleResult[]>");
+    expect(code).toContain(
+      "export function allPeople(client: Executor): Promise<AllPeopleResult[]>",
+    );
     expect(code).toContain("return client.query<AllPeopleResult>(");
     fs.rmSync(path.dirname(dir), { recursive: true, force: true });
   });
@@ -48,7 +50,9 @@ describe("generateQueryClient", () => {
     const code = fs.readFileSync(out, "utf-8");
     expect(code).toContain("export type PersonByNameParams = {");
     expect(code).toContain("name: string;");
-    expect(code).toContain("export function personByName(client: Executor, params: PersonByNameParams)");
+    expect(code).toContain(
+      "export function personByName(client: Executor, params: PersonByNameParams)",
+    );
     expect(code).toContain("PersonByName_QUERY, params)");
     fs.rmSync(path.dirname(dir), { recursive: true, force: true });
   });
@@ -58,7 +62,9 @@ describe("generateQueryClient", () => {
     generateQueryClient({ schemaSource: SCHEMA, queriesDir: dir, outFile: out });
     const code = fs.readFileSync(out, "utf-8");
     expect(code).toContain("export type PersonCountResult = number;");
-    expect(code).toContain("export function personCount(client: Executor): Promise<PersonCountResult>");
+    expect(code).toContain(
+      "export function personCount(client: Executor): Promise<PersonCountResult>",
+    );
     expect(code).toContain("return client.queryRequiredSingle<PersonCountResult>(");
     fs.rmSync(path.dirname(dir), { recursive: true, force: true });
   });
@@ -87,7 +93,10 @@ describe("generateQueryClient", () => {
     generateQueryClient({ schemaSource: SCHEMA, queriesDir: dir, outFile: out });
 
     const mod = (await import(pathToFileURL(out).href)) as {
-      peopleByName: (c: Client, p: { name: string }) => Promise<Array<{ name: string; age?: number }>>;
+      peopleByName: (
+        c: Client,
+        p: { name: string },
+      ) => Promise<Array<{ name: string; age?: number }>>;
     };
     const client = Client.fromParts(db, schema);
     const rows = await mod.peopleByName(client, { name: "Alice" });

@@ -117,7 +117,11 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
     ensureGelSchemaTables(db);
     serializeSchemaToGelTables(db, schema);
     serializeSchemaToInstdata(db, schema);
-    for (const [name, age] of [["Alice", 30], ["Bob", 25], ["Carol", 41]] as const) {
+    for (const [name, age] of [
+      ["Alice", 30],
+      ["Bob", 25],
+      ["Carol", 41],
+    ] as const) {
       executeQuery(db, schema, `insert default::Person { name := '${name}', age := ${age} };`);
     }
     fs.writeFileSync(path.join(SMOKE_DIR, "seed.sql"), dumpSqlite(db));
@@ -168,7 +172,8 @@ describe.skipIf(!wranglerAvailable)("real local D1 integration", () => {
   // assert the D1-native result, NOT Gel parity.
   it("uses native SQLite semantics for round / datetime on real D1", async () => {
     const asyncSchema = await loadSchemaAsync(wranglerD1Adapter);
-    const run = async (q: string) => (await executeSelectAsync(wranglerD1Adapter, asyncSchema, q)).rows;
+    const run = async (q: string) =>
+      (await executeSelectAsync(wranglerD1Adapter, asyncSchema, q)).rows;
 
     // round half away from zero (Gel would give 2 via banker's rounding).
     expect(await run("select round(2.5);")).toEqual([3]);

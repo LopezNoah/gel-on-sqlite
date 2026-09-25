@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
-import {
-  assertQueryResult,
-  unorderedBag,
-  unorderedSet
-} from "./python_query_test_helpers.js";
+import { assertQueryResult, unorderedBag, unorderedSet } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLCoalesce", () => {
   let h: QueryHarness;
@@ -12,7 +8,7 @@ describe("TestEdgeQLCoalesce", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "issues",
-      setup: "issues_coalesce_setup"
+      setup: "issues_coalesce_setup",
     });
   });
 
@@ -25,25 +21,25 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "time_estimate": -1,
-            },
-            {
-              "time_estimate": -1,
-            },
-            {
-              "time_estimate": -1,
-            },
-            {
-              "time_estimate": 60,
-            },
-            {
-              "time_estimate": 90,
-            },
-            {
-              "time_estimate": 90,
-            },
-          ])
+        {
+          time_estimate: -1,
+        },
+        {
+          time_estimate: -1,
+        },
+        {
+          time_estimate: -1,
+        },
+        {
+          time_estimate: 60,
+        },
+        {
+          time_estimate: 90,
+        },
+        {
+          time_estimate: 90,
+        },
+      ]),
     );
   });
 
@@ -55,13 +51,13 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY Issue.number;
             `,
       [
-            ["1", 60],
-            ["2", 90],
-            ["3", 90],
-            ["4", -1],
-            ["5", -1],
-            ["6", -1],
-          ]
+        ["1", 60],
+        ["2", 90],
+        ["3", 90],
+        ["4", -1],
+        ["5", -1],
+        ["6", -1],
+      ],
     );
   });
 
@@ -74,7 +70,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # Therefore, the second argument to ?? will not be returned.
                 SELECT Issue.time_estimate ?? -1;
             `,
-      unorderedBag([60, 90, 90])
+      unorderedBag([60, 90, 90]),
     );
   });
 
@@ -90,7 +86,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?? -1;
             `,
-      [-1]
+      [-1],
     );
   });
 
@@ -106,7 +102,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # Therefore, the second argument to ?? will be returned.
                 SELECT I.time_estimate ?? -1;
             `,
-      [-1]
+      [-1],
     );
   });
 
@@ -117,7 +113,7 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT Issue.time_estimate ?? -1
                 FILTER NOT EXISTS Issue.time_estimate;
             `,
-      []
+      [],
     );
   });
 
@@ -131,31 +127,31 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "number": "1",
-              "has_estimate": true,
-            },
-            {
-              "number": "2",
-              "has_estimate": true,
-            },
-            {
-              "number": "3",
-              "has_estimate": true,
-            },
-            {
-              "number": "4",
-              "has_estimate": false,
-            },
-            {
-              "number": "5",
-              "has_estimate": false,
-            },
-            {
-              "number": "6",
-              "has_estimate": false,
-            },
-          ])
+        {
+          number: "1",
+          has_estimate: true,
+        },
+        {
+          number: "2",
+          has_estimate: true,
+        },
+        {
+          number: "3",
+          has_estimate: true,
+        },
+        {
+          number: "4",
+          has_estimate: false,
+        },
+        {
+          number: "5",
+          has_estimate: false,
+        },
+        {
+          number: "6",
+          has_estimate: false,
+        },
+      ]),
     );
   });
 
@@ -167,13 +163,13 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY Issue.number;
             `,
       [
-            ["1", true],
-            ["2", false],
-            ["3", false],
-            ["4", false],
-            ["5", false],
-            ["6", false],
-          ]
+        ["1", true],
+        ["2", false],
+        ["3", false],
+        ["4", false],
+        ["5", false],
+        ["6", false],
+      ],
     );
   });
 
@@ -184,14 +180,14 @@ describe("TestEdgeQLCoalesce", () => {
                 # Only values present in the graph will be selected.
                 SELECT Issue.time_estimate ?= 60;
             `,
-      unorderedBag([false, false, true])
+      unorderedBag([false, false, true]),
     );
     assertQueryResult(
       h,
       `
                 SELECT Issue.time_estimate ?= <int64>{};
             `,
-      unorderedBag([false, false, false])
+      unorderedBag([false, false, false]),
     );
   });
 
@@ -206,7 +202,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?= <int64>{};
             `,
-      [true]
+      [true],
     );
   });
 
@@ -221,7 +217,7 @@ describe("TestEdgeQLCoalesce", () => {
                           FILTER Issue.status.name = 'Open')
                 SELECT I.time_estimate ?!= <int64>{};
             `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -231,7 +227,7 @@ describe("TestEdgeQLCoalesce", () => {
                           FILTER Issue.status.name = 'Open')
                 SELECT I.time_estimate ?!= 60;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -247,45 +243,45 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY Issue.number;
             `,
       [
+        {
+          number: "1",
+          related_to: [],
+          time_estimate: 60,
+        },
+        {
+          number: "2",
+          related_to: [],
+          time_estimate: 90,
+        },
+        {
+          number: "3",
+          related_to: [],
+          time_estimate: 90,
+        },
+        {
+          number: "4",
+          related_to: [],
+          time_estimate: null,
+        },
+        {
+          number: "5",
+          related_to: [
             {
-              "number": "1",
-              "related_to": [],
-              "time_estimate": 60,
+              time_estimate: 60,
             },
+          ],
+          time_estimate: null,
+        },
+        {
+          number: "6",
+          related_to: [
             {
-              "number": "2",
-              "related_to": [],
-              "time_estimate": 90,
+              time_estimate: 90,
             },
-            {
-              "number": "3",
-              "related_to": [],
-              "time_estimate": 90,
-            },
-            {
-              "number": "4",
-              "related_to": [],
-              "time_estimate": null,
-            },
-            {
-              "number": "5",
-              "related_to": [
-                {
-                  "time_estimate": 60,
-                },
-              ],
-              "time_estimate": null,
-            },
-            {
-              "number": "6",
-              "related_to": [
-                {
-                  "time_estimate": 90,
-                },
-              ],
-              "time_estimate": null,
-            },
-          ]
+          ],
+          time_estimate: null,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -297,7 +293,7 @@ describe("TestEdgeQLCoalesce", () => {
                         <int64>Issue.number * 12
                 ORDER BY Issue.number;
             `,
-      [false, false, false, false, true, false]
+      [false, false, false, false, true, false],
     );
   });
 
@@ -310,25 +306,25 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "comp_time_estimate": [-1, -2],
-            },
-            {
-              "comp_time_estimate": [-1, -2],
-            },
-            {
-              "comp_time_estimate": [-1, -2],
-            },
-            {
-              "comp_time_estimate": [60],
-            },
-            {
-              "comp_time_estimate": [90],
-            },
-            {
-              "comp_time_estimate": [90],
-            },
-          ])
+        {
+          comp_time_estimate: [-1, -2],
+        },
+        {
+          comp_time_estimate: [-1, -2],
+        },
+        {
+          comp_time_estimate: [-1, -2],
+        },
+        {
+          comp_time_estimate: [60],
+        },
+        {
+          comp_time_estimate: [90],
+        },
+        {
+          comp_time_estimate: [90],
+        },
+      ]),
     );
   });
 
@@ -343,25 +339,25 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "te": [-1, -2],
-            },
-            {
-              "te": [-1, -2],
-            },
-            {
-              "te": [-1, -2],
-            },
-            {
-              "te": [60],
-            },
-            {
-              "te": [90],
-            },
-            {
-              "te": [90],
-            },
-          ])
+        {
+          te: [-1, -2],
+        },
+        {
+          te: [-1, -2],
+        },
+        {
+          te: [-1, -2],
+        },
+        {
+          te: [60],
+        },
+        {
+          te: [90],
+        },
+        {
+          te: [90],
+        },
+      ]),
     );
   });
 
@@ -373,16 +369,16 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY _;
             `,
       [
-            ["1", 60],
-            ["2", 90],
-            ["3", 90],
-            ["4", -2],
-            ["4", -1],
-            ["5", -2],
-            ["5", -1],
-            ["6", -2],
-            ["6", -1],
-          ]
+        ["1", 60],
+        ["2", 90],
+        ["3", 90],
+        ["4", -2],
+        ["4", -1],
+        ["5", -2],
+        ["5", -1],
+        ["6", -2],
+        ["6", -1],
+      ],
     );
   });
 
@@ -395,7 +391,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # Therefore, the second argument to ?? will not be returned.
                 SELECT Issue.time_estimate ?? {-1, -2};
             `,
-      unorderedBag([60, 90, 90])
+      unorderedBag([60, 90, 90]),
     );
   });
 
@@ -411,7 +407,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?? {-1, -2};
             `,
-      unorderedSet([-1, -2])
+      unorderedSet([-1, -2]),
     );
   });
 
@@ -427,7 +423,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # Therefore, the second argument to ?? will be returned.
                 SELECT I.time_estimate ?? {-1, -2};
             `,
-      unorderedSet([-1, -2])
+      unorderedSet([-1, -2]),
     );
   });
 
@@ -441,31 +437,31 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "number": "1",
-              "te": unorderedSet([false, true]),
-            },
-            {
-              "number": "2",
-              "te": [false, false],
-            },
-            {
-              "number": "3",
-              "te": [false, false],
-            },
-            {
-              "number": "4",
-              "te": [false, false],
-            },
-            {
-              "number": "5",
-              "te": [false, false],
-            },
-            {
-              "number": "6",
-              "te": [false, false],
-            },
-          ])
+        {
+          number: "1",
+          te: unorderedSet([false, true]),
+        },
+        {
+          number: "2",
+          te: [false, false],
+        },
+        {
+          number: "3",
+          te: [false, false],
+        },
+        {
+          number: "4",
+          te: [false, false],
+        },
+        {
+          number: "5",
+          te: [false, false],
+        },
+        {
+          number: "6",
+          te: [false, false],
+        },
+      ]),
     );
   });
 
@@ -477,19 +473,19 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY _;
             `,
       [
-            ["1", false],
-            ["1", true],
-            ["2", false],
-            ["2", true],
-            ["3", false],
-            ["3", true],
-            ["4", false],
-            ["4", false],
-            ["5", false],
-            ["5", false],
-            ["6", false],
-            ["6", false],
-          ]
+        ["1", false],
+        ["1", true],
+        ["2", false],
+        ["2", true],
+        ["3", false],
+        ["3", true],
+        ["4", false],
+        ["4", false],
+        ["5", false],
+        ["5", false],
+        ["6", false],
+        ["6", false],
+      ],
     );
   });
 
@@ -500,7 +496,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # Only values present in the graph will be selected.
                 SELECT Issue.time_estimate ?= {60, 30};
             `,
-      unorderedBag([false, false, false, false, false, true])
+      unorderedBag([false, false, false, false, false, true]),
     );
   });
 
@@ -515,7 +511,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?!= {-1, -2};
             `,
-      [true, true]
+      [true, true],
     );
   });
 
@@ -530,7 +526,7 @@ describe("TestEdgeQLCoalesce", () => {
                           FILTER Issue.status.name = 'Open')
                 SELECT I.time_estimate ?= {-1, -2};
             `,
-      [false, false]
+      [false, false],
     );
   });
 
@@ -546,25 +542,25 @@ describe("TestEdgeQLCoalesce", () => {
                 } ORDER BY Issue.time_estimate;
             `,
       [
-            {
-              "time_estimate": -6,
-            },
-            {
-              "time_estimate": -5,
-            },
-            {
-              "time_estimate": -4,
-            },
-            {
-              "time_estimate": 60,
-            },
-            {
-              "time_estimate": 90,
-            },
-            {
-              "time_estimate": 90,
-            },
-          ]
+        {
+          time_estimate: -6,
+        },
+        {
+          time_estimate: -5,
+        },
+        {
+          time_estimate: -4,
+        },
+        {
+          time_estimate: 60,
+        },
+        {
+          time_estimate: 90,
+        },
+        {
+          time_estimate: 90,
+        },
+      ],
     );
   });
 
@@ -579,13 +575,13 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY Issue.number;
             `,
       [
-            ["1", 60],
-            ["2", 90],
-            ["3", 90],
-            ["4", -4],
-            ["5", -5],
-            ["6", -6],
-          ]
+        ["1", 60],
+        ["2", 90],
+        ["3", 90],
+        ["4", -4],
+        ["5", -5],
+        ["6", -6],
+      ],
     );
   });
 
@@ -599,7 +595,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # evaluated for every Issue.
                 SELECT Issue.time_estimate ?? -<int64>Issue.number;
             `,
-      unorderedBag([-6, -5, -4, 60, 90, 90])
+      unorderedBag([-6, -5, -4, 60, 90, 90]),
     );
   });
 
@@ -614,7 +610,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?? -<int64>Issue.number;
             `,
-      unorderedBag([-6, -5, -4, -3, -2, -1])
+      unorderedBag([-6, -5, -4, -3, -2, -1]),
     );
   });
 
@@ -631,7 +627,7 @@ describe("TestEdgeQLCoalesce", () => {
                           FILTER Issue.status.name = 'Open')
                 SELECT I.time_estimate ?? -<int64>I.number;
             `,
-      unorderedBag([-6, -5, -4])
+      unorderedBag([-6, -5, -4]),
     );
   });
 
@@ -647,7 +643,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # existing values of \`Issue.time_estimate\`.
                 SELECT Issue.time_estimate ?? -<int64>I2.number;
             `,
-      unorderedBag([60, 90, 90])
+      unorderedBag([60, 90, 90]),
     );
   });
 
@@ -660,7 +656,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?? -<int64>Issue.number;
             `,
-      unorderedBag([-6, -5, -4, -3, -2, -1])
+      unorderedBag([-6, -5, -4, -3, -2, -1]),
     );
   });
 
@@ -678,7 +674,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`Issue.time_estimate\`.
                 SELECT Issue.time_estimate ?? {Issue.time_estimate, -1};
             `,
-      unorderedBag([60, 90, 90])
+      unorderedBag([60, 90, 90]),
     );
   });
 
@@ -695,7 +691,7 @@ describe("TestEdgeQLCoalesce", () => {
                 ).time_estimate ?? {Issue.time_estimate, -1}
                 ORDER BY _;
             `,
-      [-1, 60, 90, 90]
+      [-1, 60, 90, 90],
     );
   });
 
@@ -711,7 +707,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`I.time_estimate\` is now a LCP
                 SELECT I.time_estimate ?? {I.time_estimate, -1};
             `,
-      [-1]
+      [-1],
     );
   });
 
@@ -725,31 +721,31 @@ describe("TestEdgeQLCoalesce", () => {
                 } ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "foo": false,
-            },
-            {
-              "number": "2",
-              "foo": false,
-            },
-            {
-              "number": "3",
-              "foo": true,
-            },
-            {
-              "number": "4",
-              "foo": false,
-            },
-            {
-              "number": "5",
-              "foo": false,
-            },
-            {
-              "number": "6",
-              "foo": false,
-            },
-          ]
+        {
+          number: "1",
+          foo: false,
+        },
+        {
+          number: "2",
+          foo: false,
+        },
+        {
+          number: "3",
+          foo: true,
+        },
+        {
+          number: "4",
+          foo: false,
+        },
+        {
+          number: "5",
+          foo: false,
+        },
+        {
+          number: "6",
+          foo: false,
+        },
+      ],
     );
   });
 
@@ -764,13 +760,13 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY Issue.number;
             `,
       [
-            ["1", true],
-            ["2", true],
-            ["3", false],
-            ["4", true],
-            ["5", true],
-            ["6", true],
-          ]
+        ["1", true],
+        ["2", true],
+        ["3", false],
+        ["4", true],
+        ["5", true],
+        ["6", true],
+      ],
     );
   });
 
@@ -784,7 +780,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # evaluated for every Issue.
                 SELECT Issue.time_estimate ?= <int64>Issue.number * 30;
             `,
-      unorderedBag([false, false, false, false, false, true])
+      unorderedBag([false, false, false, false, false, true]),
     );
   });
 
@@ -797,7 +793,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?= <int64>Issue.number;
             `,
-      unorderedBag([false, false, false, false, false, false])
+      unorderedBag([false, false, false, false, false, false]),
     );
   });
 
@@ -812,7 +808,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # being considered.
                 SELECT I.time_estimate ?!= I.time_spent_log.spent_time;
             `,
-      unorderedBag([false, false, false])
+      unorderedBag([false, false, false]),
     );
   });
 
@@ -830,25 +826,25 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT Issue.time_estimate ?= <int64>I2.number * 30;
             `,
       unorderedBag([
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            true,
-          ])
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+      ]),
     );
   });
 
@@ -870,7 +866,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?!= <int64>I2.number * 30;
             `,
-      unorderedBag([true, true, true, true, true, true])
+      unorderedBag([true, true, true, true, true, true]),
     );
   });
 
@@ -883,7 +879,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`Issue.time_estimate\`.
                 SELECT Issue.time_estimate ?= Issue.time_estimate * 2;
             `,
-      unorderedBag([false, false, false])
+      unorderedBag([false, false, false]),
     );
   });
 
@@ -898,7 +894,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_estimate ?= Issue.time_estimate * 2;
             `,
-      unorderedBag([false, false, false, true, true, true])
+      unorderedBag([false, false, false, true, true, true]),
     );
   });
 
@@ -914,7 +910,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`I.time_estimate\` is now a LCP
                 SELECT I.time_estimate ?= I.time_estimate * 2;
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -927,7 +923,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`I.time_estimate\` is now a LCP
                 SELECT I.time_estimate ?= (I.time_estimate,).0;
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -940,7 +936,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`I.time_estimate\` is now a LCP
                 SELECT (I.time_estimate,).0 ?= (I.time_estimate,).0;
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -953,7 +949,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`I.time_estimate\` is now a LCP
                 SELECT ((I.time_estimate,).0,).0 ?= (I.time_estimate,).0;
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -968,7 +964,7 @@ describe("TestEdgeQLCoalesce", () => {
                   ({I.time_estimate} = 0) ?=
                   (({I.time_estimate} = 0) = (I.time_estimate = 0));
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -981,7 +977,7 @@ describe("TestEdgeQLCoalesce", () => {
                 # \`I.time_estimate\` is now a LCP
                 SELECT {I.time_estimate} ?= (I.time_estimate,).0;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -993,7 +989,7 @@ describe("TestEdgeQLCoalesce", () => {
                     X := {Priority, Status}
                 SELECT X[IS Priority].name ?? X[IS Status].name;
             `,
-      unorderedSet(["Closed", "High", "Low", "Open"])
+      unorderedSet(["Closed", "High", "Low", "Open"]),
     );
   });
 
@@ -1005,7 +1001,7 @@ describe("TestEdgeQLCoalesce", () => {
                     X := {Priority, Status}
                 SELECT X[IS Priority].name[0] ?? X[IS Status].name;
             `,
-      unorderedSet(["Closed", "H", "L", "Open"])
+      unorderedSet(["Closed", "H", "L", "Open"]),
     );
     assertQueryResult(
       h,
@@ -1014,7 +1010,7 @@ describe("TestEdgeQLCoalesce", () => {
                     X := {Priority, Status}
                 SELECT X[IS Priority].name ?? X[IS Status].name[0];
             `,
-      unorderedSet(["C", "High", "Low", "O"])
+      unorderedSet(["C", "High", "Low", "O"]),
     );
     assertQueryResult(
       h,
@@ -1023,7 +1019,7 @@ describe("TestEdgeQLCoalesce", () => {
                     X := {Priority, Status}
                 SELECT X[IS Priority].name[0] ?? X[IS Status].name[0];
             `,
-      unorderedSet(["C", "H", "L", "O"])
+      unorderedSet(["C", "H", "L", "O"]),
     );
   });
 
@@ -1038,19 +1034,19 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "foo": "Closed",
-            },
-            {
-              "foo": "High",
-            },
-            {
-              "foo": "Low",
-            },
-            {
-              "foo": "Open",
-            },
-          ])
+        {
+          foo: "Closed",
+        },
+        {
+          foo: "High",
+        },
+        {
+          foo: "Low",
+        },
+        {
+          foo: "Open",
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1062,19 +1058,19 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "foo": "Closed",
-            },
-            {
-              "foo": "H",
-            },
-            {
-              "foo": "L",
-            },
-            {
-              "foo": "Open",
-            },
-          ])
+        {
+          foo: "Closed",
+        },
+        {
+          foo: "H",
+        },
+        {
+          foo: "L",
+        },
+        {
+          foo: "Open",
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1086,19 +1082,19 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "foo": "C",
-            },
-            {
-              "foo": "High",
-            },
-            {
-              "foo": "Low",
-            },
-            {
-              "foo": "O",
-            },
-          ])
+        {
+          foo: "C",
+        },
+        {
+          foo: "High",
+        },
+        {
+          foo: "Low",
+        },
+        {
+          foo: "O",
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1110,19 +1106,19 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       unorderedBag([
-            {
-              "foo": "C",
-            },
-            {
-              "foo": "H",
-            },
-            {
-              "foo": "L",
-            },
-            {
-              "foo": "O",
-            },
-          ])
+        {
+          foo: "C",
+        },
+        {
+          foo: "H",
+        },
+        {
+          foo: "L",
+        },
+        {
+          foo: "O",
+        },
+      ]),
     );
   });
 
@@ -1144,58 +1140,58 @@ describe("TestEdgeQLCoalesce", () => {
                 } ORDER BY Issue.number;
             `,
       [
+        {
+          number: "1",
+          time_spent_log: [
             {
-              "number": "1",
-              "time_spent_log": [
-                {
-                  "spent_time": 60,
-                },
-              ],
+              spent_time: 60,
+            },
+          ],
+        },
+        {
+          number: "2",
+          time_spent_log: [
+            {
+              spent_time: 90,
+            },
+          ],
+        },
+        {
+          number: "3",
+          time_spent_log: [
+            {
+              spent_time: 30,
             },
             {
-              "number": "2",
-              "time_spent_log": [
-                {
-                  "spent_time": 90,
-                },
-              ],
+              spent_time: 60,
             },
+          ],
+        },
+        {
+          number: "4",
+          time_spent_log: [
             {
-              "number": "3",
-              "time_spent_log": [
-                {
-                  "spent_time": 30,
-                },
-                {
-                  "spent_time": 60,
-                },
-              ],
+              spent_time: -1,
             },
+          ],
+        },
+        {
+          number: "5",
+          time_spent_log: [
             {
-              "number": "4",
-              "time_spent_log": [
-                {
-                  "spent_time": -1,
-                },
-              ],
+              spent_time: -1,
             },
+          ],
+        },
+        {
+          number: "6",
+          time_spent_log: [
             {
-              "number": "5",
-              "time_spent_log": [
-                {
-                  "spent_time": -1,
-                },
-              ],
+              spent_time: -1,
             },
-            {
-              "number": "6",
-              "time_spent_log": [
-                {
-                  "spent_time": -1,
-                },
-              ],
-            },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1211,14 +1207,14 @@ describe("TestEdgeQLCoalesce", () => {
                 ) ORDER BY x.0 THEN x.1;
             `,
       [
-            ["1", 60],
-            ["2", 90],
-            ["3", 30],
-            ["3", 60],
-            ["4", -1],
-            ["5", -1],
-            ["6", -1],
-          ]
+        ["1", 60],
+        ["2", 90],
+        ["3", 30],
+        ["3", 60],
+        ["4", -1],
+        ["5", -1],
+        ["6", -1],
+      ],
     );
   });
 
@@ -1234,19 +1230,19 @@ describe("TestEdgeQLCoalesce", () => {
                 ORDER BY x.spent_time;
             `,
       unorderedBag([
-            {
-              "spent_time": 30,
-            },
-            {
-              "spent_time": 60,
-            },
-            {
-              "spent_time": 60,
-            },
-            {
-              "spent_time": 90,
-            },
-          ])
+        {
+          spent_time: 30,
+        },
+        {
+          spent_time: 60,
+        },
+        {
+          spent_time: 60,
+        },
+        {
+          spent_time: 90,
+        },
+      ]),
     );
   });
 
@@ -1267,10 +1263,10 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       [
-            {
-              "spent_time": -1,
-            },
-          ]
+        {
+          spent_time: -1,
+        },
+      ],
     );
   });
 
@@ -1290,10 +1286,10 @@ describe("TestEdgeQLCoalesce", () => {
                 };
             `,
       [
-            {
-              "spent_time": -1,
-            },
-          ]
+        {
+          spent_time: -1,
+        },
+      ],
     );
   });
 
@@ -1309,31 +1305,31 @@ describe("TestEdgeQLCoalesce", () => {
                 } ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "log1": [true],
-            },
-            {
-              "number": "2",
-              "log1": [false],
-            },
-            {
-              "number": "3",
-              "log1": [false, false],
-            },
-            {
-              "number": "4",
-              "log1": [false],
-            },
-            {
-              "number": "5",
-              "log1": [false],
-            },
-            {
-              "number": "6",
-              "log1": [false],
-            },
-          ]
+        {
+          number: "1",
+          log1: [true],
+        },
+        {
+          number: "2",
+          log1: [false],
+        },
+        {
+          number: "3",
+          log1: [false, false],
+        },
+        {
+          number: "4",
+          log1: [false],
+        },
+        {
+          number: "5",
+          log1: [false],
+        },
+        {
+          number: "6",
+          log1: [false],
+        },
+      ],
     );
   });
 
@@ -1348,14 +1344,14 @@ describe("TestEdgeQLCoalesce", () => {
                 ) ORDER BY Issue.number;
             `,
       [
-            ["1", true],
-            ["2", false],
-            ["3", false],
-            ["3", false],
-            ["4", false],
-            ["5", false],
-            ["6", false],
-          ]
+        ["1", true],
+        ["2", false],
+        ["3", false],
+        ["3", false],
+        ["4", false],
+        ["5", false],
+        ["6", false],
+      ],
     );
   });
 
@@ -1367,7 +1363,7 @@ describe("TestEdgeQLCoalesce", () => {
                     LOG1 := (SELECT LogEntry FILTER LogEntry.body = 'Log1')
                 SELECT Issue.time_spent_log ?!= LOG1;
             `,
-      unorderedBag([false, true, true, true])
+      unorderedBag([false, true, true, true]),
     );
   });
 
@@ -1382,7 +1378,7 @@ describe("TestEdgeQLCoalesce", () => {
                     FILTER Issue.status.name = 'Open'
                 ).time_spent_log ?= DUMMY;
             `,
-      [false]
+      [false],
     );
   });
 
@@ -1398,7 +1394,7 @@ describe("TestEdgeQLCoalesce", () => {
                     )
                 SELECT I.time_spent_log ?!= DUMMY;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -1416,10 +1412,10 @@ describe("TestEdgeQLCoalesce", () => {
                     }
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -1437,10 +1433,10 @@ describe("TestEdgeQLCoalesce", () => {
                     }
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -1452,28 +1448,28 @@ describe("TestEdgeQLCoalesce", () => {
                     USING EdgeQL $$
                         SELECT b IF a = 'foo' ELSE a
                     $$;
-            `
+            `,
     );
     assertQueryResult(
       h,
       `
                 SELECT optfunc('foo', <str>{}) ?? 'N/A';
             `,
-      ["N/A"]
+      ["N/A"],
     );
     assertQueryResult(
       h,
       `
                 SELECT optfunc('foo', 'b') ?? 'N/A';
             `,
-      ["b"]
+      ["b"],
     );
     assertQueryResult(
       h,
       `
                 SELECT optfunc('a', <str>{}) ?? 'N/A';
             `,
-      ["a"]
+      ["a"],
     );
   });
 
@@ -1483,7 +1479,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT <str>Publication.id ?? <str>count(Publication)
             `,
-      ["0"]
+      ["0"],
     );
   });
 
@@ -1493,7 +1489,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT Publication.title ?? <str>count(Publication)
             `,
-      ["0"]
+      ["0"],
     );
   });
 
@@ -1503,7 +1499,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT <str>Publication.id ?= <str>count(Publication)
             `,
-      [false]
+      [false],
     );
   });
 
@@ -1513,7 +1509,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT Publication.title ?= <str>count(Publication)
             `,
-      [false]
+      [false],
     );
   });
 
@@ -1524,7 +1520,7 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT (Publication.title ?? <str>count(Publication))
                        ?? Publication.title
             `,
-      ["0"]
+      ["0"],
     );
   });
 
@@ -1535,7 +1531,7 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT (Publication.title ?= <str>count(Publication),
                         Publication)
             `,
-      []
+      [],
     );
   });
 
@@ -1546,9 +1542,7 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT (Publication.title ?= '0',
                         (Publication.title ?? <str>count(Publication)));
             `,
-      [
-            [false, "0"],
-          ]
+      [[false, "0"]],
     );
   });
 
@@ -1559,7 +1553,7 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT ("1" if Publication.title ?= "foo" else "2") ++
                        (Publication.title ?? <str>count(Publication))
             `,
-      ["20"]
+      ["20"],
     );
   });
 
@@ -1569,9 +1563,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT (Publication.title ?= "Foo", Publication.title ?= "bar")
             `,
-      [
-            [false, false],
-          ]
+      [[false, false]],
     );
   });
 
@@ -1582,9 +1574,7 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT (Publication.title++Publication.title ?= "Foo",
                         Publication.title ?= "bar")
             `,
-      [
-            [false, false],
-          ]
+      [[false, false]],
     );
   });
 
@@ -1594,9 +1584,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT (Publication.title ?= "", count(Publication))
             `,
-      [
-            [false, 0],
-          ]
+      [[false, 0]],
     );
     assertQueryResult(
       h,
@@ -1606,9 +1594,7 @@ describe("TestEdgeQLCoalesce", () => {
       // Port note: the Python source expects [[False, 0]] because in Python
       // `False == 0`, so positional tuple comparison succeeds. The actual
       // tuple values are (count=0, ?= "" =false) — preserve that here.
-      [
-            [0, false],
-          ]
+      [[0, false]],
     );
   });
 
@@ -1623,9 +1609,7 @@ describe("TestEdgeQLCoalesce", () => {
                     (Publication ?!= Publication)
                 )
             `,
-      [
-            [true, false],
-          ]
+      [[true, false]],
     );
   });
 
@@ -1635,23 +1619,19 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT (Publication ?= Publication, Publication)
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_coalesce_set_of_nonempty_01", () => {
-    h.script(
-      `INSERT Publication { title := "1" }`
-    );
-    h.script(
-      `INSERT Publication { title := "asdf" }`
-    );
+    h.script(`INSERT Publication { title := "1" }`);
+    h.script(`INSERT Publication { title := "asdf" }`);
     assertQueryResult(
       h,
       `
                 SELECT Publication.title ?= <str>count(Publication)
             `,
-      [true, false]
+      [true, false],
     );
   });
 
@@ -1661,7 +1641,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT Publication ?? Publication
             `,
-      []
+      [],
     );
   });
 
@@ -1672,7 +1652,7 @@ describe("TestEdgeQLCoalesce", () => {
                 WITH Z := (SELECT Comment FILTER .owner.name = "Yury")
                 SELECT (Z.parent ?? Z);
             `,
-      []
+      [],
     );
   });
 
@@ -1682,7 +1662,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT 'a' ?? (SELECT {'a', 'b'})
             `,
-      ["a"]
+      ["a"],
     );
   });
 
@@ -1694,7 +1674,7 @@ describe("TestEdgeQLCoalesce", () => {
                     SELECT (Issue.name ++ <str>Issue.time_estimate)) ?? 'n/a'
                 ORDER BY _;
             `,
-      ["Issue 160", "Issue 290", "Issue 390"]
+      ["Issue 160", "Issue 290", "Issue 390"],
     );
   });
 
@@ -1706,7 +1686,7 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT _ := X ?? 'n/a'
                 ORDER BY _;
             `,
-      ["Issue 160", "Issue 290", "Issue 390"]
+      ["Issue 160", "Issue 290", "Issue 390"],
     );
   });
 
@@ -1715,7 +1695,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
             CREATE FUNCTION opts(x: OPTIONAL str) -> OPTIONAL str {
                 USING (x) };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1726,10 +1706,10 @@ describe("TestEdgeQLCoalesce", () => {
                 ) ORDER BY _;
             `,
       [
-            [6, "60"],
-            [6, "90"],
-            [6, "90"],
-          ]
+        [6, "60"],
+        [6, "90"],
+        [6, "90"],
+      ],
     );
   });
 
@@ -1739,9 +1719,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT (SELECT ('no', 'no') FILTER false) ?? ('a', 'b');
             `,
-      [
-            ["a", "b"],
-          ]
+      [["a", "b"]],
     );
   });
 
@@ -1753,31 +1731,13 @@ describe("TestEdgeQLCoalesce", () => {
                              ?? ('hm', 'n/a')) ORDER BY _;
             `,
       [
-            [
-              "Issue 1",
-              ["Issue 1", "60"],
-            ],
-            [
-              "Issue 2",
-              ["Issue 2", "90"],
-            ],
-            [
-              "Issue 3",
-              ["Issue 3", "90"],
-            ],
-            [
-              "Issue 4",
-              ["hm", "n/a"],
-            ],
-            [
-              "Issue 5",
-              ["hm", "n/a"],
-            ],
-            [
-              "Issue 6",
-              ["hm", "n/a"],
-            ],
-          ]
+        ["Issue 1", ["Issue 1", "60"]],
+        ["Issue 2", ["Issue 2", "90"]],
+        ["Issue 3", ["Issue 3", "90"]],
+        ["Issue 4", ["hm", "n/a"]],
+        ["Issue 5", ["hm", "n/a"]],
+        ["Issue 6", ["hm", "n/a"]],
+      ],
     );
   });
 
@@ -1789,31 +1749,13 @@ describe("TestEdgeQLCoalesce", () => {
                              ?? (Issue.name, -1)) ORDER BY _;
             `,
       [
-            [
-              "Issue 1",
-              ["Issue 1", 60],
-            ],
-            [
-              "Issue 2",
-              ["Issue 2", 90],
-            ],
-            [
-              "Issue 3",
-              ["Issue 3", 90],
-            ],
-            [
-              "Issue 4",
-              ["Issue 4", -1],
-            ],
-            [
-              "Issue 5",
-              ["Issue 5", -1],
-            ],
-            [
-              "Issue 6",
-              ["Issue 6", -1],
-            ],
-          ]
+        ["Issue 1", ["Issue 1", 60]],
+        ["Issue 2", ["Issue 2", 90]],
+        ["Issue 3", ["Issue 3", 90]],
+        ["Issue 4", ["Issue 4", -1]],
+        ["Issue 5", ["Issue 5", -1]],
+        ["Issue 6", ["Issue 6", -1]],
+      ],
     );
   });
 
@@ -1825,13 +1767,13 @@ describe("TestEdgeQLCoalesce", () => {
                              ?? (Issue.name, -1) ORDER BY _;
             `,
       [
-            ["Issue 1", 60],
-            ["Issue 2", 90],
-            ["Issue 3", 90],
-            ["Issue 4", -1],
-            ["Issue 5", -1],
-            ["Issue 6", -1],
-          ]
+        ["Issue 1", 60],
+        ["Issue 2", 90],
+        ["Issue 3", 90],
+        ["Issue 4", -1],
+        ["Issue 5", -1],
+        ["Issue 6", -1],
+      ],
     );
   });
 
@@ -1843,10 +1785,10 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT _ := X ?? ('hm', -1) ORDER BY _;
             `,
       [
-            ["Issue 1", 60],
-            ["Issue 2", 90],
-            ["Issue 3", 90],
-          ]
+        ["Issue 1", 60],
+        ["Issue 2", 90],
+        ["Issue 3", 90],
+      ],
     );
   });
 
@@ -1856,12 +1798,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT (SELECT ((), 'no') FILTER false) ?? ((), 'b');
             `,
-      [
-            [
-              [],
-              "b",
-            ],
-          ]
+      [[[], "b"]],
     );
   });
 
@@ -1871,31 +1808,21 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT (SELECT () FILTER false) ?? {(), ()};
             `,
-      [
-            [],
-            [],
-          ]
+      [[], []],
     );
     assertQueryResult(
       h,
       `
                 SELECT (SELECT () FILTER true) ?? {(), ()};
             `,
-      [
-            [],
-          ]
+      [[]],
     );
     assertQueryResult(
       h,
       `
                 SELECT (SELECT ((), ()) FILTER true) ?? {((), ()), ((), ())}
             `,
-      [
-            [
-              [],
-              [],
-            ],
-          ]
+      [[[], []]],
     );
   });
 
@@ -1906,76 +1833,61 @@ describe("TestEdgeQLCoalesce", () => {
                 CREATE PROPERTY bar -> tuple<int64, int64>;
                 CREATE PROPERTY baz -> tuple<tuple<int64, int64>, str>;
              };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT Foo.bar ?? (1, 2)
             `,
-      [
-            [1, 2],
-          ]
+      [[1, 2]],
     );
     assertQueryResult(
       h,
       `
                 SELECT Foo.bar UNION (1, 2)
             `,
-      [
-            [1, 2],
-          ]
+      [[1, 2]],
     );
     assertQueryResult(
       h,
       `
                 SELECT (Foo.bar ?? (1, 2)).0
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `
                 SELECT (Foo.bar UNION (1, 2)).0
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `
                 SELECT (Foo.baz ?? ((1, 2), 'huh')).0.1
             `,
-      [2]
+      [2],
     );
     h.script(
       `
             INSERT Foo { bar := (3, 4), baz := ((3, 4), 'test') }
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT ([Foo.bar], array_agg(Foo.bar));
             `,
-      [
-            [
-              [
-                [3, 4],
-              ],
-              [
-                [3, 4],
-              ],
-            ],
-          ]
+      [[[[3, 4]], [[3, 4]]]],
     );
     assertQueryResult(
       h,
       `
                 SELECT Foo.bar ?? (1, 2)
             `,
-      [
-            [3, 4],
-          ]
+      [[3, 4]],
     );
     assertQueryResult(
       h,
@@ -1983,30 +1895,30 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT _ := Foo.bar UNION (1, 2) ORDER BY _;
             `,
       [
-            [1, 2],
-            [3, 4],
-          ]
+        [1, 2],
+        [3, 4],
+      ],
     );
     assertQueryResult(
       h,
       `
                 SELECT (Foo.bar ?? (1, 2)).1
             `,
-      [4]
+      [4],
     );
     assertQueryResult(
       h,
       `
                 SELECT _ := (Foo.bar UNION (1, 2)).0 ORDER BY _;
             `,
-      [1, 3]
+      [1, 3],
     );
     assertQueryResult(
       h,
       `
                 SELECT (Foo.baz ?? ((1, 2), 'huh')).0.1
             `,
-      [4]
+      [4],
     );
     assertQueryResult(
       h,
@@ -2015,23 +1927,9 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT (W, W.1, W.0.0) ORDER BY W;
             `,
       [
-            [
-              [
-                [1, 2],
-                "huh",
-              ],
-              "huh",
-              1,
-            ],
-            [
-              [
-                [3, 4],
-                "test",
-              ],
-              "test",
-              3,
-            ],
-          ]
+        [[[1, 2], "huh"], "huh", 1],
+        [[[3, 4], "test"], "test", 3],
+      ],
     );
   });
 
@@ -2041,7 +1939,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT _ := ([(1,2)][0] UNION (3,4)).1 ORDER BY _;
             `,
-      [2, 4]
+      [2, 4],
     );
   });
 
@@ -2051,7 +1949,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT Issue.name ++ opt_test(false, <str>Issue.time_estimate)
             `,
-      unorderedSet(["Issue 160", "Issue 290", "Issue 390", "Issue 4", "Issue 5", "Issue 6"])
+      unorderedSet(["Issue 160", "Issue 290", "Issue 390", "Issue 4", "Issue 5", "Issue 6"]),
     );
     assertQueryResult(
       h,
@@ -2059,27 +1957,27 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT (Issue.name, opt_test(false, Issue.time_estimate))
             `,
       unorderedSet([
-            ["Issue 1", 60],
-            ["Issue 2", 90],
-            ["Issue 3", 90],
-            ["Issue 4", -1],
-            ["Issue 5", -1],
-            ["Issue 6", -1],
-          ])
+        ["Issue 1", 60],
+        ["Issue 2", 90],
+        ["Issue 3", 90],
+        ["Issue 4", -1],
+        ["Issue 5", -1],
+        ["Issue 6", -1],
+      ]),
     );
     assertQueryResult(
       h,
       `
                 SELECT opt_test(true, <str>Issue.time_estimate)
             `,
-      unorderedBag(["60", "90", "90"])
+      unorderedBag(["60", "90", "90"]),
     );
     assertQueryResult(
       h,
       `
                 SELECT opt_test(true, Issue.time_estimate)
             `,
-      unorderedBag([60, 90, 90])
+      unorderedBag([60, 90, 90]),
     );
     assertQueryResult(
       h,
@@ -2087,25 +1985,25 @@ describe("TestEdgeQLCoalesce", () => {
                 select Issue { z := opt_test(true, .time_estimate) }
             `,
       unorderedBag([
-            {
-              "z": 60,
-            },
-            {
-              "z": 90,
-            },
-            {
-              "z": 90,
-            },
-            {
-              "z": -1,
-            },
-            {
-              "z": -1,
-            },
-            {
-              "z": -1,
-            },
-          ])
+        {
+          z: 60,
+        },
+        {
+          z: 90,
+        },
+        {
+          z: 90,
+        },
+        {
+          z: -1,
+        },
+        {
+          z: -1,
+        },
+        {
+          z: -1,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -2113,25 +2011,25 @@ describe("TestEdgeQLCoalesce", () => {
                 select Issue { z := opt_test(true, .time_estimate, 1) }
             `,
       unorderedBag([
-            {
-              "z": 1,
-            },
-            {
-              "z": 1,
-            },
-            {
-              "z": 1,
-            },
-            {
-              "z": 1,
-            },
-            {
-              "z": 1,
-            },
-            {
-              "z": 1,
-            },
-          ])
+        {
+          z: 1,
+        },
+        {
+          z: 1,
+        },
+        {
+          z: 1,
+        },
+        {
+          z: 1,
+        },
+        {
+          z: 1,
+        },
+        {
+          z: 1,
+        },
+      ]),
     );
   });
 
@@ -2141,7 +2039,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
                 SELECT Issue.name ++ opt_test(0, <str>Issue.time_estimate)
             `,
-      unorderedSet(["Issue 160", "Issue 290", "Issue 390"])
+      unorderedSet(["Issue 160", "Issue 290", "Issue 390"]),
     );
     assertQueryResult(
       h,
@@ -2149,24 +2047,24 @@ describe("TestEdgeQLCoalesce", () => {
                 SELECT (Issue.name, opt_test(0, Issue.time_estimate))
             `,
       unorderedSet([
-            ["Issue 1", 60],
-            ["Issue 2", 90],
-            ["Issue 3", 90],
-          ])
+        ["Issue 1", 60],
+        ["Issue 2", 90],
+        ["Issue 3", 90],
+      ]),
     );
     assertQueryResult(
       h,
       `
                 SELECT opt_test(0, <str>Issue.time_estimate)
             `,
-      unorderedBag(["60", "90", "90"])
+      unorderedBag(["60", "90", "90"]),
     );
     assertQueryResult(
       h,
       `
                 SELECT opt_test(0, Issue.time_estimate)
             `,
-      unorderedBag([60, 90, 90])
+      unorderedBag([60, 90, 90]),
     );
     assertQueryResult(
       h,
@@ -2174,25 +2072,25 @@ describe("TestEdgeQLCoalesce", () => {
                 select Issue { z := opt_test(0, .time_estimate) }
             `,
       unorderedBag([
-            {
-              "z": 60,
-            },
-            {
-              "z": 90,
-            },
-            {
-              "z": 90,
-            },
-            {
-              "z": null,
-            },
-            {
-              "z": null,
-            },
-            {
-              "z": null,
-            },
-          ])
+        {
+          z: 60,
+        },
+        {
+          z: 90,
+        },
+        {
+          z: 90,
+        },
+        {
+          z: null,
+        },
+        {
+          z: null,
+        },
+        {
+          z: null,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -2200,25 +2098,25 @@ describe("TestEdgeQLCoalesce", () => {
                 select Issue { z := opt_test(0, .time_estimate, 1) }
             `,
       unorderedBag([
-            {
-              "z": 1,
-            },
-            {
-              "z": 1,
-            },
-            {
-              "z": 1,
-            },
-            {
-              "z": null,
-            },
-            {
-              "z": null,
-            },
-            {
-              "z": null,
-            },
-          ])
+        {
+          z: 1,
+        },
+        {
+          z: 1,
+        },
+        {
+          z: 1,
+        },
+        {
+          z: null,
+        },
+        {
+          z: null,
+        },
+        {
+          z: null,
+        },
+      ]),
     );
   });
 
@@ -2236,7 +2134,7 @@ describe("TestEdgeQLCoalesce", () => {
             insert Noob {
               secondary := (insert Content)
             };
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -2246,17 +2144,17 @@ describe("TestEdgeQLCoalesce", () => {
             };
             `,
       [
-            {
-              "coalesce": {
-                "id": "str",
-              },
-            },
-            {
-              "coalesce": {
-                "id": "str",
-              },
-            },
-          ]
+        {
+          coalesce: {
+            id: "str",
+          },
+        },
+        {
+          coalesce: {
+            id: "str",
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2266,17 +2164,17 @@ describe("TestEdgeQLCoalesce", () => {
             };
             `,
       [
-            {
-              "coalesce": {
-                "id": "str",
-              },
-            },
-            {
-              "coalesce": {
-                "id": "str",
-              },
-            },
-          ]
+        {
+          coalesce: {
+            id: "str",
+          },
+        },
+        {
+          coalesce: {
+            id: "str",
+          },
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2286,17 +2184,17 @@ describe("TestEdgeQLCoalesce", () => {
             };
             `,
       [
-            {
-              "coalesce": {
-                "id": "str",
-              },
-            },
-            {
-              "coalesce": {
-                "id": "str",
-              },
-            },
-          ]
+        {
+          coalesce: {
+            id: "str",
+          },
+        },
+        {
+          coalesce: {
+            id: "str",
+          },
+        },
+      ],
     );
   });
 
@@ -2308,7 +2206,7 @@ describe("TestEdgeQLCoalesce", () => {
                     owner := assert_single(User),
                     issue := (select Issue limit 1),
                 };
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -2321,12 +2219,7 @@ describe("TestEdgeQLCoalesce", () => {
               )),
             );
             `,
-      [
-            [
-              {},
-              [false, "a"],
-            ],
-          ]
+      [[{}, [false, "a"]]],
     );
     assertQueryResult(
       h,
@@ -2339,7 +2232,7 @@ describe("TestEdgeQLCoalesce", () => {
                   )),
                 ) filter .1;
             `,
-      []
+      [],
     );
   });
 
@@ -2350,7 +2243,7 @@ describe("TestEdgeQLCoalesce", () => {
                 with x := array_unpack(<array<Issue>>[])
                 select (x.name ?= x.body);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -2359,7 +2252,7 @@ describe("TestEdgeQLCoalesce", () => {
                 select
                     (<str>user.id ?? "") ++ <str>(exists user);
             `,
-      ["false"]
+      ["false"],
     );
   });
 
@@ -2369,14 +2262,14 @@ describe("TestEdgeQLCoalesce", () => {
             create function test(x: optional Issue) -> bool using (
                 (x.name ?= x.body)
             )
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 select test(<Issue>{})
             `,
-      [true]
+      [true],
     );
   });
 
@@ -2386,9 +2279,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
             select <array<str>>to_json('null') ?? [];
             `,
-      [
-            [],
-          ]
+      [[]],
     );
   });
 
@@ -2398,9 +2289,7 @@ describe("TestEdgeQLCoalesce", () => {
       `
             select {<array<str>>to_json('null')} ?? [];
             `,
-      [
-            [],
-          ]
+      [[]],
     );
   });
 
@@ -2412,7 +2301,7 @@ describe("TestEdgeQLCoalesce", () => {
               range_element_type_id := [is Range].element_type.id
                   ?? [is MultiRange].element_type.id,
             };
-        `
+        `,
     );
   });
 });

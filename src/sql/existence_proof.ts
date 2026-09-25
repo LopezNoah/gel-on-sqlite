@@ -78,13 +78,19 @@ const tryCompileObjectIdentityExistsSQL = (
         // First step has no prior FROM: seed it with the junction-and-target
         // join and correlate to the previous alias via WHERE.
         if (link.direction === "inbound") {
-          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
-            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-          whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`);
+          fromSql =
+            `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}` +
+            ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          whereSqls.push(
+            `${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`,
+          );
         } else {
-          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
-            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-          whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
+          fromSql =
+            `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}` +
+            ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+          whereSqls.push(
+            `${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`,
+          );
         }
       } else {
         fromSql += pointerStepJoinSql({
@@ -101,9 +107,11 @@ const tryCompileObjectIdentityExistsSQL = (
       const inlineColumn = `${link.ptrref.shortName}_id`;
       if (!fromSql) {
         fromSql = targetSource;
-        whereSqls.push(link.direction === "inbound"
-          ? `${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`
-          : `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`);
+        whereSqls.push(
+          link.direction === "inbound"
+            ? `${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`
+            : `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`,
+        );
       } else {
         fromSql += pointerStepJoinSql({
           usesLinkTable: false,
@@ -171,9 +179,14 @@ export const tryCompileMultiStepPointerExistsSQL = (
   deps: SqlLoweringContext,
 ): string | null => {
   const {
-    extractScalarPointerPath, compileValueSetSQL, pointerPathAliasColumns,
-    isTrulyPolymorphicTypeRef, compilePolymorphicSource, shouldUseLinkTable,
-    linkTableNameForPointer, columnForPointer,
+    extractScalarPointerPath,
+    compileValueSetSQL,
+    pointerPathAliasColumns,
+    isTrulyPolymorphicTypeRef,
+    compilePolymorphicSource,
+    shouldUseLinkTable,
+    linkTableNameForPointer,
+    columnForPointer,
   } = deps;
   // Reach through `(set = outer-root)` object-identity comparisons by
   // tolerating an object-typed leaf when the chain contains a backlink and
@@ -184,19 +197,24 @@ export const tryCompileMultiStepPointerExistsSQL = (
   // only widen here when an inbound step is in the mix — otherwise compares
   // like `Text[IS Owned].owner = User` would lose the FILTER's correlation
   // with the outer User row.
-  const objectPath = leftSet.expr.kind === "pointer"
-    && rightSet.expr.kind === "type_root"
-    && (op === "=" || op === "!=")
-    ? extractObjectPointerPath(leftSet)
-    : null;
+  const objectPath =
+    leftSet.expr.kind === "pointer" &&
+    rightSet.expr.kind === "type_root" &&
+    (op === "=" || op === "!=")
+      ? extractObjectPointerPath(leftSet)
+      : null;
   // Re-check the op so TS narrows it to the identity-comparison subset that
   // `objectPath` being non-null already implies.
   if (objectPath && (op === "=" || op === "!=")) {
-    const chainHasBacklink = [...objectPath.links, objectPath.leaf]
-      .some((link) => link.direction === "inbound");
+    const chainHasBacklink = [...objectPath.links, objectPath.leaf].some(
+      (link) => link.direction === "inbound",
+    );
     const rightTypeRef = (rightSet.expr as TypeRoot).typeref;
-    if (chainHasBacklink
-        && (rightTypeRef.id === objectPath.leaf.ptrref.outTarget.id || rightTypeRef.id === objectPath.root.typeref.id)) {
+    if (
+      chainHasBacklink &&
+      (rightTypeRef.id === objectPath.leaf.ptrref.outTarget.id ||
+        rightTypeRef.id === objectPath.root.typeref.id)
+    ) {
       return tryCompileObjectIdentityExistsSQL(objectPath, op, sourceAlias, params, options, deps);
     }
   }
@@ -218,8 +236,9 @@ export const tryCompileMultiStepPointerExistsSQL = (
   // branch's storage table. Treat that column as an inline FK so the chain
   // doesn't try to join one canonical link table that doesn't fit all
   // branches.
-  const rootIsPolymorphic = path.root.expr.kind === "type_root"
-    && isTrulyPolymorphicTypeRef((path.root.expr as TypeRoot).typeref);
+  const rootIsPolymorphic =
+    path.root.expr.kind === "type_root" &&
+    isTrulyPolymorphicTypeRef((path.root.expr as TypeRoot).typeref);
   let fromSql = "";
   const whereSqls: string[] = [];
   let previousAlias = sourceAlias;
@@ -227,14 +246,21 @@ export const tryCompileMultiStepPointerExistsSQL = (
   path.links.forEach((link, index) => {
     const nextAlias = `lt${index}`;
     const targetType = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
-    const targetSource = compilePolymorphicSource(targetType, false, nextAlias, aliasColumns[index + 1], options);
+    const targetSource = compilePolymorphicSource(
+      targetType,
+      false,
+      nextAlias,
+      aliasColumns[index + 1],
+      options,
+    );
     const isFirstStepFromPolyRoot = index === 0 && rootIsPolymorphic;
-    const isSingleLink = link.ptrref.outCardinality === "one"
-      || link.ptrref.outCardinality === "at_most_one";
-    const useProjectedFK = shouldUseLinkTable(link)
-      && link.direction === "outbound"
-      && isSingleLink
-      && isFirstStepFromPolyRoot;
+    const isSingleLink =
+      link.ptrref.outCardinality === "one" || link.ptrref.outCardinality === "at_most_one";
+    const useProjectedFK =
+      shouldUseLinkTable(link) &&
+      link.direction === "outbound" &&
+      isSingleLink &&
+      isFirstStepFromPolyRoot;
     if (useProjectedFK) {
       const inlineColumn = `${link.ptrref.shortName}_id`;
       const joinSql = `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
@@ -251,13 +277,19 @@ export const tryCompileMultiStepPointerExistsSQL = (
         // First step has no prior FROM: seed it with the junction-and-target
         // join and correlate to the previous alias via WHERE.
         if (link.direction === "inbound") {
-          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
-            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
-          whereSqls.push(`${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`);
+          fromSql =
+            `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}` +
+            ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("source")}`;
+          whereSqls.push(
+            `${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`,
+          );
         } else {
-          fromSql = `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}`
-            + ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
-          whereSqls.push(`${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`);
+          fromSql =
+            `${quoteIdent(linkTable)} ${linkAlias} JOIN ${targetSource}` +
+            ` ON ${nextAlias}.${quoteIdent("id")} = ${linkAlias}.${quoteIdent("target")}`;
+          whereSqls.push(
+            `${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`,
+          );
         }
       } else {
         fromSql += pointerStepJoinSql({
@@ -272,9 +304,10 @@ export const tryCompileMultiStepPointerExistsSQL = (
       }
     } else {
       const inlineColumn = `${link.ptrref.shortName}_id`;
-      const joinSql = link.direction === "inbound"
-        ? `${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`
-        : `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
+      const joinSql =
+        link.direction === "inbound"
+          ? `${nextAlias}.${quoteIdent(inlineColumn)} = ${previousAlias}.${quoteIdent("id")}`
+          : `${nextAlias}.${quoteIdent("id")} = ${previousAlias}.${quoteIdent(inlineColumn)}`;
       if (!fromSql) {
         fromSql = targetSource;
         whereSqls.push(joinSql);
@@ -296,9 +329,11 @@ export const tryCompileMultiStepPointerExistsSQL = (
   // chain produces NULL, which propagates through NOT/AND/OR per EdgeQL's
   // empty-set semantics (the EXISTS form would collapse empty to false and
   // make `NOT (NOT x = 'a' AND …)` keep rows whose x is empty).
-  const allSingleChain = [...path.links, path.leaf].every((link) =>
-    link.direction === "outbound"
-    && (link.ptrref.outCardinality === "one" || link.ptrref.outCardinality === "at_most_one"));
+  const allSingleChain = [...path.links, path.leaf].every(
+    (link) =>
+      link.direction === "outbound" &&
+      (link.ptrref.outCardinality === "one" || link.ptrref.outCardinality === "at_most_one"),
+  );
   if (allSingleChain) {
     const joinWhere = whereSqls.length > 0 ? ` WHERE ${whereSqls.join(" AND ")}` : "";
     return `((SELECT ${leafCol} FROM ${fromSql}${joinWhere}) ${op} ${rightSql})`;
@@ -324,7 +359,12 @@ export const tryCompileMultiStepPointerExistsSQL = (
 // type. After the rewrite, `I.time_estimate` (where `I := User.<owner[IS
 // Issue]`) compiles like `Issue.time_estimate` against the chain's leaf-level
 // alias.
-const rewriteChainRefsToTypeRoot = (node: unknown, chainKey: string, leafType: TypeRef, deps: SqlLoweringContext): unknown => {
+const rewriteChainRefsToTypeRoot = (
+  node: unknown,
+  chainKey: string,
+  leafType: TypeRef,
+  deps: SqlLoweringContext,
+): unknown => {
   const { pathIdKey } = deps;
   if (Array.isArray(node)) {
     let changed = false;
@@ -371,8 +411,11 @@ const tryCompileCorrelatedExistsChainSelect = (
   deps: SqlLoweringContext,
 ): string | null => {
   const {
-    pathIdKey, collectProjectedColumns, collectTypeRootIds,
-    compilePredicateSetSQL, compileValueSetSQL,
+    pathIdKey,
+    collectProjectedColumns,
+    collectTypeRootIds,
+    compilePredicateSetSQL,
+    compileValueSetSQL,
   } = deps;
   const chain: Pointer[] = [];
   let walk: Set = chainSet;
@@ -390,11 +433,20 @@ const tryCompileCorrelatedExistsChainSelect = (
   // ambiguous between root and leaf; leave those to other lowerings.
   if (rootType.id === leafType.id) return null;
   const chainKey = pathIdKey(chainSet);
-  const rewrittenWheres = wheres.map((w) => rewriteChainRefsToTypeRoot(w, chainKey, leafType, deps) as Set);
-  const leafColumns = [...new globalThis.Set(
-    rewrittenWheres.flatMap((w) => collectProjectedColumns([], w)),
-  )];
-  const built = buildAnchoredObjectChainJoin(links, sourceAlias, options, deps, leafColumns, leafType);
+  const rewrittenWheres = wheres.map(
+    (w) => rewriteChainRefsToTypeRoot(w, chainKey, leafType, deps) as Set,
+  );
+  const leafColumns = [
+    ...new globalThis.Set(rewrittenWheres.flatMap((w) => collectProjectedColumns([], w))),
+  ];
+  const built = buildAnchoredObjectChainJoin(
+    links,
+    sourceAlias,
+    options,
+    deps,
+    leafColumns,
+    leafType,
+  );
   if (!built) return null;
   const outerIds = new globalThis.Set<string>();
   for (const w of rewrittenWheres) collectTypeRootIds(w, outerIds);
@@ -407,8 +459,9 @@ const tryCompileCorrelatedExistsChainSelect = (
   const checkpoint = params.length;
   const whereSqls = [...built.whereSqls];
   for (const w of rewrittenWheres) {
-    const ws = compilePredicateSetSQL(w, built.leafAlias, params, target, innerOptions)
-      ?? compileValueSetSQL(w, built.leafAlias, params, target, innerOptions);
+    const ws =
+      compilePredicateSetSQL(w, built.leafAlias, params, target, innerOptions) ??
+      compileValueSetSQL(w, built.leafAlias, params, target, innerOptions);
     if (!ws) {
       params.length = checkpoint;
       return null;
@@ -427,8 +480,11 @@ export const tryCompileCorrelatedExistsSelect = (
   deps: SqlLoweringContext,
 ): string | null => {
   const {
-    collectTypeRootIds, compileSelectSource, compileSelectSourceRelation,
-    compilePredicateSetSQL, compileValueSetSQL,
+    collectTypeRootIds,
+    compileSelectSource,
+    compileSelectSourceRelation,
+    compilePredicateSetSQL,
+    compileValueSetSQL,
   } = deps;
   let cursor: Set = set;
   const wheres: Set[] = [];
@@ -439,7 +495,15 @@ export const tryCompileCorrelatedExistsSelect = (
     cursor = se.result;
   }
   if (cursor.expr.kind === "pointer" && wheres.length > 0) {
-    return tryCompileCorrelatedExistsChainSelect(cursor, wheres, sourceAlias, params, target, options, deps);
+    return tryCompileCorrelatedExistsChainSelect(
+      cursor,
+      wheres,
+      sourceAlias,
+      params,
+      target,
+      options,
+      deps,
+    );
   }
   if (cursor.expr.kind !== "type_root" || wheres.length === 0) return null;
   const innerType = (cursor.expr as TypeRoot).typeref;
@@ -453,8 +517,9 @@ export const tryCompileCorrelatedExistsSelect = (
   // the IR builder) is DETACHED: an enclosing scope of the SAME type must not
   // capture its fresh root. Inline subqueries keep the outer capture (EdgeQL
   // common-prefix sharing).
-  const detached = (set as { isWithBinding?: boolean }).isWithBinding === true
-    || (set.pathId?.namespace ?? []).some((ns) => ns.startsWith("with:"));
+  const detached =
+    (set as { isWithBinding?: boolean }).isWithBinding === true ||
+    (set.pathId?.namespace ?? []).some((ns) => ns.startsWith("with:"));
   // pathctx: build the inner source as a structured Relation whose parent holds
   // the outer scopes. For a DETACHED subquery we thread that relation through
   // `options.relation`, so the inner filter resolves the fresh root through the
@@ -466,10 +531,27 @@ export const tryCompileCorrelatedExistsSelect = (
   for (const id of outerIds) parentRel.registerScope(scopeKeyOf({ id }, []), sourceAlias);
   const checkpoint = params.length;
   const built = compileSelectSourceRelation(
-    cursor, wheres[0], undefined, { ...options, relation: parentRel }, params, target, innerAlias, undefined, parentRel,
+    cursor,
+    wheres[0],
+    undefined,
+    { ...options, relation: parentRel },
+    params,
+    target,
+    innerAlias,
+    undefined,
+    parentRel,
   );
-  const innerSource = built
-    ?? compileSelectSource(cursor, wheres[0], undefined, { ...options, relation: parentRel }, params, target, innerAlias);
+  const innerSource =
+    built ??
+    compileSelectSource(
+      cursor,
+      wheres[0],
+      undefined,
+      { ...options, relation: parentRel },
+      params,
+      target,
+      innerAlias,
+    );
   if (!innerSource) {
     params.length = checkpoint;
     return null;
@@ -480,8 +562,9 @@ export const tryCompileCorrelatedExistsSelect = (
   };
   const whereSqls: string[] = [];
   for (const w of wheres) {
-    const ws = compilePredicateSetSQL(w, innerSource.alias, params, target, innerOptions)
-      ?? compileValueSetSQL(w, innerSource.alias, params, target, innerOptions);
+    const ws =
+      compilePredicateSetSQL(w, innerSource.alias, params, target, innerOptions) ??
+      compileValueSetSQL(w, innerSource.alias, params, target, innerOptions);
     if (!ws) {
       params.length = checkpoint;
       return null;
@@ -496,7 +579,11 @@ export const tryCompileCorrelatedExistsSelect = (
 // semantics). Used to build existence guards for OR operands. Stops at
 // non-strict constructs — EXISTS, ??, ?=/?!=, aggregates — whose value is
 // defined even when the inner path is empty.
-export const collectStrictPointerChainSets = (set: Set, out: Set[], deps: SqlLoweringContext): void => {
+export const collectStrictPointerChainSets = (
+  set: Set,
+  out: Set[],
+  deps: SqlLoweringContext,
+): void => {
   const { orderedCallArgs, NON_STRICT_STDLIB } = deps;
   const expr = set.expr;
   if (!expr) return;
@@ -526,7 +613,13 @@ export const collectStrictPointerChainSets = (set: Set, out: Set[], deps: SqlLow
   if (expr.kind === "exists_expr") return;
   if (expr.kind === "operator_call") {
     const oc = expr as OperatorCall;
-    if (oc.operator === "??" || oc.operator === "?=" || oc.operator === "?!=" || oc.operator === "exists") return;
+    if (
+      oc.operator === "??" ||
+      oc.operator === "?=" ||
+      oc.operator === "?!=" ||
+      oc.operator === "exists"
+    )
+      return;
     for (const arg of orderedCallArgs(oc.args)) collectStrictPointerChainSets(arg.expr, out, deps);
     return;
   }
@@ -553,12 +646,20 @@ export const compilePathExistenceGuard = (
   deps: SqlLoweringContext,
 ): string | null => {
   const { columnForPointer } = deps;
-  const viaExists = tryCompileExistsObjectPointerSQL(chain, sourceAlias, params, target, options, deps);
+  const viaExists = tryCompileExistsObjectPointerSQL(
+    chain,
+    sourceAlias,
+    params,
+    target,
+    options,
+    deps,
+  );
   if (viaExists) return viaExists;
   if (chain.expr.kind !== "pointer") return null;
   const leaf = chain.expr as Pointer;
   if (!leaf.ptrref.outTarget.isScalar || leaf.ptrref.isLinkProperty) return null;
-  if (leaf.ptrref.outCardinality === "many" || leaf.ptrref.outCardinality === "at_least_one") return null;
+  if (leaf.ptrref.outCardinality === "many" || leaf.ptrref.outCardinality === "at_least_one")
+    return null;
   let cursor: Set = leaf.source;
   while (cursor.expr.kind === "select_expr") {
     const se = cursor.expr as SelectExpr;
@@ -634,7 +735,13 @@ export const tryCompileExistsObjectPointerSQL = (
       // tables — scan the polymorphic union, not just the base table.
       const targetType = pointer.ptrref.outSource;
       const inlineColumn = `${pointer.ptrref.shortName}_id`;
-      const targetSource = compilePolymorphicSource(targetType, false, "_ex", ["id", inlineColumn], options);
+      const targetSource = compilePolymorphicSource(
+        targetType,
+        false,
+        "_ex",
+        ["id", inlineColumn],
+        options,
+      );
       return `EXISTS (SELECT 1 FROM ${targetSource} WHERE _ex.${quoteIdent(inlineColumn)} = ${sourceAlias}.${quoteIdent("id")})`;
     }
     const inlineColumn = `${pointer.ptrref.shortName}_id`;
@@ -671,7 +778,8 @@ const buildAnchoredObjectChainJoin = (
   for (let i = 0; i < links.length; i++) {
     const link = links[i];
     const isLeaf = i === links.length - 1;
-    const declaredTarget = link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
+    const declaredTarget =
+      link.direction === "inbound" ? link.ptrref.outSource : link.ptrref.outTarget;
     const targetType = isLeaf && leafTypeOverride ? leafTypeOverride : declaredTarget;
     const targetAlias = `_ex${i}`;
     const cols = new globalThis.Set<string>(["id"]);
@@ -685,7 +793,13 @@ const buildAnchoredObjectChainJoin = (
       cols.add(`${nextLink.ptrref.shortName}_id`);
     }
     if (isLeaf) for (const col of leafColumns) cols.add(col);
-    const targetSource = compilePolymorphicSource(targetType, false, targetAlias, [...cols], options);
+    const targetSource = compilePolymorphicSource(
+      targetType,
+      false,
+      targetAlias,
+      [...cols],
+      options,
+    );
     if (shouldUseLinkTable(link)) {
       const linkTable = linkTableNameForPointer(link, options);
       const linkAlias = `_lj${i}`;
@@ -714,9 +828,11 @@ const buildAnchoredObjectChainJoin = (
       const inlineColumn = `${link.ptrref.shortName}_id`;
       if (i === 0) {
         fromSql += targetSource;
-        whereSqls.push(link.direction === "inbound"
-          ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
-          : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`);
+        whereSqls.push(
+          link.direction === "inbound"
+            ? `${targetAlias}.${quoteIdent(inlineColumn)} = ${prevAlias}.${quoteIdent("id")}`
+            : `${targetAlias}.${quoteIdent("id")} = ${prevAlias}.${quoteIdent(inlineColumn)}`,
+        );
       } else {
         fromSql += pointerStepJoinSql({
           usesLinkTable: false,

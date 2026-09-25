@@ -44,13 +44,16 @@ const extractPath = (expr: FreeObjectExpr | ComputedExpr | undefined): PathInfo 
       // `select` node with the default `{ id }` shape and no clauses. We treat
       // it as equivalent to `binding_ref(Type)` for path-tracking purposes.
       if (
-        (!expr.shape || expr.shape.length === 0 || expr.shape.every((el) => el.kind === "field" && (el as { origin?: string }).origin === "default"))
-        && (!expr.clauses || (
-          expr.clauses.filter === undefined
-          && expr.clauses.orderBy === undefined
-          && expr.clauses.limit === undefined
-          && expr.clauses.offset === undefined
-        ))
+        (!expr.shape ||
+          expr.shape.length === 0 ||
+          expr.shape.every(
+            (el) => el.kind === "field" && (el as { origin?: string }).origin === "default",
+          )) &&
+        (!expr.clauses ||
+          (expr.clauses.filter === undefined &&
+            expr.clauses.orderBy === undefined &&
+            expr.clauses.limit === undefined &&
+            expr.clauses.offset === undefined))
       ) {
         return { steps: [expr.typeName], freeRoot: true };
       }
@@ -157,10 +160,7 @@ const collectMember = (
 // it from the `fields` array, so we treat it as a known property regardless.
 const isBuiltinProperty = (step: string): boolean => step === "id" || step === "__type__";
 
-const subjectPathHasLink = (
-  schema: SchemaSnapshot | undefined,
-  steps: string[],
-): boolean => {
+const subjectPathHasLink = (schema: SchemaSnapshot | undefined, steps: string[]): boolean => {
   if (!schema || steps.length < 2) return false;
   let currentType = resolveTypeDef(schema, steps[0]);
   for (let i = 1; i < steps.length; i++) {
@@ -368,10 +368,7 @@ const visitMutation = (
     if (outerDmlRoot) {
       const targetPath = extractPath((mut as UpdateStatement | DeleteStatement).target);
       if (targetPath && !targetPath.freeRoot && targetPath.steps[0] === "__current__") {
-        failScope(
-          `cannot reference correlated set '${outerDmlRoot}' here`,
-          { pos: mut.pos },
-        );
+        failScope(`cannot reference correlated set '${outerDmlRoot}' here`, { pos: mut.pos });
       }
     }
 
@@ -403,8 +400,8 @@ const classifyAndMaybeFail = (
   // of `User.deck` whose ORDER BY also says `User.deck`). That's allowed
   // because the path id resolves to the same scope.
   if (
-    innerPath.steps.length === subj.subjectSteps.length
-    && pathPrefixEquals(innerPath.steps, subj.subjectSteps)
+    innerPath.steps.length === subj.subjectSteps.length &&
+    pathPrefixEquals(innerPath.steps, subj.subjectSteps)
   ) {
     return;
   }
@@ -415,8 +412,8 @@ const classifyAndMaybeFail = (
   // source. Plain property/link extensions are fine — they refine the
   // existing scope.
   if (
-    innerPath.steps.length > subj.subjectSteps.length
-    && pathPrefixEquals(subj.subjectSteps, innerPath.steps)
+    innerPath.steps.length > subj.subjectSteps.length &&
+    pathPrefixEquals(subj.subjectSteps, innerPath.steps)
   ) {
     const nextStep = innerPath.steps[subj.subjectSteps.length];
     if (isLinkProp(nextStep)) {
@@ -450,7 +447,12 @@ const subjectContextFor = (
 ): SubjectContext | undefined => {
   const path = subjectExpr ? extractPath(subjectExpr) : undefined;
   if (!path && fallbackRoot) {
-    return { rootType: fallbackRoot, subjectSteps: [fallbackRoot], multiStep: false, hasLinkStep: false };
+    return {
+      rootType: fallbackRoot,
+      subjectSteps: [fallbackRoot],
+      multiStep: false,
+      hasLinkStep: false,
+    };
   }
   if (!path) return undefined;
   const multiStep = path.steps.length > 1 || path.steps.some(isLinkProp);
@@ -458,7 +460,10 @@ const subjectContextFor = (
   return { rootType: path.steps[0], subjectSteps: path.steps, multiStep, hasLinkStep };
 };
 
-const validateSelectExpr = (statement: SelectExprStatement, schema: SchemaSnapshot | undefined): void => {
+const validateSelectExpr = (
+  statement: SelectExprStatement,
+  schema: SchemaSnapshot | undefined,
+): void => {
   let subjectExpr: FreeObjectExpr | undefined = statement.expr;
   const clauseExprs: FreeObjectExpr[] = [];
   let shape: EdgeQLShapeElement[] = [];

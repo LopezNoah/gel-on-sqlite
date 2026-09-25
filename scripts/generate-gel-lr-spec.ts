@@ -5,7 +5,9 @@ import { writeFileSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type RawAction = { Shift: number } | { Reduce: { production_id: number; non_term: string; cnt: number } };
+type RawAction =
+  | { Shift: number }
+  | { Reduce: { production_id: number; non_term: string; cnt: number } };
 type RawSpec = {
   actions: Array<Array<[string, RawAction]>>;
   goto: Array<Array<[string, number]>>;
@@ -21,7 +23,10 @@ const exporter = fileURLToPath(new URL("./export-gel-lr-spec.py", import.meta.ur
 const result = spawnSync(python, [exporter], {
   cwd: root,
   encoding: "utf8",
-  env: { ...process.env, PYTHONPATH: [root, process.env.PYTHONPATH].filter(Boolean).join(delimiter) },
+  env: {
+    ...process.env,
+    PYTHONPATH: [root, process.env.PYTHONPATH].filter(Boolean).join(delimiter),
+  },
   maxBuffer: 24 * 1024 * 1024,
 });
 if (result.error || result.status !== 0) {
@@ -29,26 +34,46 @@ if (result.error || result.status !== 0) {
 }
 
 const raw = JSON.parse(result.stdout) as RawSpec;
-const normalize = (token: string) => token === "<$>" ? "EOI" : token;
-const terminals = [...new Set(raw.actions.flatMap((row) => row.map(([token]) => normalize(token))))].sort();
+const normalize = (token: string) => (token === "<$>" ? "EOI" : token);
+const terminals = [
+  ...new Set(raw.actions.flatMap((row) => row.map(([token]) => normalize(token)))),
+].sort();
 const terminalId = new Map(terminals.map((token, id) => [token, id]));
-const nonterminals = [...new Set([
-  ...raw.goto.flatMap((row) => row.map(([name]) => name)),
-  ...raw.actions.flatMap((row) => row.flatMap(([, action]) => "Reduce" in action ? [action.Reduce.non_term] : [])),
-])].sort();
+const nonterminals = [
+  ...new Set([
+    ...raw.goto.flatMap((row) => row.map(([name]) => name)),
+    ...raw.actions.flatMap((row) =>
+      row.flatMap(([, action]) => ("Reduce" in action ? [action.Reduce.non_term] : [])),
+    ),
+  ]),
+].sort();
 const nonterminalId = new Map(nonterminals.map((name, id) => [name, id]));
+const idFor = (ids: Map<string, number>, name: string): number => {
+  const id = ids.get(name);
+  if (id === undefined) throw new Error(`Missing generated grammar id for '${name}'`);
+  return id;
+};
 
 const actions = raw.actions.map((row) => {
   // Gel can expose both its physical EOI and the LR sentinel in the same
   // state. The Rust parser uses the last action for their shared token kind.
   const normalized = new Map<string, RawAction>();
   for (const [token, action] of row) normalized.set(normalize(token), action);
-  return [...normalized].map(([token, action]) => "Shift" in action
-    ? [terminalId.get(token)!, 0, action.Shift]
-    : [terminalId.get(token)!, 1, action.Reduce.production_id, action.Reduce.cnt,
-        nonterminalId.get(action.Reduce.non_term)!]);
+  return [...normalized].map(([token, action]) =>
+    "Shift" in action
+      ? [idFor(terminalId, token), 0, action.Shift]
+      : [
+          idFor(terminalId, token),
+          1,
+          action.Reduce.production_id,
+          action.Reduce.cnt,
+          idFor(nonterminalId, action.Reduce.non_term),
+        ],
+  );
 });
-const gotos = raw.goto.map((row) => row.map(([name, state]) => [nonterminalId.get(name)!, state]));
+const gotos = raw.goto.map((row) =>
+  row.map(([name, state]) => [idFor(nonterminalId, name), state]),
+);
 const compact = {
   terminals,
   actions,
@@ -72,4 +97,6 @@ export const gelLRSpec = JSON.parse(${JSON.stringify(JSON.stringify(compact))}) 
 };
 `;
 writeFileSync(file, source);
-console.log(`Wrote ${file} (${source.length} bytes; ${terminals.length} terminals, ${actions.length} states).`);
+console.log(
+  `Wrote ${file} (${source.length} bytes; ${terminals.length} terminals, ${actions.length} states).`,
+);

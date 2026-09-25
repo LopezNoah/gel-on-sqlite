@@ -5,7 +5,8 @@ import type { SchemaSnapshot } from "../src/schema/schema.js";
 import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
 
-type PathStep = string
+type PathStep =
+  | string
   | [stepName: string, namespace: Iterable<string>]
   | [stepName: string, namespace: Iterable<string>, direction: PointerDirection];
 
@@ -47,16 +48,11 @@ describe("TestEdgeQLIRPathID", () => {
     return current;
   };
 
-  const mkPath = (
-    start: string,
-    ...path: PathStep[]
-  ): PathId => extendMany(PathId.fromType(schema, start), ...path);
+  const mkPath = (start: string, ...path: PathStep[]): PathId =>
+    extendMany(PathId.fromType(schema, start), ...path);
 
-  const mkPathInNamespace = (
-    start: string,
-    ns: Iterable<string>,
-    ...path: PathStep[]
-  ): PathId => extendMany(PathId.fromType(schema, start, { namespace: ns }), ...path);
+  const mkPathInNamespace = (start: string, ns: Iterable<string>, ...path: PathStep[]): PathId =>
+    extendMany(PathId.fromType(schema, start, { namespace: ns }), ...path);
 
   const expectPath = (actual: PathId | undefined, expected: PathId): void => {
     expect(actual?.equals(expected)).toBe(true);

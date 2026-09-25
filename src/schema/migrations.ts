@@ -1,7 +1,20 @@
 import type { RuntimeDatabaseAdapter } from "../runtime/adapter.js";
 import { createHash } from "node:crypto";
-import type { MutationRewriteExpr, ScalarType, ScalarValue, TriggerDef, TriggerInsertAction, TriggerValueExpr } from "../types.js";
-import type { DeclarativeSchema, LinkMember, ObjectTypeDeclaration, PropertyMember, TypeMember } from "./declarative.js";
+import type {
+  MutationRewriteExpr,
+  ScalarType,
+  ScalarValue,
+  TriggerDef,
+  TriggerInsertAction,
+  TriggerValueExpr,
+} from "../types.js";
+import type {
+  DeclarativeSchema,
+  LinkMember,
+  ObjectTypeDeclaration,
+  PropertyMember,
+  TypeMember,
+} from "./declarative.js";
 import { scalarToSqlType } from "./scalar.js";
 import { normalizeTypeName, qualifiedTypeName, usesLinkTable } from "./schema.js";
 
@@ -19,7 +32,10 @@ export interface MigrationApplyOptions {
   expectChecksum?: string;
 }
 
-export const planSchemaMigration = (fromSchema: DeclarativeSchema, toSchema: DeclarativeSchema): MigrationPlan => {
+export const planSchemaMigration = (
+  fromSchema: DeclarativeSchema,
+  toSchema: DeclarativeSchema,
+): MigrationPlan => {
   const steps: MigrationStep[] = [
     {
       description: "create global id registry table",
@@ -44,7 +60,9 @@ export const planSchemaMigration = (fromSchema: DeclarativeSchema, toSchema: Dec
     steps.push(...buildAlterTypeSteps(fromType, toType, toTypes));
   }
 
-  for (const [typeName, fromType] of [...fromTypes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [typeName, fromType] of [...fromTypes.entries()].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
     if (toTypes.has(typeName) || fromType.abstract) {
       continue;
     }
@@ -80,7 +98,9 @@ export const applyMigrationPlanWithOptions = (
   ensureMigrationHistoryTable(db);
   const checksum = calculateMigrationChecksum(plan);
   if (options.expectChecksum && options.expectChecksum !== checksum) {
-    throw new Error(`Migration checksum mismatch: expected ${options.expectChecksum}, got ${checksum}`);
+    throw new Error(
+      `Migration checksum mismatch: expected ${options.expectChecksum}, got ${checksum}`,
+    );
   }
 
   const migrationId = options.migrationId ?? `auto:${checksum}`;
@@ -125,14 +145,18 @@ const buildCreateTypeSteps = (
   const steps: MigrationStep[] = [];
   const table = tableName(typeDecl);
 
-  const columns = [quoteIdent("id") + " TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16))))"];
+  const columns = [
+    quoteIdent("id") + " TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16))))",
+  ];
   for (const member of typeDecl.members) {
     if (member.kind === "computed") {
       continue;
     }
 
     if (member.kind === "property" && !member.multi) {
-      columns.push(`${quoteIdent(member.name)} ${sqlType(member.scalar)}${member.required ? " NOT NULL" : ""}`);
+      columns.push(
+        `${quoteIdent(member.name)} ${sqlType(member.scalar)}${member.required ? " NOT NULL" : ""}`,
+      );
       continue;
     }
 
@@ -174,7 +198,10 @@ const buildCreateTypeSteps = (
 
     if (member.kind === "link" && usesLinkTable(member)) {
       const lt = linkTable(typeDecl, member);
-      const linkColumns = [`${quoteIdent("source")} TEXT NOT NULL`, `${quoteIdent("target")} TEXT NOT NULL`];
+      const linkColumns = [
+        `${quoteIdent("source")} TEXT NOT NULL`,
+        `${quoteIdent("target")} TEXT NOT NULL`,
+      ];
       for (const property of member.properties) {
         if (property.computed === true) {
           continue;
@@ -259,7 +286,10 @@ const buildAlterTypeSteps = (
 
     if (member.kind === "link") {
       const lt = linkTable(toType, member);
-      const linkColumns = [`${quoteIdent("source")} TEXT NOT NULL`, `${quoteIdent("target")} TEXT NOT NULL`];
+      const linkColumns = [
+        `${quoteIdent("source")} TEXT NOT NULL`,
+        `${quoteIdent("target")} TEXT NOT NULL`,
+      ];
       for (const property of member.properties) {
         if (property.computed === true) {
           continue;
@@ -350,7 +380,10 @@ const buildDropTypeSteps = (typeDecl: ObjectTypeDeclaration): MigrationStep[] =>
   return steps;
 };
 
-const buildDropMemberStorageSteps = (typeDecl: ObjectTypeDeclaration, member: TypeMember): MigrationStep[] => {
+const buildDropMemberStorageSteps = (
+  typeDecl: ObjectTypeDeclaration,
+  member: TypeMember,
+): MigrationStep[] => {
   if (member.kind === "computed") {
     return [];
   }
@@ -390,14 +423,20 @@ const buildDropMemberStorageSteps = (typeDecl: ObjectTypeDeclaration, member: Ty
   ];
 };
 
-const buildInlineLinkIndexSteps = (typeDecl: ObjectTypeDeclaration, onlyLink?: string): MigrationStep[] =>
+const buildInlineLinkIndexSteps = (
+  typeDecl: ObjectTypeDeclaration,
+  onlyLink?: string,
+): MigrationStep[] =>
   typeDecl.members.flatMap((member) => {
-    if (member.kind !== "link" || usesLinkTable(member) || (onlyLink && member.name !== onlyLink)) return [];
+    if (member.kind !== "link" || usesLinkTable(member) || (onlyLink && member.name !== onlyLink))
+      return [];
     const column = `${member.name}_id`;
-    return [{
-      description: `create link index for ${qualifiedTypeName(typeDecl)}.${member.name}`,
-      sql: `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${tableName(typeDecl)}__idx_${column}`)} ON ${quoteIdent(tableName(typeDecl))} (${quoteIdent(column)})`,
-    }];
+    return [
+      {
+        description: `create link index for ${qualifiedTypeName(typeDecl)}.${member.name}`,
+        sql: `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${tableName(typeDecl)}__idx_${column}`)} ON ${quoteIdent(tableName(typeDecl))} (${quoteIdent(column)})`,
+      },
+    ];
   });
 
 const buildExistingLinkIndexSteps = (typeDecl: ObjectTypeDeclaration): MigrationStep[] =>
@@ -541,7 +580,9 @@ const compileCustomTriggerSQL = (
 ): string | null => {
   const sourceTable = tableName(typeDecl);
   const whenClause = compileTriggerWhenClause(trigger.when, trigger.event);
-  const actions = trigger.actions.map((action) => compileTriggerActionSQL(typeDecl, action, trigger.event, allTypes));
+  const actions = trigger.actions.map((action) =>
+    compileTriggerActionSQL(typeDecl, action, trigger.event, allTypes),
+  );
   if (actions.length === 0) {
     return null;
   }
@@ -549,7 +590,10 @@ const compileCustomTriggerSQL = (
   return `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(sourceTable, `custom_${trigger.name}`))} AFTER ${trigger.event.toUpperCase()} ON ${quoteIdent(sourceTable)}${whenClause} BEGIN ${actions.join(" ")} END`;
 };
 
-const compileTriggerWhenClause = (whenClause: TriggerDef["when"], event: TriggerDef["event"]): string => {
+const compileTriggerWhenClause = (
+  whenClause: TriggerDef["when"],
+  event: TriggerDef["event"],
+): string => {
   if (!whenClause || whenClause.kind === "always") {
     return "";
   }
@@ -570,7 +614,9 @@ const compileTriggerActionSQL = (
   const targetTypeName = normalizeTypeName(action.targetType, typeDecl.module);
   const targetType = allTypes.get(targetTypeName);
   if (!targetType) {
-    throw new Error(`Unknown trigger target type '${targetTypeName}' in ${qualifiedTypeName(typeDecl)}.${action.kind}`);
+    throw new Error(
+      `Unknown trigger target type '${targetTypeName}' in ${qualifiedTypeName(typeDecl)}.${action.kind}`,
+    );
   }
 
   const entries = Object.entries(action.values);
@@ -695,7 +741,8 @@ const multiPropertyTable = (typeDecl: ObjectTypeDeclaration, member: PropertyMem
 const linkTable = (typeDecl: ObjectTypeDeclaration, member: LinkMember): string =>
   `${tableName(typeDecl)}__${member.name.toLowerCase()}`;
 
-const triggerName = (table: string, suffix: string): string => `${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}__${suffix}`;
+const triggerName = (table: string, suffix: string): string =>
+  `${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}__${suffix}`;
 
 const sqlType = (scalar: ScalarType): string => scalarToSqlType(scalar);
 

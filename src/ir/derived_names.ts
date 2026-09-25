@@ -20,20 +20,13 @@ export const DERIVED_MODULE = "__derived__";
  * `|` becomes `||` and is not later confused with a mangled `::`.
  */
 export const mangleName = (name: string): string =>
-  name
-    .replaceAll("|", "||")
-    .replaceAll("&", "&&")
-    .replaceAll("::", "|")
-    .replaceAll("@", "&");
+  name.replaceAll("|", "||").replaceAll("&", "&&").replaceAll("::", "|").replaceAll("@", "&");
 
 /**
  * Port of `edb/schema/name.py:get_specialized_name`:
  *   `mangle(basename)@<'@'.join(mangle(q) for q in quals if q)>`
  */
-export const getSpecializedName = (
-  basename: string,
-  ...qualifiers: string[]
-): string => {
+export const getSpecializedName = (basename: string, ...qualifiers: string[]): string => {
   const quals = qualifiers.filter((qual) => qual.length > 0).map(mangleName);
   return `${mangleName(basename)}@${quals.join("@")}`;
 };
@@ -50,18 +43,15 @@ export const pointerFullName = (
   module: string,
   pointerShortName: string,
   sourceTypeName: string,
-): string =>
-  `${module}::${getSpecializedName(`__::${pointerShortName}`, sourceTypeName)}`;
+): string => `${module}::${getSpecializedName(`__::${pointerShortName}`, sourceTypeName)}`;
 
 /**
  * A computed/derived pointer's fully-qualified name — `pointerFullName` rooted
  * in the `__derived__` module, e.g.
  * `__derived__::__|todo_ids@__derived__|default||User&view~1`.
  */
-export const derivedPointerName = (
-  pointerShortName: string,
-  sourceTypeName: string,
-): string => pointerFullName(DERIVED_MODULE, pointerShortName, sourceTypeName);
+export const derivedPointerName = (pointerShortName: string, sourceTypeName: string): string =>
+  pointerFullName(DERIVED_MODULE, pointerShortName, sourceTypeName);
 
 /**
  * The root name for a synthetic expression set, e.g. `__derived__::expr~3`.
@@ -75,10 +65,8 @@ export const derivedExprName = (alias: string): string => inDerivedModule(alias)
  * a base type specialized by a `view~N` alias (see `edb/edgeql/compiler/
  * viewgen.py` `derive_view`).
  */
-export const deriveViewTypeName = (
-  baseTypeName: string,
-  viewAlias: string,
-): string => inDerivedModule(getSpecializedName(baseTypeName, viewAlias));
+export const deriveViewTypeName = (baseTypeName: string, viewAlias: string): string =>
+  inDerivedModule(getSpecializedName(baseTypeName, viewAlias));
 
 const isAllDigits = (text: string): boolean =>
   text.length > 0 && [...text].every((char) => char >= "0" && char <= "9");

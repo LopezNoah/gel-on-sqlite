@@ -27,13 +27,14 @@ the param-accounting invariant (one operand → one `?`, regardless of alias
 reuse).
 
 **Scoped out, deliberately:**
+
 - **The full ownership conversion** — every `compile*` returning an owned
   `{ sql, params }` fragment instead of mutating a shared array — is a
   ~67-function change with hundreds of call sites, where any inconsistency is a
   silent param-count bug. Too large/risky for one increment; `SqlFragment` is
   laid down as its target shape, and this helper is the safe first slice.
 - **The slice lowering's conditional `.includes("?")` wrap** stays. It binds
-  *conditionally* (inline when no `?`, wrap when present) to keep column-base
+  _conditionally_ (inline when no `?`, wrap when present) to keep column-base
   slice SQL unwrapped; `bindOperandsOnce` always wraps, so converting it would
   change goldens. The two `CAST(<idx> AS INTEGER) AS i` index binders likewise
   use a variant bind form and are left as-is.
@@ -41,7 +42,7 @@ reuse).
 **On the param-count test failures.** The failing suite does throw
 `"too many/few parameter values"` (e.g. `to_str_02`–`07`, `ref_outer_03/04`,
 `update_basic_06/07`). Investigated: these are NOT standalone param-ownership
-bugs that this seam fixes. They are symptoms of *other* incomplete machinery —
+bugs that this seam fixes. They are symptoms of _other_ incomplete machinery —
 `to_str(<datetime>, fmt)` is unimplemented and falls back to `CAST(? AS TEXT)`,
 leaking the dropped format arg's param; the `functions_inline` cases are
 entangled with UDF-DML inlining; `ref_outer_*` is the correlation cluster. So
@@ -56,7 +57,7 @@ name-level diff vs the 783-fail baseline (the only delta is the known-flaky
 `functions_inline_*_link_02`).
 
 **Why record it.** Param ownership was carded as a major direction
-(SQL fragments owning `{sql, params}`). What is tractable and safe *now* is the
+(SQL fragments owning `{sql, params}`). What is tractable and safe _now_ is the
 consumption-safety idiom, given one home; the full ownership rewrite is recorded
 here as the deferred remainder so a future reviewer knows the seam exists and
 what it does and does not yet cover.

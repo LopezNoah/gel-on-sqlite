@@ -13,7 +13,8 @@ import type { DeclarativeSchema } from "../src/schema/declarative.js";
 // pin the diff cases directly: create, no-op, add-property, drop-type, and the
 // determinism of the migration checksum (ADR 0050).
 
-const parse = (sdl: string): DeclarativeSchema => parseDeclarativeSchema(sdl, { legacySyntaxCompat: true });
+const parse = (sdl: string): DeclarativeSchema =>
+  parseDeclarativeSchema(sdl, { legacySyntaxCompat: true });
 const EMPTY: DeclarativeSchema = { modules: [], types: [] };
 
 const base = parse(`module default {
@@ -64,9 +65,13 @@ describe("renderSchemaSQL / planSchemaMigration — create", () => {
       }
     }`);
     const sql = renderSchemaSQL(schema);
-    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")');
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")',
+    );
     expect(sql).toContain('PRIMARY KEY ("source", "target")');
-    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")');
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")',
+    );
   });
 });
 
@@ -86,9 +91,15 @@ describe("planSchemaMigration — diff", () => {
       }
     }`);
     const sql = renderMigrationSQL(planSchemaMigration(schema, schema));
-    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")');
-    expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "default__post__tags__source_target" ON "default__post__tags" ("source", "target")');
-    expect(sql).toContain('CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")');
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS "default__post__idx_author_id" ON "default__post" ("author_id")',
+    );
+    expect(sql).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "default__post__tags__source_target" ON "default__post__tags" ("source", "target")',
+    );
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS "default__post__tags__target_source" ON "default__post__tags" ("target", "source")',
+    );
     expect(sql).not.toMatch(/ADD COLUMN|DROP TABLE/i);
   });
 

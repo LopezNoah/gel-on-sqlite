@@ -1,7 +1,7 @@
 # Give the schema write-path a test surface
 
 The round-9 review's candidate #3 found three correctness-critical modules on
-the schema **write** path exercised only end-to-end (or as test *setup*), with
+the schema **write** path exercised only end-to-end (or as test _setup_), with
 no direct test of their own logic — while their **read** twin, the gel_* table
 decoder, had a seam and a test (`GelTableDecoder`, ADR 0034). The asymmetry let
 the write halves drift from the read half silently:
@@ -38,7 +38,7 @@ untestable interface.
 an inline single link's `<link>_id` FK column loses its `isLinkColumn` marker
 and re-derives as a plain column, and some computed properties deserialize as
 stored fields. The round-trip tests therefore compare a **normalized**
-projection — property *names* (fields ∪ computeds, minus FK columns), type
+projection — property _names_ (fields ∪ computeds, minus FK columns), type
 names, the abstract flag, link target/cardinality, and function arity — which
 are the dimensions the serializers are contracted to preserve. Closing the
 asymmetry (so `isLinkColumn` / the computed flag survive) is a behaviour change,
@@ -49,7 +49,7 @@ touched (purely additive). The round-trip runs against the full `issues.esdl`
 fixture (28 types, 7 functions, inheritance, single/multi links, link
 properties, computeds, exclusive constraints).
 
-**Why record it.** A future reader sees round-trip tests that *normalize away*
+**Why record it.** A future reader sees round-trip tests that _normalize away_
 FK columns and the computed-vs-stored distinction and may think the comparison
 is too loose. It is deliberate: those two are the documented serialization
 normalizations. The tests pin the contracted dimensions and surface the

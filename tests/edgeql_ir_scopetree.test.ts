@@ -9,7 +9,9 @@ import type { Statement } from "../src/edgeql/ast.js";
 
 const loadSchema = (): SchemaSnapshot => {
   const source = fs.readFileSync(new URL("./schemas/cards.esdl", import.meta.url), "utf8");
-  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, { legacySyntaxCompat: true });
+  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, {
+    legacySyntaxCompat: true,
+  });
   return schemaSnapshotFromDeclarative(decl);
 };
 
@@ -17,7 +19,10 @@ const compileQuery = (schema: SchemaSnapshot, query: string) => {
   const ast = parseEdgeQL(query) as unknown;
   const stmt = (Array.isArray(ast) ? (ast as Statement[])[0] : (ast as Statement)) as Statement;
   const expanded = expandSchemaAliasesInStatement(stmt, schema);
-  return compileASTToGelIR(expanded, { module: (stmt as { withModule?: string }).withModule, schema });
+  return compileASTToGelIR(expanded, {
+    module: (stmt as { withModule?: string }).withModule,
+    schema,
+  });
 };
 
 describe("TestEdgeQLIRScopeTree", () => {
@@ -34,29 +39,49 @@ describe("TestEdgeQLIRScopeTree", () => {
   // parity placeholders; flip to `it` once scope-tree inference lands.
 
   it("test_edgeql_ir_scope_tree_bad_01", () => {
-    expect(() => compileQuery(schema, `
+    expect(() =>
+      compileQuery(
+        schema,
+        `
         SELECT User.deck
         FILTER User.name
-    `)).toThrow(/reference to 'User\.name' changes the interpretation/);
+    `,
+      ),
+    ).toThrow(/reference to 'User\.name' changes the interpretation/);
   });
 
   it("test_edgeql_ir_scope_tree_bad_02", () => {
-    expect(() => compileQuery(schema, `
+    expect(() =>
+      compileQuery(
+        schema,
+        `
         SELECT User.deck
         FILTER User.deck@count
-    `)).toThrow(/reference to 'User' changes the interpretation/);
+    `,
+      ),
+    ).toThrow(/reference to 'User' changes the interpretation/);
   });
 
   it("test_edgeql_ir_scope_tree_bad_03", () => {
-    expect(() => compileQuery(schema, `
+    expect(() =>
+      compileQuery(
+        schema,
+        `
         SELECT User.deck { foo := User }
-    `)).toThrow(/reference to 'User' changes the interpretation/);
+    `,
+      ),
+    ).toThrow(/reference to 'User' changes the interpretation/);
   });
 
   it("test_edgeql_ir_scope_tree_bad_04", () => {
-    expect(() => compileQuery(schema, `
+    expect(() =>
+      compileQuery(
+        schema,
+        `
         UPDATE User.deck SET { name := User.name }
-    `)).toThrow(/reference to 'User\.name' changes the interpretation/);
+    `,
+      ),
+    ).toThrow(/reference to 'User\.name' changes the interpretation/);
   });
 
   it("test_edgeql_ir_scope_tree_bad_05", () => {
@@ -65,14 +90,17 @@ describe("TestEdgeQLIRScopeTree", () => {
     // succeeds (or skip if the unsupported `array_agg` path is not yet wired).
     let ir;
     try {
-      ir = compileQuery(schema, `
+      ir = compileQuery(
+        schema,
+        `
         WITH
             U := User {id, r := random()}
         SELECT
             (
                 users := array_agg((SELECT U.id ORDER BY U.r LIMIT 10))
             )
-      `);
+      `,
+      );
     } catch (e) {
       // Tolerated: alias-binding pipeline isn't fully wired yet.
       expect(e).toBeDefined();
@@ -82,8 +110,13 @@ describe("TestEdgeQLIRScopeTree", () => {
   });
 
   it("test_edgeql_ir_scope_tree_bad_06", () => {
-    expect(() => compileQuery(schema, `
+    expect(() =>
+      compileQuery(
+        schema,
+        `
         UPDATE User SET { avatar := (UPDATE .avatar SET { text := "foo" }) }
-    `)).toThrow(/cannot reference correlated set 'User' here/);
+    `,
+      ),
+    ).toThrow(/cannot reference correlated set 'User' here/);
   });
 });

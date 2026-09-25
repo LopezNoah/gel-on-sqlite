@@ -1,7 +1,12 @@
 import { AppError, tryResult } from "../errors.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { parseLocalTemporal } from "../temporal/parser.js";
-import { inferStatementCardinality, inferStatementMultiplicity, inferStatementType, inferStatementVolatility } from "./inference.js";
+import {
+  inferStatementCardinality,
+  inferStatementMultiplicity,
+  inferStatementType,
+  inferStatementVolatility,
+} from "./inference.js";
 import { checkScopeTreeViolations } from "./scope_tree_check.js";
 import type {
   Statement as EdgeQLStatement,
@@ -78,7 +83,15 @@ import type {
 } from "../ir/gel_ir.js";
 import { buildScopeTreeFromAst, tupleSharedPrefixCorrelated } from "../ir/scope_builder.js";
 import { AliasGenerator, derivedExprName } from "../ir/derived_names.js";
-import type { FieldDef, FunctionDef, LinkDef, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
+import type {
+  FieldDef,
+  FunctionDef,
+  LinkDef,
+  LinkPropertyDef,
+  ScalarType,
+  ScalarValue,
+  TypeDef,
+} from "../types.js";
 import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
 import { resolveSchemaModelForCompile } from "../codegen/schema_loader.js";
@@ -100,19 +113,31 @@ export const validateGroupByAtomCollisions = (
   const record = (atom: GroupByAtom): void => {
     const name = atom.kind === "field_ref" ? atom.field : atom.name;
     const origin: "field" | "using" | "linkProperty" =
-      atom.kind === "field_ref" ? "field" : atom.kind === "link_property_ref" ? "linkProperty" : "using";
+      atom.kind === "field_ref"
+        ? "field"
+        : atom.kind === "link_property_ref"
+          ? "linkProperty"
+          : "using";
     const seen = origins.get(name) ?? { field: false, using: false, linkProperty: false };
     seen[origin] = true;
     origins.set(name, seen);
     if (seen.field && seen.using) {
-      fail(`the name '${name}' cannot be used both as a USING alias and used directly in the BY clause`);
+      fail(
+        `the name '${name}' cannot be used both as a USING alias and used directly in the BY clause`,
+      );
     }
     if (seen.field && seen.linkProperty) {
-      fail(`BY clause cannot refer to link property and object property with the same name '${name}'`);
+      fail(
+        `BY clause cannot refer to link property and object property with the same name '${name}'`,
+      );
     }
   };
   for (const element of by) {
-    if (element.kind === "field_ref" || element.kind === "name_ref" || element.kind === "link_property_ref") {
+    if (
+      element.kind === "field_ref" ||
+      element.kind === "name_ref" ||
+      element.kind === "link_property_ref"
+    ) {
       record(element);
     } else if (element.kind === "sets") {
       for (const list of element.sets) for (const atom of list) record(atom);
@@ -203,7 +228,8 @@ const normalizeDateTimeLiteral = (literal: string): string | undefined => {
   const fracMatch = /\.(\d+)/.exec(toParse);
   if (fracMatch) {
     fracDigits = fracMatch[1];
-    toParse = toParse.slice(0, fracMatch.index) + toParse.slice(fracMatch.index + fracMatch[0].length);
+    toParse =
+      toParse.slice(0, fracMatch.index) + toParse.slice(fracMatch.index + fracMatch[0].length);
   }
   const date = new Date(toParse);
   if (Number.isNaN(date.getTime())) return undefined;
@@ -227,14 +253,24 @@ const normalizeLocalTemporalLiteral = (
   type: "local_datetime" | "local_date" | "local_time",
 ): string | undefined => {
   const value = literal.trim();
-  const parsed = parseLocalTemporal(value, type.slice("local_".length) as "datetime" | "date" | "time");
+  const parsed = parseLocalTemporal(
+    value,
+    type.slice("local_".length) as "datetime" | "date" | "time",
+  );
   if (!parsed) return undefined;
   const { year, month, day, hour, minute, second } = parsed;
   const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   if (
-    year < 1 || year > 9999 || hour > 23 || minute > 59 || second > 59
-    || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day
-  ) return undefined;
+    year < 1 ||
+    year > 9999 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  )
+    return undefined;
   if (type === "local_date") return value;
   let fractionDigits = parsed.fraction;
   while (fractionDigits.endsWith("0")) fractionDigits = fractionDigits.slice(0, -1);
@@ -246,12 +282,19 @@ const normalizeLocalTemporalLiteral = (
 // Parse a Postgres-interval-style duration literal ('15:01:22.306916',
 // '24 hours', '123 months', '1 day 12:00:00', or ISO 'PT20H') into months /
 // days / microseconds components. Returns undefined when unparseable.
-const parseIntervalParts = (s: string): { months: number; days: number; us: number } | undefined => {
-  let months = 0; let days = 0; let us = 0;
+const parseIntervalParts = (
+  s: string,
+): { months: number; days: number; us: number } | undefined => {
+  let months = 0;
+  let days = 0;
+  let us = 0;
   const str = s.trim();
   if (str === "") return undefined;
   if (/^P/i.test(str)) {
-    const m = /^P(?:(-?\d+)Y)?(?:(-?\d+)M)?(?:(-?\d+)W)?(?:(-?\d+)D)?(?:T(?:(-?\d+)H)?(?:(-?\d+)M)?(?:(-?\d+(?:\.\d+)?)S)?)?$/i.exec(str);
+    const m =
+      /^P(?:(-?\d+)Y)?(?:(-?\d+)M)?(?:(-?\d+)W)?(?:(-?\d+)D)?(?:T(?:(-?\d+)H)?(?:(-?\d+)M)?(?:(-?\d+(?:\.\d+)?)S)?)?$/i.exec(
+        str,
+      );
     if (!m) return undefined;
     months = Number(m[1] ?? 0) * 12 + Number(m[2] ?? 0);
     days = Number(m[3] ?? 0) * 7 + Number(m[4] ?? 0);
@@ -259,18 +302,43 @@ const parseIntervalParts = (s: string): { months: number; days: number; us: numb
     return { months, days, us: Math.round(us) };
   }
   const UNIT_TO_US: Record<string, number> = {
-    us: 1, microsecond: 1, microseconds: 1,
-    ms: 1000, millisecond: 1000, milliseconds: 1000,
-    s: 1e6, sec: 1e6, secs: 1e6, second: 1e6, seconds: 1e6,
-    min: 6e7, mins: 6e7, minute: 6e7, minutes: 6e7,
-    h: 3.6e9, hr: 3.6e9, hrs: 3.6e9, hour: 3.6e9, hours: 3.6e9,
+    us: 1,
+    microsecond: 1,
+    microseconds: 1,
+    ms: 1000,
+    millisecond: 1000,
+    milliseconds: 1000,
+    s: 1e6,
+    sec: 1e6,
+    secs: 1e6,
+    second: 1e6,
+    seconds: 1e6,
+    min: 6e7,
+    mins: 6e7,
+    minute: 6e7,
+    minutes: 6e7,
+    h: 3.6e9,
+    hr: 3.6e9,
+    hrs: 3.6e9,
+    hour: 3.6e9,
+    hours: 3.6e9,
   };
   const UNIT_TO_DAYS: Record<string, number> = { day: 1, days: 1, d: 1, week: 7, weeks: 7 };
   const UNIT_TO_MONTHS: Record<string, number> = {
-    mon: 1, mons: 1, month: 1, months: 1,
-    year: 12, years: 12, y: 12,
-    decade: 120, decades: 120, century: 1200, centuries: 1200,
-    millennium: 12000, millenniums: 12000, millennia: 12000,
+    mon: 1,
+    mons: 1,
+    month: 1,
+    months: 1,
+    year: 12,
+    years: 12,
+    y: 12,
+    decade: 120,
+    decades: 120,
+    century: 1200,
+    centuries: 1200,
+    millennium: 12000,
+    millenniums: 12000,
+    millennia: 12000,
   };
   const tokenRe = /(-?\d+(?:\.\d+)?)\s*([a-zA-Z]+)|([+-]?\d+):(\d+)(?::(\d+(?:\.\d+)?))?/g;
   let matched = false;
@@ -300,17 +368,24 @@ const parseIntervalParts = (s: string): { months: number; days: number; us: numb
 // Format duration components in Gel's canonical ISO-ish form: 'PT24H',
 // 'P1300Y', 'P11M20D', 'PT1M22.306916S', zero → 'PT0S'. Exact durations
 // (std::duration) fold days/months into hours.
-const formatDurationParts = (parts: { months: number; days: number; us: number }, exact: boolean): string => {
+const formatDurationParts = (
+  parts: { months: number; days: number; us: number },
+  exact: boolean,
+): string => {
   let { months, days, us } = parts;
   if (exact) {
     us += (months * 30 + days) * 86400 * 1e6;
-    months = 0; days = 0;
+    months = 0;
+    days = 0;
   }
   const neg = us < 0 && months === 0 && days === 0;
   let rest = Math.abs(us);
-  const h = Math.floor(rest / 3.6e9); rest -= h * 3.6e9;
-  const mi = Math.floor(rest / 6e7); rest -= mi * 6e7;
-  const sWhole = Math.floor(rest / 1e6); rest -= sWhole * 1e6;
+  const h = Math.floor(rest / 3.6e9);
+  rest -= h * 3.6e9;
+  const mi = Math.floor(rest / 6e7);
+  rest -= mi * 6e7;
+  const sWhole = Math.floor(rest / 1e6);
+  rest -= sWhole * 1e6;
   let secStr = String(sWhole);
   if (rest > 0) {
     let frac = String(Math.round(rest)).padStart(6, "0");
@@ -370,7 +445,10 @@ const scalarToStdName = (scalar: ScalarType): string => {
   }
 };
 
-const getSchemaTypeByQualifiedName = (ctx: IRCompileContext, qualifiedName: string): TypeDef | undefined => {
+const getSchemaTypeByQualifiedName = (
+  ctx: IRCompileContext,
+  qualifiedName: string,
+): TypeDef | undefined => {
   const modelType = ctx.schemaModel?.typesByName[qualifiedName];
   if (modelType) {
     return {
@@ -385,7 +463,10 @@ const getSchemaTypeByQualifiedName = (ctx: IRCompileContext, qualifiedName: stri
   return ctx.schema?.getType(qualifiedName);
 };
 
-const getResolvedSchemaType = (ctx: IRCompileContext, qualifiedName: string): GeneratedSchemaType | undefined => {
+const getResolvedSchemaType = (
+  ctx: IRCompileContext,
+  qualifiedName: string,
+): GeneratedSchemaType | undefined => {
   return ctx.schemaModel?.typesByName[qualifiedName];
 };
 
@@ -406,16 +487,19 @@ const listSchemaTypeDefs = (ctx: IRCompileContext): TypeDef[] => {
   return ctx.schema ? ctx.schema.listTypes() : [];
 };
 
-const qualifyTypeName = (name: string, moduleName: string): string => (name.includes("::") ? name : `${moduleName}::${name}`);
+const qualifyTypeName = (name: string, moduleName: string): string =>
+  name.includes("::") ? name : `${moduleName}::${name}`;
 
 const getSchemaType = (ctx: IRCompileContext, name: string): TypeDef | undefined => {
   if (!ctx.schema && !ctx.schemaModel) {
     return undefined;
   }
   const qualified = qualifyTypeName(name, ctx.module);
-  return getSchemaTypeByQualifiedName(ctx, qualified)
-    ?? getSchemaTypeByQualifiedName(ctx, name)
-    ?? getSchemaTypeByQualifiedName(ctx, `default::${name}`);
+  return (
+    getSchemaTypeByQualifiedName(ctx, qualified) ??
+    getSchemaTypeByQualifiedName(ctx, name) ??
+    getSchemaTypeByQualifiedName(ctx, `default::${name}`)
+  );
 };
 
 const collectDerivedTypes = (ctx: IRCompileContext, baseQualified: string): TypeDef[] => {
@@ -450,7 +534,11 @@ const collectDerivedTypes = (ctx: IRCompileContext, baseQualified: string): Type
   return derived;
 };
 
-const typeRefFromTypeDef = (ctx: IRCompileContext, typeDef: TypeDef, seen: globalThis.Set<string> = new globalThis.Set<string>()): TypeRef => {
+const typeRefFromTypeDef = (
+  ctx: IRCompileContext,
+  typeDef: TypeDef,
+  seen: globalThis.Set<string> = new globalThis.Set<string>(),
+): TypeRef => {
   const qualified = qualifiedTypeName(typeDef);
   const typeRef: TypeRef = {
     kind: "type_ref",
@@ -472,11 +560,12 @@ const typeRefFromTypeDef = (ctx: IRCompileContext, typeDef: TypeDef, seen: globa
   const resolved = getResolvedSchemaType(ctx, qualified);
   const children = resolved
     ? resolved.concreteSubtypes
-      .map((name) => getSchemaTypeByQualifiedName(ctx, name))
-      .filter((candidate): candidate is TypeDef => !!candidate)
-      .map((candidate) => typeRefFromTypeDef(ctx, candidate, nextSeen))
-    : collectDerivedTypes(ctx, qualified)
-      .map((candidate) => typeRefFromTypeDef(ctx, candidate, nextSeen));
+        .map((name) => getSchemaTypeByQualifiedName(ctx, name))
+        .filter((candidate): candidate is TypeDef => !!candidate)
+        .map((candidate) => typeRefFromTypeDef(ctx, candidate, nextSeen))
+    : collectDerivedTypes(ctx, qualified).map((candidate) =>
+        typeRefFromTypeDef(ctx, candidate, nextSeen),
+      );
   if (children.length > 0) {
     typeRef.children = children;
   }
@@ -641,13 +730,17 @@ const parseTupleStructuredTypeRef = (ctx: IRCompileContext, name: string): TypeR
   };
 };
 
-const parseStructuredCollectionTypeRef = (ctx: IRCompileContext, name: string): TypeRef | undefined => {
+const parseStructuredCollectionTypeRef = (
+  ctx: IRCompileContext,
+  name: string,
+): TypeRef | undefined => {
   const tuple = parseTupleStructuredTypeRef(ctx, name);
   if (tuple) return tuple;
   const trimmed = name.trim();
   if (!trimmed.startsWith("array<") || !trimmed.endsWith(">")) return undefined;
   const elementName = trimmed.slice("array<".length, -1).trim();
-  const element = parseStructuredCollectionTypeRef(ctx, elementName) ?? resolveTypeRef(ctx, elementName);
+  const element =
+    parseStructuredCollectionTypeRef(ctx, elementName) ?? resolveTypeRef(ctx, elementName);
   return {
     kind: "type_ref",
     id: `array<${element.id}>`,
@@ -705,15 +798,25 @@ const coerceArgToNamedTupleType = (
       };
     }
     const targetHasNamedTuple = (target: TypeRef): boolean =>
-      (target.collection === "tuple" && (target.subtypes ?? []).some((subtype) => subtype.elementName !== undefined))
-      || (target.subtypes ?? []).some(targetHasNamedTuple);
-    if (deepArrays && e.kind === "array" && typeRef.collection === "array" && typeRef.subtypes?.[0]
-        && targetHasNamedTuple(typeRef.subtypes[0])) {
+      (target.collection === "tuple" &&
+        (target.subtypes ?? []).some((subtype) => subtype.elementName !== undefined)) ||
+      (target.subtypes ?? []).some(targetHasNamedTuple);
+    const targetSubtype = typeRef.subtypes?.[0];
+    if (
+      deepArrays &&
+      e.kind === "array" &&
+      typeRef.collection === "array" &&
+      targetSubtype &&
+      targetHasNamedTuple(targetSubtype)
+    ) {
       const array = e as ArrayExpr;
       return {
         ...set,
         typeref: typeRef,
-        expr: { ...array, elements: array.elements.map((element) => rewrite(element, typeRef.subtypes![0])) },
+        expr: {
+          ...array,
+          elements: array.elements.map((element) => rewrite(element, targetSubtype)),
+        },
       };
     }
     if (e.kind === "operator_call" && (e as OperatorCall).operator === "union") {
@@ -774,7 +877,16 @@ const idPointerRef = (source: TypeRef): PointerRef => ({
   name: "id",
   shortName: "id",
   outSource: source,
-  outTarget: { kind: "type_ref", id: "std::uuid", nameHint: "std::uuid", module: "std", isView: false, isScalar: true, isAbstract: false, inSchema: true },
+  outTarget: {
+    kind: "type_ref",
+    id: "std::uuid",
+    nameHint: "std::uuid",
+    module: "std",
+    isView: false,
+    isScalar: true,
+    isAbstract: false,
+    inSchema: true,
+  },
   outCardinality: "one",
   inCardinality: "many",
   isComputed: false,
@@ -801,8 +913,12 @@ const pointerRefFromField = (source: TypeRef, field: FieldDef): PointerRef => ({
   outSource: source,
   outTarget: collectionFieldTargetRef(field),
   outCardinality: field.multi
-    ? (field.required ? "at_least_one" : "many")
-    : (field.required ? "one" : "at_most_one"),
+    ? field.required
+      ? "at_least_one"
+      : "many"
+    : field.required
+      ? "one"
+      : "at_most_one",
   inCardinality: "many",
   isComputed: false,
   isIdPointer: field.name === "id",
@@ -832,8 +948,12 @@ const pointerRefFromLink = (source: TypeRef, target: TypeRef, link: LinkDef): Po
     // present — not `at_most_one`, which would mislead cardinality inference
     // into thinking `owner := .owner` may be empty.
     outCardinality: link.multi
-      ? (link.required ? "at_least_one" : "many")
-      : (link.required ? "one" : "at_most_one"),
+      ? link.required
+        ? "at_least_one"
+        : "many"
+      : link.required
+        ? "one"
+        : "at_most_one",
     inCardinality: isExclusive ? "at_most_one" : "many",
     isComputed: false,
     isIdPointer: false,
@@ -952,9 +1072,9 @@ const stampDerivedExprPathIds = (root: unknown, ctx: IRCompileContext): void => 
     for (const child of Object.values(value)) visit(child);
     const node = value as { kind?: string; expr?: { kind?: string }; pathId?: PathId };
     if (
-      node.kind === "set"
-      && DERIVED_EXPR_SET_KINDS.has(node.expr?.kind ?? "")
-      && !pathIdIsDerivedExpr(node.pathId)
+      node.kind === "set" &&
+      DERIVED_EXPR_SET_KINDS.has(node.expr?.kind ?? "") &&
+      !pathIdIsDerivedExpr(node.pathId)
     ) {
       (node as { pathId: PathId }).pathId = derivedExprPathId(ctx);
     }
@@ -989,7 +1109,11 @@ const extendPathSet = (source: Set, ptrref: PointerRef): Set =>
   // underlying pointer *backward* (target -> source). Honour that here so the
   // single source of truth for building a pointer step is direction-aware,
   // rather than special-casing the flag at every call site.
-  extendPathSetDirectional(source, ptrref, ptrref.computedLinkAliasIsBackward ? "inbound" : "outbound");
+  extendPathSetDirectional(
+    source,
+    ptrref,
+    ptrref.computedLinkAliasIsBackward ? "inbound" : "outbound",
+  );
 
 // Re-root a compiled pointer-chain `body` onto `newRoot`, replacing its leftmost
 // subject `type_root` (of type `subjectTypeId`). A computed body like
@@ -1024,7 +1148,11 @@ const rerootSetSubject = (body: Set, newRoot: Set, subjectTypeId: string): Set |
 const effectivePointerCardinality = (ptrref: PointerRef): Cardinality =>
   ptrref.computedLinkAliasIsBackward ? ptrref.inCardinality : ptrref.outCardinality;
 
-export const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direction: "outbound" | "inbound"): Set => {
+export const extendPathSetDirectional = (
+  source: Set,
+  ptrref: PointerRef,
+  direction: "outbound" | "inbound",
+): Set => {
   const resultType = direction === "outbound" ? ptrref.outTarget : ptrref.outSource;
   return {
     kind: "set",
@@ -1039,7 +1167,10 @@ export const extendPathSetDirectional = (source: Set, ptrref: PointerRef, direct
       kind: "path_id",
       namespace: source.pathId?.namespace ?? [],
       isPointerPath: true,
-      steps: [...(source.pathId?.steps ?? [{ type: source.typeref }]), { type: resultType, pointer: ptrref }],
+      steps: [
+        ...(source.pathId?.steps ?? [{ type: source.typeref }]),
+        { type: resultType, pointer: ptrref },
+      ],
     },
     typeref: resultType,
     shape: [],
@@ -1071,9 +1202,12 @@ const validateParametersInStatement = (statement: EdgeQLStatement): void => {
     }
     if (node.kind === "shape_projection") {
       const inner = node.expr as Record<string, unknown> | undefined;
-      const innerKind = inner && typeof inner === "object" ? (inner as { kind?: string }).kind : undefined;
-      const isParamShape = innerKind === "parameter"
-        || (innerKind === "cast" && ((inner as { expr?: { kind?: string } }).expr?.kind === "parameter"));
+      const innerKind =
+        inner && typeof inner === "object" ? (inner as { kind?: string }).kind : undefined;
+      const isParamShape =
+        innerKind === "parameter" ||
+        (innerKind === "cast" &&
+          (inner as { expr?: { kind?: string } }).expr?.kind === "parameter");
       if (isParamShape) {
         throw new AppError("E_SEMANTIC", "cannot apply a shape to the parameter", 1, 1);
       }
@@ -1113,7 +1247,8 @@ const containsSubSelect = (expr: FreeObjectExpr): boolean => {
   if (expr.kind === "select_expr_subquery") return true;
   if (expr.kind === "field_access") return containsSubSelect(expr.expr);
   if (expr.kind === "cast") return containsSubSelect(expr.expr);
-  if (expr.kind === "exists" || expr.kind === "not") return containsSubSelect((expr as { expr: FreeObjectExpr }).expr);
+  if (expr.kind === "exists" || expr.kind === "not")
+    return containsSubSelect((expr as { expr: FreeObjectExpr }).expr);
   if (expr.kind === "index_access") return containsSubSelect(expr.expr);
   return false;
 };
@@ -1139,18 +1274,23 @@ function gatherBindingShape(set: Set, depth = 0): ShapeElement[] {
 }
 
 const computedOwnerSource = (source: Set, ctx?: IRCompileContext): Set => {
-  const owner = source.expr.kind === "visible_binding_expr" && ctx
-    ? ctx.objectBindings?.find(
-        (binding) => binding.id === (source.expr as { bindingId: string }).bindingId,
-      )?.source ?? source
-    : source;
+  const owner =
+    source.expr.kind === "visible_binding_expr" && ctx
+      ? (ctx.objectBindings?.find(
+          (binding) => binding.id === (source.expr as { bindingId: string }).bindingId,
+        )?.source ?? source)
+      : source;
   // The owner source is used only to recover row cardinality. Its computed
   // shape must not trigger object-shape unwrapping before select clauses are
   // applied, or a filtered/limited binding becomes a full table scan.
   return owner.shape.length > 0 ? { ...owner, shape: [] } : owner;
 };
 
-const resolveCarriedShapeElement = (source: Set, field: string, ctx?: IRCompileContext): Set | undefined => {
+const resolveCarriedShapeElement = (
+  source: Set,
+  field: string,
+  ctx?: IRCompileContext,
+): Set | undefined => {
   if (field.startsWith("@")) return undefined;
 
   // A shape attached to `source` may define a new computed pointer (for
@@ -1159,10 +1299,10 @@ const resolveCarriedShapeElement = (source: Set, field: string, ctx?: IRCompileC
   const matchShapeEntry = (entries: ShapeElement[] | undefined): ShapeElement | undefined =>
     entries?.find(
       (entry) =>
-        entry.name !== undefined
-        && entry.name === field
-        && entry.shapeOrigin === "explicit"
-        && entry.targetPtr === undefined,
+        entry.name !== undefined &&
+        entry.name === field &&
+        entry.shapeOrigin === "explicit" &&
+        entry.targetPtr === undefined,
     );
 
   let shapedElement = matchShapeEntry(source.shape);
@@ -1249,12 +1389,16 @@ const baseTraversesLinkOverSubSelect = (expr: FreeObjectExpr | undefined): boole
   if (expr.kind === "field_access") {
     return containsSubSelect(expr.expr) || baseTraversesLinkOverSubSelect(expr.expr);
   }
-  if (expr.kind === "select_expr_subquery") return baseTraversesLinkOverSubSelect(expr.expr as FreeObjectExpr);
-  if (expr.kind === "shape_projection") return baseTraversesLinkOverSubSelect((expr as { expr: FreeObjectExpr }).expr);
+  if (expr.kind === "select_expr_subquery")
+    return baseTraversesLinkOverSubSelect(expr.expr as FreeObjectExpr);
+  if (expr.kind === "shape_projection")
+    return baseTraversesLinkOverSubSelect((expr as { expr: FreeObjectExpr }).expr);
   return false;
 };
 
-const validateShapeProjectionLinkPropContext = (expr: Extract<FreeObjectExpr, { kind: "shape_projection" }>): void => {
+const validateShapeProjectionLinkPropContext = (
+  expr: Extract<FreeObjectExpr, { kind: "shape_projection" }>,
+): void => {
   if (!shapeRequestsLinkProperty(expr.shape)) return;
   if (baseTraversesLinkOverSubSelect(expr.expr)) {
     throw new AppError(
@@ -1266,7 +1410,11 @@ const validateShapeProjectionLinkPropContext = (expr: Extract<FreeObjectExpr, { 
   }
 };
 
-export const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field: string): PointerRef | undefined => {
+export const resolvePointerRef = (
+  ctx: IRCompileContext,
+  source: TypeRef,
+  field: string,
+): PointerRef | undefined => {
   // Every object type carries an implicit `id` pointer that isn't part of its
   // declared fields/links, so it never appears in `resolvedFields`. Surface it
   // explicitly so `FILTER .id = …` / `.id IN {…}` resolve to a real scalar
@@ -1285,9 +1433,16 @@ export const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field:
       const target = resolveTypeRef(ctx, schemaLink.targetType);
       return pointerRefFromLink(source, target, schemaLink);
     }
-    const schemaComputed = ctx.schema?.getType(source.id)?.computeds?.find((candidate) => candidate.kind === "link" && candidate.name === field);
+    const schemaComputed = ctx.schema
+      ?.getType(source.id)
+      ?.computeds?.find((candidate) => candidate.kind === "link" && candidate.name === field);
     if (schemaComputed?.kind === "link" && schemaComputed.expr.kind === "backlink") {
-      const backlink = resolveBacklinkPointerRef(ctx, source, schemaComputed.expr.link, schemaComputed.expr.sourceType);
+      const backlink = resolveBacklinkPointerRef(
+        ctx,
+        source,
+        schemaComputed.expr.link,
+        schemaComputed.expr.sourceType,
+      );
       return backlink ? { ...backlink, computedLinkAliasIsBackward: true } : undefined;
     }
     return undefined;
@@ -1297,18 +1452,24 @@ export const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field:
   // members, so probe each component for the field. The SQL polymorphic source
   // projects the column from each concrete branch (NULL where absent).
   if (source.id.includes("|")) {
-    const componentIds = source.id.replace(/^unknown:/, "").split("|").map((part) => part.trim());
+    const componentIds = source.id
+      .replace(/^unknown:/, "")
+      .split("|")
+      .map((part) => part.trim());
     for (const componentId of componentIds) {
-      const componentDef = getResolvedSchemaType(ctx, componentId) ?? ctx.schema?.getType(componentId);
+      const componentDef =
+        getResolvedSchemaType(ctx, componentId) ?? ctx.schema?.getType(componentId);
       if (!componentDef) continue;
       // `resolvedFields`/`resolvedLinks` only exist on GeneratedSchemaType;
       // a plain TypeDef exposes the unresolved `fields`/`links` instead.
-      const componentFields = "resolvedFields" in componentDef ? componentDef.resolvedFields : componentDef.fields;
+      const componentFields =
+        "resolvedFields" in componentDef ? componentDef.resolvedFields : componentDef.fields;
       const cField = (componentFields ?? []).find((c) => c.name === field);
       if (cField) {
         return pointerRefFromField(source, cField);
       }
-      const componentLinks = "resolvedLinks" in componentDef ? componentDef.resolvedLinks : componentDef.links;
+      const componentLinks =
+        "resolvedLinks" in componentDef ? componentDef.resolvedLinks : componentDef.links;
       const cLink = (componentLinks ?? []).find((c) => c.name === field);
       if (cLink) {
         return pointerRefFromLink(source, resolveTypeRef(ctx, cLink.targetType), cLink);
@@ -1338,7 +1499,10 @@ export const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field:
     return undefined;
   }
 
-  const findFieldOrLink = (typeName: string, seen = new Set<string>()): { kind: "field"; field: FieldDef } | { kind: "link"; link: LinkDef } | undefined => {
+  const findFieldOrLink = (
+    typeName: string,
+    seen = new Set<string>(),
+  ): { kind: "field"; field: FieldDef } | { kind: "link"; link: LinkDef } | undefined => {
     if (!ctx.schema || seen.has(typeName)) {
       return undefined;
     }
@@ -1374,9 +1538,16 @@ export const resolvePointerRef = (ctx: IRCompileContext, source: TypeRef, field:
     const target = resolveTypeRef(ctx, resolved.link.targetType);
     return pointerRefFromLink(source, target, resolved.link);
   }
-  const computed = sourceTypeDef.computeds?.find((candidate) => candidate.kind === "link" && candidate.name === field);
+  const computed = sourceTypeDef.computeds?.find(
+    (candidate) => candidate.kind === "link" && candidate.name === field,
+  );
   if (computed?.kind === "link" && computed.expr.kind === "backlink") {
-    const backlink = resolveBacklinkPointerRef(ctx, source, computed.expr.link, computed.expr.sourceType);
+    const backlink = resolveBacklinkPointerRef(
+      ctx,
+      source,
+      computed.expr.link,
+      computed.expr.sourceType,
+    );
     return backlink ? { ...backlink, computedLinkAliasIsBackward: true } : undefined;
   }
   return undefined;
@@ -1397,7 +1568,10 @@ const resolveBacklinkPointerRef = (
   // by an abstract (or otherwise polymorphic) supertype. When the filter is a
   // concrete type, this collapses to `{filter id}`.
   const allowedSourceIds = sourceHint
-    ? new globalThis.Set<string>([sourceHint, ...(hintTypeDef && ctx.schema ? ctx.schema.concreteTypeNamesUnder(sourceHint) : [])])
+    ? new globalThis.Set<string>([
+        sourceHint,
+        ...(hintTypeDef && ctx.schema ? ctx.schema.concreteTypeNamesUnder(sourceHint) : []),
+      ])
     : undefined;
   // Targets accepted by this backlink. Includes the requested type and any
   // ancestor whose link target is a union (`Issue.references: File | URL | …`)
@@ -1497,7 +1671,10 @@ const tryLowerComputedPropertyOnTypePath = (
     return literalToSet(expr.value);
   }
   if (expr.kind === "set_literal") {
-    return compileSetConstructor(expr.values.map((value) => literalToSet(value)), "set_literal");
+    return compileSetConstructor(
+      expr.values.map((value) => literalToSet(value)),
+      "set_literal",
+    );
   }
   if (expr.kind === "edgeql_expr") {
     // Free-form EdgeQL computed body: parse, bind the current source as the
@@ -1616,12 +1793,22 @@ const collectForBodyElementFields = (body: unknown, varName: string): globalThis
   const isElementsExpr = (n: unknown): boolean => {
     if (!n || typeof n !== "object") return false;
     const node = n as Record<string, unknown> & { kind?: string };
-    if ((node.kind === "select_expr" || node.kind === "select_expr_subquery" || node.kind === "subquery_expr") && node.expr) {
+    if (
+      (node.kind === "select_expr" ||
+        node.kind === "select_expr_subquery" ||
+        node.kind === "subquery_expr") &&
+      node.expr
+    ) {
       return isElementsExpr(node.expr);
     }
     if (node.kind === "path" && Array.isArray(node.steps) && node.steps.length === 2) {
       const [head, step] = node.steps as Array<{ kind?: string; name?: string }>;
-      return head?.kind === "object_ref" && head.name === varName && step?.kind === "ptr" && step.name === "elements";
+      return (
+        head?.kind === "object_ref" &&
+        head.name === varName &&
+        step?.kind === "ptr" &&
+        step.name === "elements"
+      );
     }
     if (node.kind === "field_access" && node.field === "elements") {
       const src = node.expr as { kind?: string; name?: string } | undefined;
@@ -1631,10 +1818,16 @@ const collectForBodyElementFields = (body: unknown, varName: string): globalThis
   };
   const collectLeadingDots = (n: unknown): void => {
     if (!n || typeof n !== "object") return;
-    if (Array.isArray(n)) { n.forEach(collectLeadingDots); return; }
+    if (Array.isArray(n)) {
+      n.forEach(collectLeadingDots);
+      return;
+    }
     const node = n as Record<string, unknown> & { kind?: string; field?: string };
-    if (node.kind === "field_access" && typeof node.field === "string"
-        && (node.expr as { kind?: string } | undefined)?.kind === "current_item") {
+    if (
+      node.kind === "field_access" &&
+      typeof node.field === "string" &&
+      (node.expr as { kind?: string } | undefined)?.kind === "current_item"
+    ) {
       out.add(node.field);
     }
     if (node.kind === "path" && Array.isArray(node.steps)) {
@@ -1646,8 +1839,12 @@ const collectForBodyElementFields = (body: unknown, varName: string): globalThis
   const collectAliasShape = (shape: unknown): void => {
     if (!Array.isArray(shape)) return;
     for (const el of shape) {
-      if (el && typeof el === "object" && typeof (el as { name?: unknown }).name === "string"
-          && (el as { kind?: string }).kind === "field") {
+      if (
+        el &&
+        typeof el === "object" &&
+        typeof (el as { name?: unknown }).name === "string" &&
+        (el as { kind?: string }).kind === "field"
+      ) {
         out.add((el as { name: string }).name);
       }
     }
@@ -1658,7 +1855,10 @@ const collectForBodyElementFields = (body: unknown, varName: string): globalThis
   // (clauses serialize after the result expression).
   const registerAliases = (n: unknown): void => {
     if (!n || typeof n !== "object") return;
-    if (Array.isArray(n)) { n.forEach(registerAliases); return; }
+    if (Array.isArray(n)) {
+      n.forEach(registerAliases);
+      return;
+    }
     const node = n as Record<string, unknown>;
     for (const wbKey of ["with", "_withBindings"]) {
       const wb = node[wbKey] ?? (node.clauses as Record<string, unknown> | undefined)?.[wbKey];
@@ -1673,37 +1873,61 @@ const collectForBodyElementFields = (body: unknown, varName: string): globalThis
   };
   const walk = (n: unknown): void => {
     if (!n || typeof n !== "object") return;
-    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (Array.isArray(n)) {
+      n.forEach(walk);
+      return;
+    }
     const node = n as Record<string, unknown> & { kind?: string; field?: string };
     // `g.elements.X` — path or field_access form; `U.X` via an alias.
     if (node.kind === "path" && Array.isArray(node.steps)) {
       const steps = node.steps as Array<{ kind?: string; name?: string }>;
-      if (steps[0]?.kind === "object_ref" && steps[0].name === varName
-          && steps[1]?.kind === "ptr" && steps[1].name === "elements"
-          && steps[2]?.kind === "ptr" && typeof steps[2].name === "string") {
+      if (
+        steps[0]?.kind === "object_ref" &&
+        steps[0].name === varName &&
+        steps[1]?.kind === "ptr" &&
+        steps[1].name === "elements" &&
+        steps[2]?.kind === "ptr" &&
+        typeof steps[2].name === "string"
+      ) {
         out.add(steps[2].name);
       }
-      if (steps[0]?.kind === "object_ref" && typeof steps[0].name === "string"
-          && elementAliases.has(steps[0].name)
-          && steps[1]?.kind === "ptr" && typeof steps[1].name === "string") {
+      if (
+        steps[0]?.kind === "object_ref" &&
+        typeof steps[0].name === "string" &&
+        elementAliases.has(steps[0].name) &&
+        steps[1]?.kind === "ptr" &&
+        typeof steps[1].name === "string"
+      ) {
         out.add(steps[1].name);
       }
     }
     if (node.kind === "field_access" && typeof node.field === "string") {
       const src = node.expr as { kind?: string; name?: string } | undefined;
       if (isElementsExpr(node.expr)) out.add(node.field);
-      if (src?.kind === "binding_ref" && typeof src.name === "string" && elementAliases.has(src.name)) {
+      if (
+        src?.kind === "binding_ref" &&
+        typeof src.name === "string" &&
+        elementAliases.has(src.name)
+      ) {
         out.add(node.field);
       }
     }
     // A shape applied to an element alias: collect its plain fields and
     // leading-dot references inside its computeds.
-    if (node.kind === "select" && typeof node.typeName === "string" && elementAliases.has(node.typeName)) {
+    if (
+      node.kind === "select" &&
+      typeof node.typeName === "string" &&
+      elementAliases.has(node.typeName)
+    ) {
       collectAliasShape(node.shape);
     }
     if (node.kind === "shape_projection") {
       const src = node.expr as { kind?: string; name?: string } | undefined;
-      if (src?.kind === "binding_ref" && typeof src.name === "string" && elementAliases.has(src.name)) {
+      if (
+        src?.kind === "binding_ref" &&
+        typeof src.name === "string" &&
+        elementAliases.has(src.name)
+      ) {
         collectAliasShape(node.shape);
       }
     }
@@ -1721,8 +1945,11 @@ const collectGroupSubjectFieldNames = (subject: Set): globalThis.Set<string> => 
   let cursor: Set = subject;
   for (;;) {
     for (const shapeEl of cursor.shape ?? []) {
-      const elName = shapeEl.name
-        ?? (shapeEl.expr.expr.kind === "pointer" ? (shapeEl.expr.expr as Pointer).ptrref.shortName : undefined);
+      const elName =
+        shapeEl.name ??
+        (shapeEl.expr.expr.kind === "pointer"
+          ? (shapeEl.expr.expr as Pointer).ptrref.shortName
+          : undefined);
       if (elName) have.add(elName);
     }
     if (cursor.expr.kind === "tuple") {
@@ -1759,7 +1986,8 @@ const augmentGroupRowFieldShape = (
   if (base.expr.kind !== "group_row_field") return;
   const present = new globalThis.Set(compiledShape.map((el) => el.name).filter(Boolean));
   for (const astEl of astShape ?? []) {
-    if (astEl.kind !== "field" || typeof astEl.name !== "string" || present.has(astEl.name)) continue;
+    if (astEl.kind !== "field" || typeof astEl.name !== "string" || present.has(astEl.name))
+      continue;
     const fieldSet = tryExtendGroupRowFieldPath(base, astEl.name);
     if (!fieldSet) continue;
     compiledShape.push({
@@ -1775,7 +2003,11 @@ const augmentGroupRowFieldShape = (
   }
 };
 
-const tryExtendGroupRowFieldPath = (out: Set, stepName: string, direction?: "outbound" | "inbound"): Set | undefined => {
+const tryExtendGroupRowFieldPath = (
+  out: Set,
+  stepName: string,
+  direction?: "outbound" | "inbound",
+): Set | undefined => {
   if (stepName.startsWith("@")) return undefined;
   // Backlink steps (`g.elements.<owner`) can't be read off the row JSON —
   // record them with a `<` marker so the SQL stage bails (and the runtime
@@ -1846,8 +2078,11 @@ const resolveNamedTupleElement = (source: Set, field: string): Set | undefined =
   // when a UDF param `x: tuple<a: int64>` is bound to a multi-set argument and
   // the body projects `x.a`): distribute the projection over each operand so
   // the union carries the element values, not whole tuples.
-  if (!isCorrelatedTupleUnion(source)
-      && cursor.expr.kind === "operator_call" && (cursor.expr as OperatorCall).operator === "union") {
+  if (
+    !isCorrelatedTupleUnion(source) &&
+    cursor.expr.kind === "operator_call" &&
+    (cursor.expr as OperatorCall).operator === "union"
+  ) {
     const op = cursor.expr as OperatorCall;
     const newArgs: Record<string, CallArg> = {};
     for (const [k, arg] of Object.entries(op.args)) {
@@ -1867,26 +2102,45 @@ const resolveNamedTupleElement = (source: Set, field: string): Set | undefined =
 const collectSetTypeRoots = (set: Set, out: globalThis.Set<string>): void => {
   const e = set.expr;
   switch (e.kind) {
-    case "type_root": out.add((e as TypeRoot).typeref.id); break;
-    case "pointer": collectSetTypeRoots((e as Pointer).source, out); break;
-    case "select_expr": collectSetTypeRoots((e as SelectExpr).result, out); break;
-    case "for_expr": collectSetTypeRoots((e as { body: Set }).body, out); break;
-    case "index_expr": collectSetTypeRoots((e as IndexExpr).expr, out); break;
-    case "tuple": for (const el of (e as Tuple).elements) collectSetTypeRoots(el.val, out); break;
-    case "array": for (const el of (e as ArrayExpr).elements) collectSetTypeRoots(el, out); break;
+    case "type_root":
+      out.add((e as TypeRoot).typeref.id);
+      break;
+    case "pointer":
+      collectSetTypeRoots((e as Pointer).source, out);
+      break;
+    case "select_expr":
+      collectSetTypeRoots((e as SelectExpr).result, out);
+      break;
+    case "for_expr":
+      collectSetTypeRoots((e as { body: Set }).body, out);
+      break;
+    case "index_expr":
+      collectSetTypeRoots((e as IndexExpr).expr, out);
+      break;
+    case "tuple":
+      for (const el of (e as Tuple).elements) collectSetTypeRoots(el.val, out);
+      break;
+    case "array":
+      for (const el of (e as ArrayExpr).elements) collectSetTypeRoots(el, out);
+      break;
     case "coalesce_expr":
       collectSetTypeRoots((e as CoalesceExpr).left, out);
       collectSetTypeRoots((e as CoalesceExpr).right, out);
       break;
-    case "type_cast": collectSetTypeRoots((e as TypeCast).expr, out); break;
-    case "exists_expr": collectSetTypeRoots((e as ExistsExpr).expr, out); break;
+    case "type_cast":
+      collectSetTypeRoots((e as TypeCast).expr, out);
+      break;
+    case "exists_expr":
+      collectSetTypeRoots((e as ExistsExpr).expr, out);
+      break;
     case "operator_call":
     case "function_call":
       for (const arg of Object.values((e as { args: Record<string, CallArg> }).args)) {
         collectSetTypeRoots(arg.expr, out);
       }
       break;
-    default: break;
+    default:
+      break;
   }
   for (const sh of set.shape ?? []) collectSetTypeRoots(sh.expr, out);
 };
@@ -1906,7 +2160,8 @@ const resolveConstTupleIndexElement = (source: Set, index: number): Set | undefi
   for (;;) {
     if (cursor.expr.kind === "select_expr") {
       const se = cursor.expr as SelectExpr;
-      if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return undefined;
+      if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0))
+        return undefined;
       cursor = se.result;
     } else if (cursor.expr.kind === "function_call" && (cursor.expr as IRFunctionCall).body) {
       // `foo(…).0` where `foo` is an inlined tuple-returning UDF: peel into the
@@ -1925,7 +2180,8 @@ const resolveConstTupleIndexElement = (source: Set, index: number): Set | undefi
         cursor = array.elements[arrayIndex];
         while (cursor.expr.kind === "select_expr") {
           const se = cursor.expr as SelectExpr;
-          if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return undefined;
+          if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0))
+            return undefined;
           cursor = se.result;
         }
       }
@@ -1933,8 +2189,11 @@ const resolveConstTupleIndexElement = (source: Set, index: number): Set | undefi
   }
   // `.N` over a UNION of tuples (`{(1,), (2,)}.0`): distribute the projection
   // over each operand so the union carries element N, not whole tuples.
-  if (!isCorrelatedTupleUnion(source)
-      && cursor.expr.kind === "operator_call" && (cursor.expr as OperatorCall).operator === "union") {
+  if (
+    !isCorrelatedTupleUnion(source) &&
+    cursor.expr.kind === "operator_call" &&
+    (cursor.expr as OperatorCall).operator === "union"
+  ) {
     const op = cursor.expr as OperatorCall;
     const newArgs: Record<string, CallArg> = {};
     for (const [k, arg] of Object.entries(op.args)) {
@@ -1994,7 +2253,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
           }
           return { ...out, pathId: defaultPathId("path_steps") };
         }
-        out = extendPathSetDirectional(out, ptrref, ptrref.computedLinkAliasIsBackward ? "inbound" : (step.direction ?? "outbound"));
+        out = extendPathSetDirectional(
+          out,
+          ptrref,
+          ptrref.computedLinkAliasIsBackward ? "inbound" : (step.direction ?? "outbound"),
+        );
         if (step.optional) {
           out = { ...out, expr: { ...(out.expr as Pointer), optionalDeref: true } };
         }
@@ -2029,13 +2292,21 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       const rest = steps.slice(1);
       const memberStep = rest.find((step) => step.kind === "ptr");
       if (!memberStep || memberStep.kind !== "ptr") {
-        failSemantic(`enum path expression lacks an enum member name, as in '${first.name}.${enumType.members[0]}'`);
+        failSemantic(
+          `enum path expression lacks an enum member name, as in '${first.name}.${enumType.members[0]}'`,
+        );
       }
       const ptrSteps = rest.filter((step) => step.kind === "ptr");
       if (ptrSteps.length > 1) {
         failSemantic(`invalid property reference on an expression of primitive type`);
       }
-      return resolvePathToEnumLiteral(ctx, first.name, (memberStep as { kind: "ptr"; name: string }).name) ?? literalToSet(null);
+      return (
+        resolvePathToEnumLiteral(
+          ctx,
+          first.name,
+          (memberStep as { kind: "ptr"; name: string }).name,
+        ) ?? literalToSet(null)
+      );
     }
   }
   let out = resolveBinding(ctx, first.name) ?? setFromTypeRoot(resolveTypeRef(ctx, first.name));
@@ -2046,7 +2317,12 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     if (step.kind === "ptr") {
       // `.foo` on a primitive value — e.g. a WITH-bound enum member
       // (`WITH x := color_enum_t.RED SELECT x.GREEN`) — is invalid.
-      if (out.typeref.isScalar && step.name !== "id" && step.name !== "__type__" && !step.name.startsWith("@")) {
+      if (
+        out.typeref.isScalar &&
+        step.name !== "id" &&
+        step.name !== "__type__" &&
+        !step.name.startsWith("@")
+      ) {
         failSemantic(`invalid property reference on an expression of primitive type`);
       }
       // `X.__type__.name` — `__type__` has no schema pointer; synthesize the
@@ -2056,7 +2332,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         out = synthesizeTypePointerSet(out);
         continue;
       }
-      if (step.name === "name" && out.expr.kind === "pointer" && (out.expr as Pointer).ptrref.shortName === "__type__") {
+      if (
+        step.name === "name" &&
+        out.expr.kind === "pointer" &&
+        (out.expr as Pointer).ptrref.shortName === "__type__"
+      ) {
         out = synthesizeTypeNamePointerSet(out);
         continue;
       }
@@ -2078,8 +2358,11 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
       // A type intersection can narrow to a SUPERTYPE (`Issue[IS Named]`):
       // the rows are still the original type's, so a pointer the narrowed
       // view lacks resolves against the underlying root type.
-      if (!ptrref && out.expr.kind === "type_root"
-          && (out.expr as TypeRoot).typeref.id !== out.typeref.id) {
+      if (
+        !ptrref &&
+        out.expr.kind === "type_root" &&
+        (out.expr as TypeRoot).typeref.id !== out.typeref.id
+      ) {
         ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
       }
       if (!ptrref) {
@@ -2197,7 +2480,10 @@ export const resolveBinding = (ctx: IRCompileContext, name: string): Set | undef
   return undefined;
 };
 
-const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined): IRCompileContext => {
+const withBindings = (
+  ctx: IRCompileContext,
+  bindings: WithBinding[] | undefined,
+): IRCompileContext => {
   if (!bindings?.length) {
     return ctx;
   }
@@ -2245,13 +2531,21 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
         );
         break;
       case "parameter":
-        set = compileFreeObjectExpr({ kind: "parameter", name: binding.value.name, castType: binding.value.castType }, scoped);
+        set = compileFreeObjectExpr(
+          { kind: "parameter", name: binding.value.name, castType: binding.value.castType },
+          scoped,
+        );
         break;
       case "binding_ref":
-        set = resolveBinding(scoped, binding.value.name) ?? compileFreeObjectExpr({ kind: "binding_ref", name: binding.value.name }, scoped);
+        set =
+          resolveBinding(scoped, binding.value.name) ??
+          compileFreeObjectExpr({ kind: "binding_ref", name: binding.value.name }, scoped);
         break;
       case "path":
-        set = compileFreeObjectExpr({ kind: "path", head: binding.value.head, tail: binding.value.tail }, scoped);
+        set = compileFreeObjectExpr(
+          { kind: "path", head: binding.value.head, tail: binding.value.tail },
+          scoped,
+        );
         break;
       case "path_chain":
         set = compileFreeObjectExpr({ kind: "path_chain", parts: binding.value.parts }, scoped);
@@ -2295,8 +2589,8 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
     // IR-identical, so this mark is the only thing that distinguishes them.
     // (ADR 0059)
     if (
-      set.expr.kind === "function_call"
-      && (set.expr.functionName.split("::").pop() ?? "") === "count"
+      set.expr.kind === "function_call" &&
+      (set.expr.functionName.split("::").pop() ?? "") === "count"
     ) {
       const call = set.expr as IRFunctionCall;
       const markedArgs: Record<string, CallArg> = {};
@@ -2307,11 +2601,7 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
     }
     // Tag object identity aliases so a later bare reference to the same type
     // is distinguishable from the WITH binding in SQL outer-scope matching.
-    if (
-      !set.typeref.isScalar
-      && set.expr.kind === "type_root"
-      && set.pathId
-    ) {
+    if (!set.typeref.isScalar && set.expr.kind === "type_root" && set.pathId) {
       const ns = `with:${binding.name}:${ctx.nextScopeId++}`;
       set = {
         ...set,
@@ -2322,16 +2612,21 @@ const withBindings = (ctx: IRCompileContext, bindings: WithBinding[] | undefined
       };
     }
     if (!set.typeref.isScalar) {
-      const bindingId = `b${scoped.bindingIdCounter!.next++}`;
-      const nestedDefinitions = scoped.objectBindings!.slice(definitionStart);
-      scoped.objectBindings!.length = definitionStart;
-      scoped.objectBindings!.push({
+      const bindingIdCounter = scoped.bindingIdCounter;
+      const objectBindings = scoped.objectBindings;
+      if (!bindingIdCounter || !objectBindings) {
+        throw new Error("Object binding scope is missing its binding registry");
+      }
+      const bindingId = `b${bindingIdCounter.next++}`;
+      const nestedDefinitions = objectBindings.slice(definitionStart);
+      objectBindings.length = definitionStart;
+      objectBindings.push({
         kind: "object_select_binding",
         id: bindingId,
         source: set,
         definitionScopeId: ctx.nextScopeId++,
       });
-      scoped.objectBindings!.push(...nestedDefinitions);
+      objectBindings.push(...nestedDefinitions);
       bindValue(scoped, binding.name, visibleBindingSet(set, bindingId));
     } else {
       bindValue(scoped, binding.name, set);
@@ -2384,9 +2679,10 @@ const compileSetConstructor = (values: Set[], label: string): Set => {
     .map((ref) => ref.id);
   const distinctObjectIds = [...new globalThis.Set(objectIds)];
   const allObjects = objectIds.length === values.length;
-  const typeref = allObjects && distinctObjectIds.length > 1
-    ? ({ ...first.typeref, id: distinctObjectIds.join(" | "), isAbstract: false } as TypeRef)
-    : first.typeref;
+  const typeref =
+    allObjects && distinctObjectIds.length > 1
+      ? ({ ...first.typeref, id: distinctObjectIds.join(" | "), isAbstract: false } as TypeRef)
+      : first.typeref;
   return {
     kind: "set",
     expr: {
@@ -2425,11 +2721,20 @@ const validateUnionPointerCompat = (left: Set, right: Set, ctx: IRCompileContext
   const unionName = `(${lId} | ${rId})`;
   const fieldStdName = (f: FieldDef): string => f.enumTypeName ?? scalarToStdName(f.type);
   const qLink = (l: LinkDef): string => qualifyTypeName(l.targetType, ctx.module);
-  const lProps = new Map((lDef.fields ?? []).filter((f) => !f.isLinkColumn).map((f) => [f.name, f] as const));
-  const rProps = new Map((rDef.fields ?? []).filter((f) => !f.isLinkColumn).map((f) => [f.name, f] as const));
+  const lProps = new Map(
+    (lDef.fields ?? []).filter((f) => !f.isLinkColumn).map((f) => [f.name, f] as const),
+  );
+  const rProps = new Map(
+    (rDef.fields ?? []).filter((f) => !f.isLinkColumn).map((f) => [f.name, f] as const),
+  );
   const lLinks = new Map((lDef.links ?? []).map((l) => [l.name, l] as const));
   const rLinks = new Map((rDef.links ?? []).map((l) => [l.name, l] as const));
-  const names = new globalThis.Set<string>([...lProps.keys(), ...rProps.keys(), ...lLinks.keys(), ...rLinks.keys()]);
+  const names = new globalThis.Set<string>([
+    ...lProps.keys(),
+    ...rProps.keys(),
+    ...lLinks.keys(),
+    ...rLinks.keys(),
+  ]);
   for (const name of names) {
     if (name === "id" || name === "__type__") continue;
     const lp = lProps.get(name);
@@ -2440,13 +2745,17 @@ const validateUnionPointerCompat = (left: Set, right: Set, ctx: IRCompileContext
       const lt = fieldStdName(lp);
       const rt = fieldStdName(rp);
       if (lt !== rt) {
-        failSemantic(`cannot create union ${unionName} with property '${name}' using incompatible types ${lt}, ${rt}`);
+        failSemantic(
+          `cannot create union ${unionName} with property '${name}' using incompatible types ${lt}, ${rt}`,
+        );
       }
     } else if (ll && rl) {
       const lt = qLink(ll);
       const rt = qLink(rl);
       if (lt !== rt) {
-        failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${lt}, ${rt}`);
+        failSemantic(
+          `cannot create union ${unionName} with link '${name}' using incompatible types ${lt}, ${rt}`,
+        );
       }
       const lProp = new Map((ll.properties ?? []).map((p) => [p.name, p] as const));
       for (const rprop of rl.properties ?? []) {
@@ -2455,14 +2764,20 @@ const validateUnionPointerCompat = (left: Set, right: Set, ctx: IRCompileContext
           const a = scalarToStdName(lprop.type);
           const b = scalarToStdName(rprop.type);
           if (a !== b) {
-            failSemantic(`cannot create union ${unionName} with link '${name}' with property '${rprop.name}' using incompatible types ${a}, ${b}`);
+            failSemantic(
+              `cannot create union ${unionName} with link '${name}' with property '${rprop.name}' using incompatible types ${a}, ${b}`,
+            );
           }
         }
       }
     } else if (ll && rp) {
-      failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(ll)}, ${fieldStdName(rp)}`);
+      failSemantic(
+        `cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(ll)}, ${fieldStdName(rp)}`,
+      );
     } else if (lp && rl) {
-      failSemantic(`cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(rl)}, ${fieldStdName(lp)}`);
+      failSemantic(
+        `cannot create union ${unionName} with link '${name}' using incompatible types ${qLink(rl)}, ${fieldStdName(lp)}`,
+      );
     }
   }
 };
@@ -2470,13 +2785,21 @@ const validateUnionPointerCompat = (left: Set, right: Set, ctx: IRCompileContext
 const enumValuesOfTypeDef = (typeDef: TypeDef | undefined): string[] | undefined => {
   if (!typeDef) return undefined;
   const first = typeDef.fields[0];
-  if (typeDef.fields.length === 1 && first?.name === "__enum__" && first.enumValues && first.enumValues.length > 0) {
+  if (
+    typeDef.fields.length === 1 &&
+    first?.name === "__enum__" &&
+    first.enumValues &&
+    first.enumValues.length > 0
+  ) {
     return first.enumValues;
   }
   return undefined;
 };
 
-const lookupEnumScalar = (ctx: IRCompileContext, name: string): { qualifiedName: string; members: string[] } | undefined => {
+const lookupEnumScalar = (
+  ctx: IRCompileContext,
+  name: string,
+): { qualifiedName: string; members: string[] } | undefined => {
   const typeDef = getSchemaType(ctx, name);
   const members = enumValuesOfTypeDef(typeDef);
   if (!typeDef || !members) return undefined;
@@ -2485,11 +2808,17 @@ const lookupEnumScalar = (ctx: IRCompileContext, name: string): { qualifiedName:
 
 const enumLiteralSet = (member: string): Set => literalToSet(member);
 
-const resolvePathToEnumLiteral = (ctx: IRCompileContext, head: string, tail: string | undefined): Set | undefined => {
+const resolvePathToEnumLiteral = (
+  ctx: IRCompileContext,
+  head: string,
+  tail: string | undefined,
+): Set | undefined => {
   const enumType = lookupEnumScalar(ctx, head);
   if (!enumType) return undefined;
   if (tail === undefined) {
-    return failSemantic(`enum path expression lacks an enum member name, as in '${head}.${enumType.members[0]}'`);
+    return failSemantic(
+      `enum path expression lacks an enum member name, as in '${head}.${enumType.members[0]}'`,
+    );
   }
   if (!enumType.members.includes(tail)) {
     // Matches upstream Gel's phrasing ("enum has no member called 'X'");
@@ -2533,7 +2862,11 @@ const jsonTypeNameForLiteral = (value: unknown): string => {
 const tryExtractSetOfStringConstants = (set: Set): string[] | undefined => {
   const direct = tryExtractStringConstant(set);
   if (direct !== undefined) return [direct];
-  const expr = set.expr as { kind: string; operator?: string; args?: Record<string, { expr: Set }> };
+  const expr = set.expr as {
+    kind: string;
+    operator?: string;
+    args?: Record<string, { expr: Set }>;
+  };
   if (expr.kind === "operator_call" && expr.operator === "union" && expr.args) {
     const values: string[] = [];
     for (const key of Object.keys(expr.args).sort((a, b) => Number(a) - Number(b))) {
@@ -2637,7 +2970,11 @@ const normalizeScalarCastName = (ctx: IRCompileContext, name: string): string =>
   return `${ctx.module}::${name}`;
 };
 
-const inferPropertyTypeName = (ctx: IRCompileContext, typeName: string, fieldName: string): string | undefined => {
+const inferPropertyTypeName = (
+  ctx: IRCompileContext,
+  typeName: string,
+  fieldName: string,
+): string | undefined => {
   const typeDef = getSchemaType(ctx, typeName);
   if (!typeDef) return undefined;
   const field = typeDef.fields.find((f) => f.name === fieldName);
@@ -2661,7 +2998,8 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         // Parser stamps a numericKind hint so `1` (int) is distinguishable
         // from `1.0` (float) — `Number.isInteger(1.0)` is true, so we'd
         // otherwise mis-classify floats whose fractional part is zero.
-        const kind = (expr as { numericKind?: "integer" | "float" | "bigint" | "decimal" }).numericKind;
+        const kind = (expr as { numericKind?: "integer" | "float" | "bigint" | "decimal" })
+          .numericKind;
         if (kind === "float") return "std::float64";
         if (kind === "bigint") return "std::bigint";
         if (kind === "decimal") return "std::decimal";
@@ -2671,8 +3009,11 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       return undefined;
     case "cast": {
       const castType = normalizeScalarCastName(ctx, expr.castType);
-      if (expr.expr.kind === "array_literal_expr"
-          && !castType.startsWith("array<") && !castType.startsWith("tuple<")) {
+      if (
+        expr.expr.kind === "array_literal_expr" &&
+        !castType.startsWith("array<") &&
+        !castType.startsWith("tuple<")
+      ) {
         return `array<${castType}>`;
       }
       return castType;
@@ -2699,7 +3040,11 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       if (enumType) return enumType.qualifiedName;
       const ptrSteps = expr.steps.slice(1).filter((step) => step.kind === "ptr");
       if (ptrSteps.length === 1) {
-        return inferPropertyTypeName(ctx, first.name, (ptrSteps[0] as { kind: "ptr"; name: string }).name);
+        return inferPropertyTypeName(
+          ctx,
+          first.name,
+          (ptrSteps[0] as { kind: "ptr"; name: string }).name,
+        );
       }
       return undefined;
     }
@@ -2799,18 +3144,31 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       for (const value of values) {
         const t = inferAstExprTypeName(value, ctx);
         if (!t) continue;
-        if (!acc) { acc = t; continue; }
+        if (!acc) {
+          acc = t;
+          continue;
+        }
         // Re-use the math promotion rules for set element promotion.
         const promoted = inferAstExprTypeName(
-          { kind: "math", op: "add", left: { kind: "literal", value: 0 }, right: { kind: "literal", value: 0 } } as unknown as FreeObjectExpr,
+          {
+            kind: "math",
+            op: "add",
+            left: { kind: "literal", value: 0 },
+            right: { kind: "literal", value: 0 },
+          } as unknown as FreeObjectExpr,
           ctx,
         );
         // Direct path: emulate INT_RANK / FLOAT_RANK promotion here.
         const INT_RANK: Record<string, number> = {
-          "std::int16": 1, "std::int32": 2, "std::int64": 3, "std::bigint": 4,
+          "std::int16": 1,
+          "std::int32": 2,
+          "std::int64": 3,
+          "std::bigint": 4,
         };
         const FLOAT_RANK: Record<string, number> = {
-          "std::float32": 1, "std::float64": 2, "std::decimal": 3,
+          "std::float32": 1,
+          "std::float64": 2,
+          "std::decimal": 3,
         };
         const aInt = INT_RANK[acc];
         const bInt = INT_RANK[t];
@@ -2820,7 +3178,10 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
           acc = aInt >= bInt ? acc : t;
         } else if (aFloat !== undefined && bFloat !== undefined) {
           acc = aFloat >= bFloat ? acc : t;
-        } else if ((aInt !== undefined && bFloat !== undefined) || (aFloat !== undefined && bInt !== undefined)) {
+        } else if (
+          (aInt !== undefined && bFloat !== undefined) ||
+          (aFloat !== undefined && bInt !== undefined)
+        ) {
           const floatType = aFloat !== undefined ? acc : t;
           const intType = aInt !== undefined ? acc : t;
           if (floatType === "std::decimal") acc = "std::decimal";
@@ -2874,7 +3235,10 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // String concat returns str; array concat returns the array type.
       const parts = (expr as { parts: FreeObjectExpr[] }).parts;
       for (const part of parts) {
-        const boundType = part.kind === "binding_ref" ? resolveBinding(ctx, part.name)?.typeref.nameHint : undefined;
+        const boundType =
+          part.kind === "binding_ref"
+            ? resolveBinding(ctx, part.name)?.typeref.nameHint
+            : undefined;
         const t = boundType?.startsWith("array<") ? boundType : inferAstExprTypeName(part, ctx);
         if (t?.startsWith("array<")) return t;
       }
@@ -2897,10 +3261,15 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       // the int fits in float32 (only int16 does), in which case float32
       // wins. Pure-int and pure-float ladders use widest-wins.
       const INT_RANK: Record<string, number> = {
-        "std::int16": 1, "std::int32": 2, "std::int64": 3, "std::bigint": 4,
+        "std::int16": 1,
+        "std::int32": 2,
+        "std::int64": 3,
+        "std::bigint": 4,
       };
       const FLOAT_RANK: Record<string, number> = {
-        "std::float32": 1, "std::float64": 2, "std::decimal": 3,
+        "std::float32": 1,
+        "std::float64": 2,
+        "std::decimal": 3,
       };
       const leftType = inferAstExprTypeName((expr as { left: FreeObjectExpr }).left, ctx);
       const rightType = inferAstExprTypeName((expr as { right: FreeObjectExpr }).right, ctx);
@@ -2909,8 +3278,10 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       const promote = (a: string | undefined, b: string | undefined): string | undefined => {
         if (!a) return b;
         if (!b) return a;
-        const aInt = INT_RANK[a]; const bInt = INT_RANK[b];
-        const aFloat = FLOAT_RANK[a]; const bFloat = FLOAT_RANK[b];
+        const aInt = INT_RANK[a];
+        const bInt = INT_RANK[b];
+        const aFloat = FLOAT_RANK[a];
+        const bFloat = FLOAT_RANK[b];
         if (aInt !== undefined && bInt !== undefined) return aInt >= bInt ? a : b;
         if (aFloat !== undefined && bFloat !== undefined) return aFloat >= bFloat ? a : b;
         const intType = aInt !== undefined ? a : b;
@@ -2958,35 +3329,56 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       const isAnyNumericFloat = argTypes.some((t) => t === "std::float32" || t === "std::float64");
       const isAnyDecimal = argTypes.some((t) => t === "std::decimal");
       const isAnyBigint = argTypes.some((t) => t === "std::bigint");
-      const isAllInt = argTypes.every((t) => t === "std::int16" || t === "std::int32" || t === "std::int64");
+      const isAllInt = argTypes.every(
+        (t) => t === "std::int16" || t === "std::int32" || t === "std::int64",
+      );
       if (shortName === "sum") {
         if (isAnyDecimal) return "std::decimal";
-        if (argTypes.length > 0 && argTypes.every((t) => t === "std::float32")) return "std::float32";
+        if (argTypes.length > 0 && argTypes.every((t) => t === "std::float32"))
+          return "std::float32";
         if (isAnyNumericFloat) return "std::float64";
         if (isAnyBigint) return "std::bigint";
         if (isAllInt && argTypes.length > 0) return "std::int64";
       }
-      if (shortName === "mean" || shortName === "stddev" || shortName === "stddev_pop"
-        || shortName === "var" || shortName === "var_pop") {
+      if (
+        shortName === "mean" ||
+        shortName === "stddev" ||
+        shortName === "stddev_pop" ||
+        shortName === "var" ||
+        shortName === "var_pop"
+      ) {
         if (isAnyDecimal) return "std::decimal";
         return "std::float64";
       }
       if (shortName === "min" || shortName === "max") return first;
       if (shortName === "count") return "std::int64";
       if (shortName === "len") return "std::int64";
-      if (shortName === "to_str" || shortName === "str_lower" || shortName === "str_upper"
-        || shortName === "str_trim" || shortName === "str_pad_start" || shortName === "str_pad_end"
-        || shortName === "str_repeat" || shortName === "re_replace") {
+      if (
+        shortName === "to_str" ||
+        shortName === "str_lower" ||
+        shortName === "str_upper" ||
+        shortName === "str_trim" ||
+        shortName === "str_pad_start" ||
+        shortName === "str_pad_end" ||
+        shortName === "str_repeat" ||
+        shortName === "re_replace"
+      ) {
         return "std::str";
       }
       // `str_split(s, delimiter)` returns a single `array<std::str>` value.
       // Marking it as such (like re_match) lets the result codec JSON-decode
       // the array rather than surfacing the raw JSON text.
       if (shortName === "str_split") return "array<std::str>";
-      if (shortName === "contains" || shortName === "re_test" || shortName === "all" || shortName === "any") {
+      if (
+        shortName === "contains" ||
+        shortName === "re_test" ||
+        shortName === "all" ||
+        shortName === "any"
+      ) {
         return "std::bool";
       }
-      if (shortName === "round") return first === "std::float32" ? "std::float64" : first ?? "std::float64";
+      if (shortName === "round")
+        return first === "std::float32" ? "std::float64" : (first ?? "std::float64");
       if (shortName === "ceil" || shortName === "floor") {
         // EdgeQL `math::ceil` / `math::floor` return int64 for the small
         // integer inputs, bigint for bigint, decimal for decimal, and float64
@@ -3000,24 +3392,34 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       }
       // `math::exp/ln/lg/sqrt` return decimal for decimal input, float64 for
       // any float/integer input (the integer args implicitly cast to float64).
-      if (shortName === "exp" || shortName === "ln" || shortName === "lg"
-        || shortName === "sqrt") {
+      if (shortName === "exp" || shortName === "ln" || shortName === "lg" || shortName === "sqrt") {
         return first === "std::decimal" ? "std::decimal" : "std::float64";
       }
       // `math::pi/e` are nullary float64 constants; the trig family
       // (sin/cos/tan/cot/asin/acos/atan/atan2) has only float64 overloads.
-      if (shortName === "pi" || shortName === "e"
-        || shortName === "sin" || shortName === "cos" || shortName === "tan"
-        || shortName === "cot" || shortName === "asin" || shortName === "acos"
-        || shortName === "atan" || shortName === "atan2") {
+      if (
+        shortName === "pi" ||
+        shortName === "e" ||
+        shortName === "sin" ||
+        shortName === "cos" ||
+        shortName === "tan" ||
+        shortName === "cot" ||
+        shortName === "asin" ||
+        shortName === "acos" ||
+        shortName === "atan" ||
+        shortName === "atan2"
+      ) {
         return "std::float64";
       }
       if (shortName === "abs") return first;
       // Cardinality/identity assertions pass their argument's type through
       // unchanged, so a shape applied to `assert_single(SELECT User …)`
       // resolves against User rather than std::anytype.
-      if (shortName === "assert_single" || shortName === "assert_exists"
-        || shortName === "assert_distinct") {
+      if (
+        shortName === "assert_single" ||
+        shortName === "assert_exists" ||
+        shortName === "assert_distinct"
+      ) {
         return first;
       }
       if (shortName === "random") return "std::float64";
@@ -3034,23 +3436,34 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
         // the type args (`array<std::tuple>` must stay intact).
         const ltIdx = first.indexOf("<");
         const modIdx = first.indexOf("::");
-        const bareFirst = modIdx >= 0 && (ltIdx < 0 || modIdx < ltIdx)
-          ? first.slice(modIdx + 2)
-          : first;
+        const bareFirst =
+          modIdx >= 0 && (ltIdx < 0 || modIdx < ltIdx) ? first.slice(modIdx + 2) : first;
         if (bareFirst.startsWith("array<") && bareFirst.endsWith(">")) {
           return bareFirst.slice("array<".length, -1);
         }
         return undefined;
       }
-      const rangeSubtype = (type: string | undefined, collection: "range" | "multirange"): string | undefined => {
+      const rangeSubtype = (
+        type: string | undefined,
+        collection: "range" | "multirange",
+      ): string | undefined => {
         const prefix = `${collection}<`;
-        return type?.startsWith(prefix) && type.endsWith(">") ? type.slice(prefix.length, -1) : undefined;
+        return type?.startsWith(prefix) && type.endsWith(">")
+          ? type.slice(prefix.length, -1)
+          : undefined;
       };
       if (shortName === "range") {
-        const bounds = [argTypes[0], argTypes[1]].filter((type): type is string => type !== undefined);
+        const bounds = [argTypes[0], argTypes[1]].filter(
+          (type): type is string => type !== undefined,
+        );
         if (bounds.length === 0) return undefined;
-        const subtype = bounds.slice(1).reduce<string | undefined>((current, bound) =>
-          current === undefined ? undefined : commonScalarType(current, bound), bounds[0]);
+        const subtype = bounds
+          .slice(1)
+          .reduce<string | undefined>(
+            (current, bound) =>
+              current === undefined ? undefined : commonScalarType(current, bound),
+            bounds[0],
+          );
         return subtype ? `range<${subtype}>` : undefined;
       }
       if (shortName === "multirange") {
@@ -3061,8 +3474,14 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
       if (shortName === "range_get_lower" || shortName === "range_get_upper") {
         return rangeSubtype(first, "range") ?? rangeSubtype(first, "multirange");
       }
-      if (["range_is_empty", "range_is_inclusive_lower", "range_is_inclusive_upper"].includes(shortName)) return "std::bool";
-      if (shortName === "array_agg" || shortName === "array_fill") return first ? `array<${first}>` : undefined;
+      if (
+        ["range_is_empty", "range_is_inclusive_lower", "range_is_inclusive_upper"].includes(
+          shortName,
+        )
+      )
+        return "std::bool";
+      if (shortName === "array_agg" || shortName === "array_fill")
+        return first ? `array<${first}>` : undefined;
       // `re_match(pattern, str)` / `re_match_all(pattern, str)` return an
       // array of capture-group strings per match. Mark them as `array<str>`
       // so downstream code knows the projection produces a JSON-shaped
@@ -3085,9 +3504,13 @@ const inferAstExprTypeName = (expr: FreeObjectExpr, ctx: IRCompileContext): stri
 const typeCategory = (typeName: string | undefined): string => {
   if (!typeName) return "other";
   const NUMERIC = new Set([
-    "std::int16", "std::int32", "std::int64",
-    "std::float32", "std::float64",
-    "std::bigint", "std::decimal",
+    "std::int16",
+    "std::int32",
+    "std::int64",
+    "std::float32",
+    "std::float64",
+    "std::bigint",
+    "std::decimal",
   ]);
   if (NUMERIC.has(typeName)) return "numeric";
   if (typeName === "std::str") return "str";
@@ -3095,15 +3518,19 @@ const typeCategory = (typeName: string | undefined): string => {
   if (typeName === "std::bool") return "bool";
   if (typeName === "std::uuid") return "uuid";
   if (typeName === "std::json") return "json";
-  if (typeName === "std::datetime"
-    || typeName === "std::cal::local_datetime"
-    || typeName === "std::cal::local_date"
-    || typeName === "std::cal::local_time"
-  ) return "datetime";
-  if (typeName === "std::duration"
-    || typeName === "std::cal::relative_duration"
-    || typeName === "std::cal::date_duration"
-  ) return "duration";
+  if (
+    typeName === "std::datetime" ||
+    typeName === "std::cal::local_datetime" ||
+    typeName === "std::cal::local_date" ||
+    typeName === "std::cal::local_time"
+  )
+    return "datetime";
+  if (
+    typeName === "std::duration" ||
+    typeName === "std::cal::relative_duration" ||
+    typeName === "std::cal::date_duration"
+  )
+    return "duration";
   const genericOpen = typeName.indexOf("<");
   const genericHead = genericOpen >= 0 ? typeName.slice(0, genericOpen) : typeName;
   const genericName = genericHead.includes("::")
@@ -3156,12 +3583,16 @@ const areCompareCompatible = (a: string, b: string): boolean => {
     }
     return true;
   }
-  if ((a === "std::cal::local_date" && b === "std::cal::local_datetime")
-    || (b === "std::cal::local_date" && a === "std::cal::local_datetime")) {
+  if (
+    (a === "std::cal::local_date" && b === "std::cal::local_datetime") ||
+    (b === "std::cal::local_date" && a === "std::cal::local_datetime")
+  ) {
     return true;
   }
-  if ((a === "std::cal::relative_duration" && b === "std::cal::date_duration")
-    || (b === "std::cal::relative_duration" && a === "std::cal::date_duration")) {
+  if (
+    (a === "std::cal::relative_duration" && b === "std::cal::date_duration") ||
+    (b === "std::cal::relative_duration" && a === "std::cal::date_duration")
+  ) {
     return true;
   }
   if (ca === cb && SAME_CATEGORIES.has(ca)) return true;
@@ -3209,45 +3640,25 @@ const areCompareCompatibleExpr = (
   return areCompareCompatible(leftType, rightType);
 };
 
-// Arithmetic-compatible: numeric pairs per the compare rules, plus
-// temporal/duration combinations EdgeQL actually permits. `datetime + datetime`
-// is rejected (no such operator); `datetime + duration` returns datetime.
-const areArithCompatible = (a: string, b: string): boolean => {
-  const aCategory = typeCategory(a);
-  const bCategory = typeCategory(b);
-  if ((aCategory === "range" || aCategory === "multirange")
-    && (bCategory === "range" || bCategory === "multirange")) {
-    return areCompareCompatible(a, b);
-  }
-  if (a === b) {
-    const cat = typeCategory(a);
-    return cat === "numeric" || cat === "duration";
-  }
-  const ca = typeCategory(a);
-  const cb = typeCategory(b);
-  if (ca === "numeric" && cb === "numeric") {
-    const aArb = NUMERIC_ARBITRARY_PRECISION.has(a);
-    const bArb = NUMERIC_ARBITRARY_PRECISION.has(b);
-    const aFloat = NUMERIC_FLOAT_FAMILY.has(a);
-    const bFloat = NUMERIC_FLOAT_FAMILY.has(b);
-    if ((aArb && bFloat) || (bArb && aFloat)) return false;
-    return true;
-  }
-  if ((ca === "datetime" && cb === "duration") || (ca === "duration" && cb === "datetime")) return true;
-  if (ca === "duration" && cb === "duration") return true;
-  return false;
-};
-
 const commonScalarType = (a: string, b: string): string | undefined => {
   if (a === b) return a;
   const collectionTypes = new Set(["array", "tuple"]);
-  if (!collectionTypes.has(typeCategory(a)) && !collectionTypes.has(typeCategory(b))
-    && !areCompareCompatible(a, b)) return undefined;
+  if (
+    !collectionTypes.has(typeCategory(a)) &&
+    !collectionTypes.has(typeCategory(b)) &&
+    !areCompareCompatible(a, b)
+  )
+    return undefined;
   const intRank: Record<string, number> = {
-    "std::int16": 1, "std::int32": 2, "std::int64": 3, "std::bigint": 4,
+    "std::int16": 1,
+    "std::int32": 2,
+    "std::int64": 3,
+    "std::bigint": 4,
   };
   const floatRank: Record<string, number> = {
-    "std::float32": 1, "std::float64": 2, "std::decimal": 3,
+    "std::float32": 1,
+    "std::float64": 2,
+    "std::decimal": 3,
   };
   const aInt = intRank[a];
   const bInt = intRank[b];
@@ -3306,22 +3717,28 @@ const commonScalarType = (a: string, b: string): string | undefined => {
       ? `tuple<${values.join(", ")}>`
       : undefined;
   }
-  if ((a === "std::cal::local_date" && b === "std::cal::local_datetime")
-    || (b === "std::cal::local_date" && a === "std::cal::local_datetime")) {
+  if (
+    (a === "std::cal::local_date" && b === "std::cal::local_datetime") ||
+    (b === "std::cal::local_date" && a === "std::cal::local_datetime")
+  ) {
     return "std::cal::local_datetime";
   }
-  if ((a === "std::cal::relative_duration" && b === "std::cal::date_duration")
-    || (b === "std::cal::relative_duration" && a === "std::cal::date_duration")) {
+  if (
+    (a === "std::cal::relative_duration" && b === "std::cal::date_duration") ||
+    (b === "std::cal::relative_duration" && a === "std::cal::date_duration")
+  ) {
     return "std::cal::relative_duration";
   }
   return undefined;
 };
 
 const arithmeticResultType = (a: string, b: string, op: string): string | undefined => {
-  if ((op === "+" || op === "-" || op === "*")
-    && (typeCategory(a) === "range" || typeCategory(a) === "multirange")
-    && (typeCategory(b) === "range" || typeCategory(b) === "multirange")
-    && areCompareCompatible(a, b)) {
+  if (
+    (op === "+" || op === "-" || op === "*") &&
+    (typeCategory(a) === "range" || typeCategory(a) === "multirange") &&
+    (typeCategory(b) === "range" || typeCategory(b) === "multirange") &&
+    areCompareCompatible(a, b)
+  ) {
     return typeCategory(a) === "multirange" ? a : typeCategory(b) === "multirange" ? b : a;
   }
   if (typeCategory(a) === "numeric" && typeCategory(b) === "numeric") {
@@ -3334,7 +3751,9 @@ const arithmeticResultType = (a: string, b: string, op: string): string | undefi
   }
   if (op !== "+" && op !== "-") return undefined;
   const signed = new Set([
-    "std::duration", "std::cal::relative_duration", "std::cal::date_duration",
+    "std::duration",
+    "std::cal::relative_duration",
+    "std::cal::date_duration",
   ]);
   if (op === "+") {
     if (signed.has(a) && signed.has(b)) {
@@ -3358,13 +3777,17 @@ const arithmeticResultType = (a: string, b: string, op: string): string | undefi
     }
     if (typeCategory(a) === "datetime") return a;
   }
-  if (a === "std::cal::local_date" && b === "std::cal::local_date") return "std::cal::date_duration";
+  if (a === "std::cal::local_date" && b === "std::cal::local_date")
+    return "std::cal::date_duration";
   if (a === "std::datetime" && b === "std::datetime") return "std::duration";
-  if ((a === "std::cal::local_datetime" || a === "std::cal::local_date")
-    && (b === "std::cal::local_datetime" || b === "std::cal::local_date")) {
+  if (
+    (a === "std::cal::local_datetime" || a === "std::cal::local_date") &&
+    (b === "std::cal::local_datetime" || b === "std::cal::local_date")
+  ) {
     return "std::cal::relative_duration";
   }
-  if (a === "std::cal::local_time" && b === "std::cal::local_time") return "std::cal::relative_duration";
+  if (a === "std::cal::local_time" && b === "std::cal::local_time")
+    return "std::cal::relative_duration";
   return undefined;
 };
 
@@ -3401,7 +3824,10 @@ const tryResolveSchemaAliasSet = (ctx: IRCompileContext, name: string): Set | un
       if (ch === "(") depth += 1;
       else if (ch === ")") {
         depth -= 1;
-        if (depth < 0) { balanced = false; break; }
+        if (depth < 0) {
+          balanced = false;
+          break;
+        }
       }
     }
     if (!balanced || depth !== 0) break;
@@ -3463,7 +3889,8 @@ const functionCallArgToFreeObjectExpr = (arg: FunctionCallArgExpr): FreeObjectEx
     if (arg.kind === "field_ref") return { kind: "binding_ref", name: arg.field };
     if (arg.kind === "binding_ref") return { kind: "binding_ref", name: arg.name };
     if (arg.kind === "function_call") return { kind: "function_call", call: arg.call };
-    if (arg.kind === "parameter") return { kind: "parameter", name: arg.name, castType: arg.castType } as FreeObjectExpr;
+    if (arg.kind === "parameter")
+      return { kind: "parameter", name: arg.name, castType: arg.castType } as FreeObjectExpr;
     // `a := <expr>` — peel the envelope; the inner arg is what the function sees.
     if (arg.kind === "named_arg") return functionCallArgToFreeObjectExpr(arg.arg);
     // set_literal / array_literal already match FreeObjectExpr kinds.
@@ -3531,8 +3958,14 @@ const argToParamCastDistance = (
   argType: string,
   paramType: string,
 ): number | undefined => {
-  const paramUnion = paramType.split("|").map((part) => part.trim()).filter(Boolean);
-  const argUnion = argType.split("|").map((part) => part.trim()).filter(Boolean);
+  const paramUnion = paramType
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const argUnion = argType
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean);
   if (paramUnion.length > 1 || argUnion.length > 1) {
     let total = 0;
     for (const argBranch of argUnion) {
@@ -3635,9 +4068,10 @@ const argToParamCastDistance = (
     const decl: { baseTypeName?: string } | undefined = ctx.schema
       ?.listScalarTypes()
       .find((s) => `${s.module}::${s.name}` === cur);
-    cursor = decl?.baseTypeName !== undefined
-      ? normalizeScalarCastName(ctx, decl.baseTypeName)
-      : undefined;
+    cursor =
+      decl?.baseTypeName !== undefined
+        ? normalizeScalarCastName(ctx, decl.baseTypeName)
+        : undefined;
   }
   for (const t of chain) {
     const d = implicitCastDistance(t, paramType);
@@ -3671,8 +4105,9 @@ const scoreUDFOverloadCandidate = (
       // The variadic slot absorbs every remaining positional arg; each one
       // must individually bind to the element type.
       let polymorphicType: string | undefined;
-      const polymorphic = ["anytype", "anyscalar", "anyint", "anyreal"]
-        .includes(param.type.split("::").pop() ?? param.type);
+      const polymorphic = ["anytype", "anyscalar", "anyint", "anyreal"].includes(
+        param.type.split("::").pop() ?? param.type,
+      );
       while (cursor < positionalTypes.length) {
         if (polymorphic) {
           const actual = normalizeScalarCastName(ctx, positionalTypes[cursor]);
@@ -3731,8 +4166,10 @@ const resolveUDFOverload = (
     if (isNamed) namedTypes.set(arg.name, inferAttempt.value);
     else positionalTypes.push(inferAttempt.value);
   }
-  if (candidates.length === 1
-      && [...positionalTypes, ...namedTypes.values()].some((typeName) => typeName.includes("anytype"))) {
+  if (
+    candidates.length === 1 &&
+    [...positionalTypes, ...namedTypes.values()].some((typeName) => typeName.includes("anytype"))
+  ) {
     return candidates[0];
   }
   let best: FunctionDef[] = [];
@@ -3751,7 +4188,12 @@ const resolveUDFOverload = (
     throw new AppError("E_SEMANTIC", "function call does not exist", 1, 1);
   }
   if (best.length > 1) {
-    throw new AppError("E_SEMANTIC", `function ${candidates[0]?.name ?? "call"} is not unique`, 1, 1);
+    throw new AppError(
+      "E_SEMANTIC",
+      `function ${candidates[0]?.name ?? "call"} is not unique`,
+      1,
+      1,
+    );
   }
   return best[0];
 };
@@ -3774,9 +4216,9 @@ const tryBuildInlinedUDFBody = (
   const shortName = dividerIdx >= 0 ? callName.slice(dividerIdx + 2) : callName;
   // Skip well-known stdlib modules — those are handled by lowerStdlibFunctionSql.
   if (moduleName === "std" || moduleName === "math" || moduleName === "cal") return undefined;
-  const matches = ctx.schema.listFunctions().filter((fn) =>
-    fn.module === moduleName && fn.name === shortName,
-  );
+  const matches = ctx.schema
+    .listFunctions()
+    .filter((fn) => fn.module === moduleName && fn.name === shortName);
   if (matches.length === 0) return undefined;
   const fn = resolveUDFOverload(matches, args, ctx);
   if (!fn) return undefined;
@@ -3815,8 +4257,8 @@ const tryBuildInlinedUDFBody = (
       continue;
     }
     const isPositionalSlot = !param.namedOnly;
-    const filled = (isPositionalSlot && positionalCursor < positionalArgs.length)
-      || namedArgs.has(param.name);
+    const filled =
+      (isPositionalSlot && positionalCursor < positionalArgs.length) || namedArgs.has(param.name);
     if (isPositionalSlot && positionalCursor < positionalArgs.length) {
       positionalCursor += 1;
     }
@@ -3948,7 +4390,9 @@ const tryBuildInlinedUDFBody = (
     } as FreeObjectExpr;
   }
   const bodyAttempt = tryResult(() => compileFreeObjectExpr(substituted, inlineCtx));
-  return bodyAttempt.ok ? coerceArgToNamedTupleType(ctx, bodyAttempt.value, fn.returnType, true) : undefined;
+  return bodyAttempt.ok
+    ? coerceArgToNamedTupleType(ctx, bodyAttempt.value, fn.returnType, true)
+    : undefined;
 };
 
 // IR Sets known to be non-empty at their binding site — populated when a UDF
@@ -3972,10 +4416,14 @@ const astExprDefinitelyNonEmpty = (expr: FreeObjectExpr, ctx: IRCompileContext):
     case "free_object_constructor":
       return Boolean((expr as { tupleLike?: boolean }).tupleLike);
     case "set_literal":
-      return (expr as { values: unknown[] }).values.length > 0
-        && (expr as { values: unknown[] }).values.every((v) => v !== null);
+      return (
+        (expr as { values: unknown[] }).values.length > 0 &&
+        (expr as { values: unknown[] }).values.every((v) => v !== null)
+      );
     case "set_expr":
-      return (expr as { values: FreeObjectExpr[] }).values.some((v) => astExprDefinitelyNonEmpty(v, ctx));
+      return (expr as { values: FreeObjectExpr[] }).values.some((v) =>
+        astExprDefinitelyNonEmpty(v, ctx),
+      );
     case "cast":
       return astExprDefinitelyNonEmpty((expr as { expr: FreeObjectExpr }).expr, ctx);
     case "binding_ref": {
@@ -3995,8 +4443,7 @@ const astExprDefinitelyNonEmpty = (expr: FreeObjectExpr, ctx: IRCompileContext):
       // inline argument whose AST was provably non-empty).
       if (definitelyNonEmptyBindingSets.has(bound)) return true;
       const namespace = bound.pathId?.namespace;
-      return namespace !== undefined
-        && namespace.some((tag) => tag.startsWith(`for:${name}:`));
+      return namespace !== undefined && namespace.some((tag) => tag.startsWith(`for:${name}:`));
     }
     case "current_item":
       // The bare leading-dot subject of a shape computed: the row being
@@ -4037,7 +4484,10 @@ const astForIteratorIsIndeterminate = (
 ): boolean => {
   if (expr.kind === "set_literal" || expr.kind === "set_expr") {
     const values = (expr as { values: FreeObjectExpr[] }).values;
-    return values.length === 0 || values.every((value) => astForIteratorIsIndeterminate(value, ctx, seen));
+    return (
+      values.length === 0 ||
+      values.every((value) => astForIteratorIsIndeterminate(value, ctx, seen))
+    );
   }
   if (expr.kind === "binding_ref") {
     const name = expr.name;
@@ -4049,7 +4499,7 @@ const astForIteratorIsIndeterminate = (
     return astForIteratorIsIndeterminate(
       bindingValue.kind === "subquery_expr" && bindingValue.expr
         ? bindingValue.expr
-        : value as FreeObjectExpr,
+        : (value as FreeObjectExpr),
       ctx,
       seen,
     );
@@ -4102,8 +4552,12 @@ const renameBindingRefsDeep = (node: unknown, renames: Map<string, string>): unk
     if (out.kind === "path" && typeof out.head === "string" && renames.has(out.head)) {
       out.head = renames.get(out.head);
     }
-    if (out.kind === "path_chain" && Array.isArray(out.parts)
-        && typeof out.parts[0] === "string" && renames.has(out.parts[0])) {
+    if (
+      out.kind === "path_chain" &&
+      Array.isArray(out.parts) &&
+      typeof out.parts[0] === "string" &&
+      renames.has(out.parts[0])
+    ) {
       out.parts = [renames.get(out.parts[0]), ...(out.parts as unknown[]).slice(1)];
     }
     if (out.kind === "object_ref" && typeof out.name === "string" && renames.has(out.name)) {
@@ -4140,7 +4594,8 @@ const compileEmbeddedGroup = (
   const targetRoot = setFromTypeRoot(sourceSet.typeref);
 
   const atomsOf = (el: GroupByElement): GroupByAtom[] => {
-    if (el.kind === "field_ref" || el.kind === "name_ref" || el.kind === "link_property_ref") return [el];
+    if (el.kind === "field_ref" || el.kind === "name_ref" || el.kind === "link_property_ref")
+      return [el];
     if (el.kind === "sets") return el.sets.flat();
     return el.atoms; // cube / rollup
   };
@@ -4159,16 +4614,18 @@ const compileEmbeddedGroup = (
     if (!("name" in el)) continue;
     if (el.name === "key" && "shape" in el && el.shape) {
       keyFields = el.shape
-        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
+        .filter(
+          (s): s is Extract<EdgeQLShapeElement, { name: string }> =>
+            "name" in s && typeof s.name === "string",
+        )
         .map((s) => s.name);
     } else if (el.name === "elements" && "shape" in el && el.shape) {
       trailingElementsAst = el.shape;
     }
   }
   const rawElementsShape = trailingElementsAst ?? sourceShapeAst;
-  const elementsShape = rawElementsShape.length > 0
-    ? compileShape(targetRoot, rawElementsShape, ctx)
-    : undefined;
+  const elementsShape =
+    rawElementsShape.length > 0 ? compileShape(targetRoot, rawElementsShape, ctx) : undefined;
 
   return {
     kind: "set",
@@ -4193,13 +4650,19 @@ const compileEmbeddedGroup = (
 // Exported so the qlast path-parity harness (`tests/qlast_path_parity.test.ts`)
 // can use the live path compiler as the differential oracle for
 // `compilePathQlast`. Behaviour-neutral.
-export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: IRCompileContext): Set => {
+export const compileFreeObjectExpr = (
+  expr: FreeObjectExpr | ComputedExpr,
+  ctx: IRCompileContext,
+): Set => {
   // Gate: route path-shaped expressions through the qlast-consuming path
   // compiler (`compilePathQlast`). ON by default (opt out: GEL_QLAST_PATHS=0);
   // proven behaviour-neutral across the full suite. On a not-yet-ported case
   // compilePathQlast throws QLAST_DEFERRED and we fall through to the legacy
   // compiler below; the differential parity harness verifies routed == legacy.
-  if (qlastPathRoutingEnabled() && QLAST_GATED_PATH_KINDS.has((expr as { kind?: string }).kind ?? "")) {
+  if (
+    qlastPathRoutingEnabled() &&
+    QLAST_GATED_PATH_KINDS.has((expr as { kind?: string }).kind ?? "")
+  ) {
     const qlPath = astPathExprToQlast(expr as FreeObjectExpr);
     if (qlPath) {
       try {
@@ -4222,7 +4685,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
 
   switch (expr.kind) {
     case "set_literal": {
-      const result = compileSetConstructor(expr.values.map((value) => literalToSet(value)), "set_literal");
+      const result = compileSetConstructor(
+        expr.values.map((value) => literalToSet(value)),
+        "set_literal",
+      );
       // Apply the inferred scalar type so downstream `INTROSPECT TYPEOF X` /
       // `X IS T` checks see e.g. `std::float64` instead of `std::anyscalar`.
       const inferred = inferAstExprTypeName(expr, ctx);
@@ -4238,10 +4704,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         for (let j = i + 1; j < scalarTypes.length; j += 1) {
           const leftType = scalarTypes[i];
           const rightType = scalarTypes[j];
-          if (leftType && rightType
-            && (typeCategory(leftType) !== "other" || typeCategory(rightType) !== "other")
-            && !commonScalarType(leftType, rightType)) {
-            failSemantic(`operator 'UNION' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+          if (
+            leftType &&
+            rightType &&
+            (typeCategory(leftType) !== "other" || typeCategory(rightType) !== "other") &&
+            !commonScalarType(leftType, rightType)
+          ) {
+            failSemantic(
+              `operator 'UNION' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
+            );
           }
         }
       }
@@ -4265,7 +4736,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "current_item": {
-      return resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__") ?? literalToSet(null);
+      return (
+        resolveBinding(ctx, "__current__") ??
+        resolveBinding(ctx, "__subject__") ??
+        literalToSet(null)
+      );
     }
 
     case "distinct": {
@@ -4295,7 +4770,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       }
       const enumType = lookupEnumScalar(ctx, expr.name);
       if (enumType) {
-        failSemantic(`enum path expression lacks an enum member name, as in '${expr.name}.${enumType.members[0]}'`);
+        failSemantic(
+          `enum path expression lacks an enum member name, as in '${expr.name}.${enumType.members[0]}'`,
+        );
       }
       const aliasSet = tryResolveSchemaAliasSet(ctx, expr.name);
       if (aliasSet) return aliasSet;
@@ -4316,9 +4793,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         const computedSet = tryLowerComputedPropertyOnTypePath(ctx, subject, expr.name);
         if (computedSet) return computedSet;
       }
-      const helperAlias = ctx.schema?.listAliases().find(
-        (alias) => expr.name.startsWith(`__${alias.name}__`),
-      );
+      const helperAlias = ctx.schema
+        ?.listAliases()
+        .find((alias) => expr.name.startsWith(`__${alias.name}__`));
       if (helperAlias) {
         failSemantic(`cannot refer to alias link helper type '${ctx.module}::${expr.name}'`);
       }
@@ -4373,9 +4850,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // rather than the static parent/union name — otherwise
       // `FILTER .__type__.name = 'default::D'` would match every subtype row.
       const isUnion = !!subject && subject.typeref.id.includes("|");
-      const hasSubtypes = !!subject
-        && !subject.typeref.id.startsWith("unknown:")
-        && (ctx.schema?.listConcreteTypesAssignableTo(subject.typeref.id).length ?? 0) > 1;
+      const hasSubtypes =
+        !!subject &&
+        !subject.typeref.id.startsWith("unknown:") &&
+        (ctx.schema?.listConcreteTypesAssignableTo(subject.typeref.id).length ?? 0) > 1;
       if (subject && (isUnion || hasSubtypes)) {
         return {
           ...literalToSet(subject.typeref.id),
@@ -4438,27 +4916,35 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         const hasExplicitProjection = expr.shape.some(
           (el) => el.origin === undefined || el.origin === "explicit",
         );
-        const reRootTarget = (bound && hasExplicitProjection) ? ((): Set | undefined => {
-          let cur: Set = root;
-          for (let i = 0; i < 8 && cur.expr.kind === "select_expr"; i += 1) {
-            const se = cur.expr as SelectExpr;
-            if (se.where || se.limit !== undefined || se.offset !== undefined
-                || (se.orderBy && se.orderBy.length > 0)) return undefined;
-            cur = se.result;
-          }
-          return cur.expr.kind === "pointer" && !cur.typeref.isScalar ? cur : undefined;
-        })() : undefined;
+        const reRootTarget =
+          bound && hasExplicitProjection
+            ? ((): Set | undefined => {
+                let cur: Set = root;
+                for (let i = 0; i < 8 && cur.expr.kind === "select_expr"; i += 1) {
+                  const se = cur.expr as SelectExpr;
+                  if (
+                    se.where ||
+                    se.limit !== undefined ||
+                    se.offset !== undefined ||
+                    (se.orderBy && se.orderBy.length > 0)
+                  )
+                    return undefined;
+                  cur = se.result;
+                }
+                return cur.expr.kind === "pointer" && !cur.typeref.isScalar ? cur : undefined;
+              })()
+            : undefined;
         root = reRootTarget
           ? { ...reRootTarget, shape: compiledShape }
           : { ...root, shape: compiledShape };
       }
       const clauses = expr.clauses;
-      const hasClauses = clauses && (
-        clauses.filter !== undefined
-        || clauses.orderBy !== undefined
-        || clauses.limit !== undefined
-        || clauses.offset !== undefined
-      );
+      const hasClauses =
+        clauses &&
+        (clauses.filter !== undefined ||
+          clauses.orderBy !== undefined ||
+          clauses.limit !== undefined ||
+          clauses.offset !== undefined);
       if (!hasClauses) {
         return root;
       }
@@ -4475,7 +4961,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           kind: "select_expr",
           result: root,
           where,
-          orderBy: clauses?.orderBy ? compileSelectOrderExprChain(clauses.orderBy, orderCtx) : undefined,
+          orderBy: clauses?.orderBy
+            ? compileSelectOrderExprChain(clauses.orderBy, orderCtx)
+            : undefined,
           offset: clauses?.offset === undefined ? undefined : literalToSet(clauses.offset),
           limit: clauses?.limit === undefined ? undefined : literalToSet(clauses.limit),
           implicitWrapper: false,
@@ -4490,16 +4978,18 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "subquery": {
-      return compileFreeObjectExpr({ kind: "select", typeName: expr.typeName, shape: expr.shape, clauses: expr.clauses }, ctx);
+      return compileFreeObjectExpr(
+        { kind: "select", typeName: expr.typeName, shape: expr.shape, clauses: expr.clauses },
+        ctx,
+      );
     }
 
     case "select_expr_subquery": {
       // `( WITH MODULE cards … )` — the module switch applies to the whole
       // subquery, including its WITH binding values.
       const subqueryModule = expr.clauses?._withModule;
-      const moduleCtx = subqueryModule && subqueryModule !== ctx.module
-        ? { ...ctx, module: subqueryModule }
-        : ctx;
+      const moduleCtx =
+        subqueryModule && subqueryModule !== ctx.module ? { ...ctx, module: subqueryModule } : ctx;
       const scoped = withBindings(moduleCtx, expr.clauses?._withBindings);
       let inner = compileFreeObjectExpr(expr.expr, scoped);
       // `SELECT alias := X ORDER BY alias` binds `alias` to `X` for the
@@ -4529,9 +5019,19 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
               // Collect `.head.field` pairs: head matching an element_first
               // projection needs `field` on the subject rows.
               const innerFa = maybe.expr as { kind?: string; field?: string } | undefined;
-              if (innerFa?.kind === "field_access" && typeof innerFa.field === "string" && typeof maybe.field === "string") {
-                const headProj = (grouped.groupRows.projection ?? []).find((proj) => proj.name === innerFa.field);
-                if (headProj && (headProj.kind === "element_first_shape" || headProj.kind === "element_first_path")) {
+              if (
+                innerFa?.kind === "field_access" &&
+                typeof innerFa.field === "string" &&
+                typeof maybe.field === "string"
+              ) {
+                const headProj = (grouped.groupRows.projection ?? []).find(
+                  (proj) => proj.name === innerFa.field,
+                );
+                if (
+                  headProj &&
+                  (headProj.kind === "element_first_shape" ||
+                    headProj.kind === "element_first_path")
+                ) {
                   needed.add(maybe.field);
                 }
               }
@@ -4557,11 +5057,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // shape, or one level deeper inside a `select_expr.result` when FILTER/
       // ORDER BY required wrapping. SQL lowering still reads the shape off
       // the select_expr's `result`, so this is purely a read-side hint.
-      const innerShape = inner.shape.length > 0
-        ? inner.shape
-        : (inner.expr.kind === "select_expr"
+      const innerShape =
+        inner.shape.length > 0
+          ? inner.shape
+          : inner.expr.kind === "select_expr"
             ? (inner.expr as SelectExpr).result.shape
-            : []);
+            : [];
       return {
         kind: "set",
         expr: {
@@ -4572,10 +5073,18 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           // A non-constant LIMIT/OFFSET (`LIMIT len(User.name) - 3`) parses to
           // `limitExpr`/`offsetExpr` — compile it as a set so the SQL layer can
           // correlate its paths to the enclosing row, instead of dropping it.
-          offset: expr.offset !== undefined ? literalToSet(expr.offset)
-            : expr.offsetExpr !== undefined ? compileFreeObjectExpr(expr.offsetExpr, clauseCtx) : undefined,
-          limit: expr.limit !== undefined ? literalToSet(expr.limit)
-            : expr.limitExpr !== undefined ? compileFreeObjectExpr(expr.limitExpr, clauseCtx) : undefined,
+          offset:
+            expr.offset !== undefined
+              ? literalToSet(expr.offset)
+              : expr.offsetExpr !== undefined
+                ? compileFreeObjectExpr(expr.offsetExpr, clauseCtx)
+                : undefined,
+          limit:
+            expr.limit !== undefined
+              ? literalToSet(expr.limit)
+              : expr.limitExpr !== undefined
+                ? compileFreeObjectExpr(expr.limitExpr, clauseCtx)
+                : undefined,
           implicitWrapper: false,
         },
         pathId: defaultPathId("select_expr_subquery"),
@@ -4599,10 +5108,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const ptrref = resolvePointerRef(ctx, headSet.typeref, expr.tail);
       if (ptrref) return extendPathSet(headSet, ptrref);
       const carried = resolveCarriedShapeElement(headSet, expr.tail, ctx);
-      return carried ?? {
-        ...headSet,
-        pathId: defaultPathId(`${expr.head}.${expr.tail}`),
-      };
+      return (
+        carried ?? {
+          ...headSet,
+          pathId: defaultPathId(`${expr.head}.${expr.tail}`),
+        }
+      );
     }
 
     case "path_chain": {
@@ -4612,7 +5123,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           const enumType = lookupEnumScalar(ctx, headName);
           if (enumType) {
             if (expr.parts.length < 2) {
-              failSemantic(`enum path expression lacks an enum member name, as in '${headName}.${enumType.members[0]}'`);
+              failSemantic(
+                `enum path expression lacks an enum member name, as in '${headName}.${enumType.members[0]}'`,
+              );
             }
             if (expr.parts.length > 2) {
               failSemantic(`invalid property reference on an expression of primitive type`);
@@ -4648,9 +5161,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // fields (`U.cards.a`), but a bare path value (`U.cards`) is an object
       // identity, not an implicit shape projection. Keep the shape available
       // during the walk and drop it at the path boundary.
-      return !out.typeref.isScalar && out.shape.length > 0
-        ? { ...out, shape: [] }
-        : out;
+      return !out.typeref.isScalar && out.shape.length > 0 ? { ...out, shape: [] } : out;
     }
 
     case "path_steps": {
@@ -4670,13 +5181,21 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         if (enumType) {
           const memberStep = rest.find((step) => step.kind === "ptr");
           if (!memberStep || memberStep.kind !== "ptr") {
-            failSemantic(`enum path expression lacks an enum member name, as in '${first.name}.${enumType.members[0]}'`);
+            failSemantic(
+              `enum path expression lacks an enum member name, as in '${first.name}.${enumType.members[0]}'`,
+            );
           }
           const ptrSteps = rest.filter((step) => step.kind === "ptr");
           if (ptrSteps.length > 1) {
             failSemantic(`invalid property reference on an expression of primitive type`);
           }
-          return resolvePathToEnumLiteral(ctx, first.name, (memberStep as { kind: "ptr"; name: string }).name) ?? literalToSet(null);
+          return (
+            resolvePathToEnumLiteral(
+              ctx,
+              first.name,
+              (memberStep as { kind: "ptr"; name: string }).name,
+            ) ?? literalToSet(null)
+          );
         }
       }
       let out = resolveHeadSet(first.name);
@@ -4687,7 +5206,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             out = synthesizeTypePointerSet(out);
             continue;
           }
-          if (step.name === "name" && out.expr.kind === "pointer" && (out.expr as Pointer).ptrref.shortName === "__type__") {
+          if (
+            step.name === "name" &&
+            out.expr.kind === "pointer" &&
+            (out.expr as Pointer).ptrref.shortName === "__type__"
+          ) {
             out = synthesizeTypeNamePointerSet(out);
             continue;
           }
@@ -4695,8 +5218,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           // A type intersection can narrow to a SUPERTYPE (`Issue[IS Named]`):
           // the rows are still the original type's, so a pointer the narrowed
           // view lacks resolves against the underlying root type.
-          if (!ptrref && out.expr.kind === "type_root"
-              && (out.expr as TypeRoot).typeref.id !== out.typeref.id) {
+          if (
+            !ptrref &&
+            out.expr.kind === "type_root" &&
+            (out.expr as TypeRoot).typeref.id !== out.typeref.id
+          ) {
             ptrref = resolvePointerRef(ctx, (out.expr as TypeRoot).typeref, step.name);
           }
           if (!ptrref) {
@@ -4707,7 +5233,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             }
             return {
               ...out,
-              pathId: defaultPathId(expr.steps.map((item) => (item.kind === "ptr" ? item.name : "*")).join(".")),
+              pathId: defaultPathId(
+                expr.steps.map((item) => (item.kind === "ptr" ? item.name : "*")).join("."),
+              ),
             };
           }
           out = extendPathSetDirectional(out, ptrref, step.direction ?? "outbound");
@@ -4734,13 +5262,22 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // as `std::BaseObject` — only `id` / `__type__` survive, accessing any
       // other field errors with "no link or property 'field'". Mirror that
       // behaviour here so the SQL pipeline never sees the dangling path.
-      if (!expr.field.startsWith("@")
-          && expr.field !== "id"
-          && expr.field !== "__type__"
-          && expr.expr.kind === "for_expr"
-          && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).variable === "__gel_backlink_item__"
-          && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body.kind === "backlink_path"
-          && (((expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body as Extract<FreeObjectExpr, { kind: "backlink_path" }>).sourceType === undefined)) {
+      if (
+        !expr.field.startsWith("@") &&
+        expr.field !== "id" &&
+        expr.field !== "__type__" &&
+        expr.expr.kind === "for_expr" &&
+        (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).variable ===
+          "__gel_backlink_item__" &&
+        (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body.kind ===
+          "backlink_path" &&
+        (
+          (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body as Extract<
+            FreeObjectExpr,
+            { kind: "backlink_path" }
+          >
+        ).sourceType === undefined
+      ) {
         throw new AppError(
           "E_SEMANTIC",
           `object type 'std::BaseObject' has no link or property '${expr.field}'`,
@@ -4782,14 +5319,26 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         // amount of polymorphic expansion will surface `@p` and we should
         // mirror Python's "property does not exist because there are no
         // 'l' links" error.
-        if (expr.expr.kind === "for_expr"
-            && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).variable === "__gel_backlink_item__"
-            && (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body.kind === "backlink_path") {
-          const backlink = (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body as Extract<FreeObjectExpr, { kind: "backlink_path" }>;
+        if (
+          expr.expr.kind === "for_expr" &&
+          (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).variable ===
+            "__gel_backlink_item__" &&
+          (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).body.kind === "backlink_path"
+        ) {
+          const backlink = (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>)
+            .body as Extract<FreeObjectExpr, { kind: "backlink_path" }>;
           // Use the iterator's typeref as the link target. compileFreeObjectExpr
           // would do the same; we recompute here just to peek at the resolution.
-          const iteratorSet = compileFreeObjectExpr((expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).iterator, ctx);
-          const probe = resolveBacklinkPointerRef(ctx, iteratorSet.typeref, backlink.link, backlink.sourceType);
+          const iteratorSet = compileFreeObjectExpr(
+            (expr.expr as Extract<FreeObjectExpr, { kind: "for_expr" }>).iterator,
+            ctx,
+          );
+          const probe = resolveBacklinkPointerRef(
+            ctx,
+            iteratorSet.typeref,
+            backlink.link,
+            backlink.sourceType,
+          );
           if (!probe) {
             const propName = expr.field.slice(1);
             throw new AppError(
@@ -4838,7 +5387,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         if (groupedSource) {
           return {
             ...source,
-            expr: { kind: "group_row_field", steps: [expr.field], rows: groupedSource.rows } as GroupRowFieldExpr,
+            expr: {
+              kind: "group_row_field",
+              steps: [expr.field],
+              rows: groupedSource.rows,
+            } as GroupRowFieldExpr,
             shape: [],
             pathId: defaultPathId(`group_row_field:${expr.field}`),
             typeref: unknownTypeRef("std::anytype"),
@@ -4870,11 +5423,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           const propDefs: Array<{ owner: string; prop: LinkPropertyDef }> = [];
           let anyComponentDefinesLink = false;
           for (const comp of components) {
-            const linkOwnerTypeRef = linkPointer.direction === "inbound"
-              ? comp.outSource
-              : linkPointer.source.typeref;
+            const linkOwnerTypeRef =
+              linkPointer.direction === "inbound" ? comp.outSource : linkPointer.source.typeref;
             const linkOwnerResolved = getResolvedSchemaType(ctx, linkOwnerTypeRef.id);
-            const linkDef = linkOwnerResolved?.resolvedLinks.find((candidate) => candidate.name === linkPointer.ptrref.shortName);
+            const linkDef = linkOwnerResolved?.resolvedLinks.find(
+              (candidate) => candidate.name === linkPointer.ptrref.shortName,
+            );
             if (linkDef) {
               anyComponentDefinesLink = true;
               const propDef = linkDef.properties?.find((property) => property.name === propName);
@@ -4934,14 +5488,17 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         // the resulting pointer set. Inherit it so the SQL pipeline projects
         // `x` instead of returning bare `{}` objects.
         const shapeEntry = source.shape?.find(
-          (entry) => entry.name === expr.field
-            && entry.expr.shape
-            && entry.expr.shape.length > 0
-            && !entry.expr.typeref?.isScalar,
+          (entry) =>
+            entry.name === expr.field &&
+            entry.expr.shape &&
+            entry.expr.shape.length > 0 &&
+            !entry.expr.typeref?.isScalar,
         );
-        if (shapeEntry?.expr.shape
-            && shapeEntry.expr.shape.length > 0
-            && (!extended.shape || extended.shape.length === 0)) {
+        if (
+          shapeEntry?.expr.shape &&
+          shapeEntry.expr.shape.length > 0 &&
+          (!extended.shape || extended.shape.length === 0)
+        ) {
           return {
             ...extended,
             shape: shapeEntry.expr.shape,
@@ -4954,8 +5511,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // substitution before the unknown-type fallback. Lets `Type.computedP`
       // lower as the computed body's expression rather than a phantom
       // `std::anytype` pointer reference.
-      const computedSet = tryLowerComputedPropertyOnTypePath(ctx, source, expr.field)
-        ?? tryLowerComputedLinkRefOnTypePath(ctx, source, expr.field);
+      const computedSet =
+        tryLowerComputedPropertyOnTypePath(ctx, source, expr.field) ??
+        tryLowerComputedLinkRefOnTypePath(ctx, source, expr.field);
       if (computedSet) {
         const markCarriedBindingShape = (set: Set): Set => ({
           ...set,
@@ -4969,7 +5527,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           let cur: Set = source;
           while (cur.expr.kind === "select_expr") {
             const se = cur.expr as SelectExpr;
-            if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return true;
+            if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0))
+              return true;
             cur = se.result;
           }
           return false;
@@ -4980,7 +5539,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         const computedIsObjectSet = ((): boolean => {
           let cur: Set = computedSet;
           while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
-          return (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar;
+          return (
+            (cur.expr.kind === "type_root" || cur.expr.kind === "pointer") && !cur.typeref.isScalar
+          );
         })();
         if (sourceHasClauses && !computedIsObjectSet) {
           // If the computed body is a pointer chain rooted at the subject's own
@@ -5008,7 +5569,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         }
         return markCarriedBindingShape(computedSet);
       }
-        // A shape attached to `source` may define a *new* computed pointer
+      // A shape attached to `source` may define a *new* computed pointer
       // (e.g. `Person {ok := .name = .tag}`) which the type's schema doesn't
       // declare. Surface that shape element so `P.ok` resolves to its body.
       // Skip splat-expanded entries and pure field/link entries (`{name}`):
@@ -5020,11 +5581,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const matchShapeEntry = (entries: ShapeElement[] | undefined): ShapeElement | undefined =>
         entries?.find(
           (entry) =>
-            entry.name !== undefined
-            && entry.name === expr.field
-            && entry.shapeOrigin === "explicit"
-            && entry.targetPtr === undefined
-            && !expr.field.startsWith("@"),
+            entry.name !== undefined &&
+            entry.name === expr.field &&
+            entry.shapeOrigin === "explicit" &&
+            entry.targetPtr === undefined &&
+            !expr.field.startsWith("@"),
         );
       let shapedElement = matchShapeEntry(source.shape);
       // A WITH binding to a shaped object/link (`U := select X.link { c := … }`)
@@ -5040,7 +5601,7 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           if (shapedElement) break;
         }
       }
-        if (shapedElement) {
+      if (shapedElement) {
         // `(SELECT T { c := E } FILTER F).c` — the computed body alone loses
         // the subject's iteration scope and FILTER. Wrap it in a FOR over the
         // subject so E evaluates once per (filtered) subject row.
@@ -5049,7 +5610,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           let cur: Set = sourceForClauseInspection;
           while (cur.expr.kind === "select_expr") {
             const se = cur.expr as SelectExpr;
-            if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return true;
+            if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0))
+              return true;
             cur = se.result;
           }
           return false;
@@ -5109,15 +5671,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // `__current__` correctly, so the inner `.field` resolves against the
       // subquery's subject and bypasses this check naturally).
       if (
-        ctx.schema
-        && source.expr.kind === "type_root"
-        && expr.field !== "id"
-        && expr.field !== "__type__"
-        && !expr.field.startsWith("@")
-        && !source.typeref.id.startsWith("unknown:")
-        && !source.typeref.id.startsWith("std::")
-        && !source.typeref.isScalar
-        && getResolvedSchemaType(ctx, source.typeref.id)
+        ctx.schema &&
+        source.expr.kind === "type_root" &&
+        expr.field !== "id" &&
+        expr.field !== "__type__" &&
+        !expr.field.startsWith("@") &&
+        !source.typeref.id.startsWith("unknown:") &&
+        !source.typeref.id.startsWith("std::") &&
+        !source.typeref.isScalar &&
+        getResolvedSchemaType(ctx, source.typeref.id)
       ) {
         throw new AppError(
           "E_SEMANTIC",
@@ -5130,11 +5692,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // invalid). EdgeQL reports this as "invalid property reference on
       // an expression of primitive type 'T'".
       if (
-        ctx.schema
-        && source.typeref.isScalar
-        && !expr.field.startsWith("@")
-        && expr.field !== "id"
-        && expr.field !== "__type__"
+        ctx.schema &&
+        source.typeref.isScalar &&
+        !expr.field.startsWith("@") &&
+        expr.field !== "id" &&
+        expr.field !== "__type__"
       ) {
         const typeName = source.typeref.id.startsWith("unknown:")
           ? source.typeref.id.slice("unknown:".length)
@@ -5188,10 +5750,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       }
       let out = extendPathSetDirectional(subject, ptrref, "inbound");
       if (expr.sourceTypeExpr) {
-        const narrowed = narrowTypeIntersectionStep(ctx, universalObjectTypeRef(ctx, "Object"), undefined, {
-          typeName: expr.sourceType ?? "",
-          typeExpr: expr.sourceTypeExpr,
-        });
+        const narrowed = narrowTypeIntersectionStep(
+          ctx,
+          universalObjectTypeRef(ctx, "Object"),
+          undefined,
+          {
+            typeName: expr.sourceType ?? "",
+            typeExpr: expr.sourceTypeExpr,
+          },
+        );
         if (narrowed) {
           out = withNarrowedSource(out, narrowed.typeref);
           out = {
@@ -5238,23 +5805,32 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // string by std::X", so we surface the source category in the message.
       const indexTypeName = expr.indexExpr
         ? inferAstExprTypeName(expr.indexExpr, ctx)
-        : (typeof expr.index === "number"
-            ? (Number.isInteger(expr.index) ? "std::int64" : "std::float64")
-            : typeof expr.index === "string" ? "std::str" : undefined);
+        : typeof expr.index === "number"
+          ? Number.isInteger(expr.index)
+            ? "std::int64"
+            : "std::float64"
+          : typeof expr.index === "string"
+            ? "std::str"
+            : undefined;
       if (indexTypeName) {
         const cat = typeCategory(indexTypeName);
-        const isIntegerNumeric = cat === "numeric"
-          && (indexTypeName === "std::int16"
-            || indexTypeName === "std::int32"
-            || indexTypeName === "std::int64"
-            || indexTypeName === "std::bigint");
+        const isIntegerNumeric =
+          cat === "numeric" &&
+          (indexTypeName === "std::int16" ||
+            indexTypeName === "std::int32" ||
+            indexTypeName === "std::int64" ||
+            indexTypeName === "std::bigint");
         if (!isIntegerNumeric) {
           const sourceTypeName = inferAstExprTypeName(expr.expr, ctx);
           const sourceCat = typeCategory(sourceTypeName);
-          const targetWord = sourceCat === "str" ? "string"
-            : sourceCat === "bytes" ? "bytes"
-            : sourceCat === "json" ? "JSON"
-            : "array";
+          const targetWord =
+            sourceCat === "str"
+              ? "string"
+              : sourceCat === "bytes"
+                ? "bytes"
+                : sourceCat === "json"
+                  ? "JSON"
+                  : "array";
           failSemantic(`cannot index ${targetWord} by ${indexTypeName}`);
         }
       }
@@ -5265,16 +5841,27 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const sourceTypeName = inferAstExprTypeName(expr.expr, ctx);
       if (sourceTypeName) {
         const sourceCat = typeCategory(sourceTypeName);
-        if (sourceCat !== "str" && sourceCat !== "bytes" && sourceCat !== "json"
-            && sourceTypeName !== "std::anytype" && sourceTypeName !== "std::anyscalar"
-            // Bare `std::tuple` is the un-parameterised placeholder a partial
-            // path on a tuple-valued subject infers to (`filter .1`) — tuple
-            // element access is legal there.
-            && sourceTypeName !== "std::tuple"
-            && !sourceTypeName.startsWith("array<") && !sourceTypeName.startsWith("tuple<")) {
-          const scalarWord = sourceCat === "numeric" || sourceCat === "bool"
-            || sourceCat === "uuid" || sourceCat === "datetime" || sourceCat === "duration"
-            ? "scalar type " : "";
+        if (
+          sourceCat !== "str" &&
+          sourceCat !== "bytes" &&
+          sourceCat !== "json" &&
+          sourceTypeName !== "std::anytype" &&
+          sourceTypeName !== "std::anyscalar" &&
+          // Bare `std::tuple` is the un-parameterised placeholder a partial
+          // path on a tuple-valued subject infers to (`filter .1`) — tuple
+          // element access is legal there.
+          sourceTypeName !== "std::tuple" &&
+          !sourceTypeName.startsWith("array<") &&
+          !sourceTypeName.startsWith("tuple<")
+        ) {
+          const scalarWord =
+            sourceCat === "numeric" ||
+            sourceCat === "bool" ||
+            sourceCat === "uuid" ||
+            sourceCat === "datetime" ||
+            sourceCat === "duration"
+              ? "scalar type "
+              : "";
           failSemantic(`index indirection cannot be applied to ${scalarWord}'${sourceTypeName}'`);
         }
       }
@@ -5285,8 +5872,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // Skip an implicit-subject index (`filter .1`, `order by .0`): there `.N`
       // selects a slot of the materialized result row, which the SQL stage
       // resolves against the row JSON — re-deriving the element decorrelates it.
-      if (expr.indexExpr === undefined && typeof expr.index === "number"
-          && expr.expr.kind !== "current_item") {
+      if (
+        expr.indexExpr === undefined &&
+        typeof expr.index === "number" &&
+        expr.expr.kind !== "current_item"
+      ) {
         const peeled = resolveConstTupleIndexElement(source, expr.index);
         if (peeled) return peeled;
       }
@@ -5295,7 +5885,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         expr: {
           kind: "index_expr",
           expr: source,
-          index: expr.indexExpr ? compileFreeObjectExpr(expr.indexExpr, ctx) : literalToSet(expr.index),
+          index: expr.indexExpr
+            ? compileFreeObjectExpr(expr.indexExpr, ctx)
+            : literalToSet(expr.index),
         },
         pathId: defaultPathId("index_access"),
         typeref: unknownTypeRef("std::anytype"),
@@ -5310,18 +5902,21 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const checkSliceBound = (e: FreeObjectExpr | undefined, raw: unknown): void => {
         const t = e
           ? inferAstExprTypeName(e, ctx)
-          : (typeof raw === "number"
-              ? (Number.isInteger(raw) ? "std::int64" : "std::float64")
-              : typeof raw === "string" ? "std::str" : undefined);
+          : typeof raw === "number"
+            ? Number.isInteger(raw)
+              ? "std::int64"
+              : "std::float64"
+            : typeof raw === "string"
+              ? "std::str"
+              : undefined;
         if (!t) return;
-        const isIntegerNumeric = t === "std::int16" || t === "std::int32"
-          || t === "std::int64" || t === "std::bigint";
+        const isIntegerNumeric =
+          t === "std::int16" || t === "std::int32" || t === "std::int64" || t === "std::bigint";
         if (!isIntegerNumeric) {
           const sourceTypeName = inferAstExprTypeName(expr.expr, ctx);
           const sourceCat = typeCategory(sourceTypeName);
-          const targetWord = sourceCat === "str" ? "string"
-            : sourceCat === "bytes" ? "bytes"
-            : "array";
+          const targetWord =
+            sourceCat === "str" ? "string" : sourceCat === "bytes" ? "bytes" : "array";
           failSemantic(`cannot slice ${targetWord} by '${t}'`);
         }
       };
@@ -5329,9 +5924,14 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // non-sliceable scalar source (`1[1:3]`) is an error.
       const sliceSrcName = inferAstExprTypeName(expr.expr, ctx);
       const sliceSrcCat = typeCategory(sliceSrcName);
-      if (sliceSrcName
-          && (sliceSrcCat === "numeric" || sliceSrcCat === "bool"
-            || sliceSrcCat === "uuid" || sliceSrcCat === "datetime" || sliceSrcCat === "duration")) {
+      if (
+        sliceSrcName &&
+        (sliceSrcCat === "numeric" ||
+          sliceSrcCat === "bool" ||
+          sliceSrcCat === "uuid" ||
+          sliceSrcCat === "datetime" ||
+          sliceSrcCat === "duration")
+      ) {
         failSemantic(`scalar type '${sliceSrcName}' cannot be sliced`);
       }
       checkSliceBound(expr.startExpr, expr.start);
@@ -5342,8 +5942,16 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         expr: {
           kind: "slice_expr",
           expr: source,
-          start: expr.startExpr ? compileFreeObjectExpr(expr.startExpr, ctx) : expr.start === undefined ? undefined : literalToSet(expr.start),
-          end: expr.endExpr ? compileFreeObjectExpr(expr.endExpr, ctx) : expr.end === undefined ? undefined : literalToSet(expr.end),
+          start: expr.startExpr
+            ? compileFreeObjectExpr(expr.startExpr, ctx)
+            : expr.start === undefined
+              ? undefined
+              : literalToSet(expr.start),
+          end: expr.endExpr
+            ? compileFreeObjectExpr(expr.endExpr, ctx)
+            : expr.end === undefined
+              ? undefined
+              : literalToSet(expr.end),
         },
         pathId: defaultPathId("slice_access"),
         typeref: source.typeref,
@@ -5360,7 +5968,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "tuple": {
-      const elements = expr.values.map((value, index) => ({ name: String(index), val: compileFreeObjectExpr(value, ctx) }));
+      const elements = expr.values.map((value, index) => ({
+        name: String(index),
+        val: compileFreeObjectExpr(value, ctx),
+      }));
       // Stamp the scope-tree factoring verdict for the count gate (layer 3):
       // does this tuple's elements share a CORRELATED object prefix (zip) or a
       // FACTORED one (cross product)? Decided from the AST + WITH bindings, where
@@ -5386,7 +5997,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         isMaterializedRef: false,
         isSchemaAlias: false,
       };
-      if (correlated !== null) (tupleSet as { sharedPrefixCorrelated?: boolean }).sharedPrefixCorrelated = correlated;
+      if (correlated !== null)
+        (tupleSet as { sharedPrefixCorrelated?: boolean }).sharedPrefixCorrelated = correlated;
       return tupleSet;
     }
 
@@ -5401,11 +6013,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           throw new AppError(
             "E_SEMANTIC",
             "mutations are invalid in a shape's computed expression",
-            1, 1,
+            1,
+            1,
           );
         }
       }
-      const elements = expr.entries.map((entry) => ({ name: entry.name, val: compileFreeObjectExpr(entry.expr, ctx) }));
+      const elements = expr.entries.map((entry) => ({
+        name: entry.name,
+        val: compileFreeObjectExpr(entry.expr, ctx),
+      }));
       return {
         kind: "set",
         expr: {
@@ -5427,21 +6043,32 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
 
     case "concat": {
       const partTypes = expr.parts.map((part) => {
-        const boundType = part.kind === "binding_ref" ? resolveBinding(ctx, part.name)?.typeref.nameHint : undefined;
+        const boundType =
+          part.kind === "binding_ref"
+            ? resolveBinding(ctx, part.name)?.typeref.nameHint
+            : undefined;
         return boundType?.startsWith("array<") ? boundType : inferAstExprTypeName(part, ctx);
       });
-      const isArrayType = (typeName?: string): boolean => !!typeName && typeName.startsWith("array<");
-      const definedTypes = partTypes.filter((typeName): typeName is string => typeName !== undefined);
+      const isArrayType = (typeName?: string): boolean =>
+        !!typeName && typeName.startsWith("array<");
+      const definedTypes = partTypes.filter(
+        (typeName): typeName is string => typeName !== undefined,
+      );
       if (definedTypes.some(isArrayType)) {
         // `++` over arrays is array concatenation, not string concat. Every
         // defined operand must be an array; mixing an array with a scalar is
         // the genuine type error.
-        const nonArrayIndex = partTypes.findIndex((typeName) => typeName !== undefined && !isArrayType(typeName));
+        const nonArrayIndex = partTypes.findIndex(
+          (typeName) => typeName !== undefined && !isArrayType(typeName),
+        );
         const offenderType = nonArrayIndex >= 0 ? partTypes[nonArrayIndex] : undefined;
         const otherType = definedTypes.find(isArrayType);
         if (offenderType !== undefined && otherType !== undefined) {
-          const [leftType, rightType] = nonArrayIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
-          failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+          const [leftType, rightType] =
+            nonArrayIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
+          failSemantic(
+            `operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
+          );
         }
         // Array concatenation requires compatible element types — `[1,2] ++
         // ['a']` (array<int64> ++ array<str>) is an error reported in terms of
@@ -5449,30 +6076,52 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         // with anything; numeric scalars promote to each other; tuple/array
         // element types are left to downstream structural checks.
         const numericTypes = new globalThis.Set<string>([
-          "std::int16", "std::int32", "std::int64", "std::float32",
-          "std::float64", "std::decimal", "std::bigint",
+          "std::int16",
+          "std::int32",
+          "std::int64",
+          "std::float32",
+          "std::float64",
+          "std::decimal",
+          "std::bigint",
         ]);
         const elementType = (typeName: string): string => typeName.slice("array<".length, -1);
         const elementsIncompatible = (left: string, right: string): boolean => {
           if (left === right) return false;
-          if (left === "anytype" || right === "anytype" || left === "std::anytype" || right === "std::anytype") return false;
+          if (
+            left === "anytype" ||
+            right === "anytype" ||
+            left === "std::anytype" ||
+            right === "std::anytype"
+          )
+            return false;
           if (left.includes("<") || right.includes("<")) return false;
           if (numericTypes.has(left) && numericTypes.has(right)) return false;
           return true;
         };
         const concreteElements = definedTypes.map(elementType);
-        const mismatch = concreteElements.find((elem) => elementsIncompatible(concreteElements[0], elem));
+        const mismatch = concreteElements.find((elem) =>
+          elementsIncompatible(concreteElements[0], elem),
+        );
         if (mismatch !== undefined) {
-          failSemantic(`operator '++' cannot be applied to operands of type '${concreteElements[0]}' and '${mismatch}'`);
+          failSemantic(
+            `operator '++' cannot be applied to operands of type '${concreteElements[0]}' and '${mismatch}'`,
+          );
         }
       } else {
-        const nonStrIndex = partTypes.findIndex((typeName) => typeName !== undefined && typeName !== "std::str");
+        const nonStrIndex = partTypes.findIndex(
+          (typeName) => typeName !== undefined && typeName !== "std::str",
+        );
         const nonStrType = nonStrIndex >= 0 ? partTypes[nonStrIndex] : undefined;
         if (nonStrType !== undefined) {
           const offenderType = nonStrType;
-          const otherType = partTypes.find((typeName, index) => index !== nonStrIndex && typeName !== undefined) ?? "std::str";
-          const [leftType, rightType] = nonStrIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
-          failSemantic(`operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+          const otherType =
+            partTypes.find((typeName, index) => index !== nonStrIndex && typeName !== undefined) ??
+            "std::str";
+          const [leftType, rightType] =
+            nonStrIndex === 0 ? [offenderType, otherType] : [otherType, offenderType];
+          failSemantic(
+            `operator '++' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
+          );
         }
       }
       const parts = expr.parts.map((part) => compileFreeObjectExpr(part, ctx));
@@ -5501,7 +6150,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     case "is_type": {
       // `X IS A | B` forms a type union in type position — apply the same
       // incompatible-pointer check as a value-level union (`A union B`).
-      const typeExpr = (expr as { typeExpr?: { kind?: string; left?: { name?: string }; right?: { name?: string } } }).typeExpr;
+      const typeExpr = (
+        expr as {
+          typeExpr?: { kind?: string; left?: { name?: string }; right?: { name?: string } };
+        }
+      ).typeExpr;
       if (typeExpr?.kind === "type_union" && typeExpr.left?.name && typeExpr.right?.name) {
         validateUnionPointerCompat(
           setFromTypeRoot(resolveTypeRef(ctx, typeExpr.left.name)),
@@ -5555,17 +6208,18 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       if (expr.typeName === "array" || expr.typeName === "tuple") {
         // Tuple literals carry `unknown:std::tuple` without a collection tag;
         // arrays carry `collection: "array"`.
-        const leftKind = left.typeref?.collection
-          ?? (left.typeref && (left.typeref.id === "unknown:std::tuple" || left.expr.kind === "tuple") ? "tuple" : undefined);
+        const leftKind =
+          left.typeref?.collection ??
+          (left.typeref && (left.typeref.id === "unknown:std::tuple" || left.expr.kind === "tuple")
+            ? "tuple"
+            : undefined);
         return literalToSet(leftKind === expr.typeName);
       }
       const compoundRight = fullTypeExpr
-        ? narrowTypeIntersectionStep(
-            ctx,
-            universalObjectTypeRef(ctx, "Object"),
-            undefined,
-            { typeName: "", typeExpr: fullTypeExpr },
-          )
+        ? narrowTypeIntersectionStep(ctx, universalObjectTypeRef(ctx, "Object"), undefined, {
+            typeName: "",
+            typeExpr: fullTypeExpr,
+          })
         : undefined;
       const right = compoundRight?.typeref ?? resolveTypeRef(ctx, expr.typeName);
       return {
@@ -5593,11 +6247,16 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // rejected. Check before compiling the (possibly unrelated-failing)
       // subject expression so the right error surfaces.
       for (const el of expr.shape as EdgeQLShapeElement[]) {
-        if (el.kind === "computed" && !el.name.startsWith("@") && exprDefinesInlineMutation(el.expr)) {
+        if (
+          el.kind === "computed" &&
+          !el.name.startsWith("@") &&
+          exprDefinesInlineMutation(el.expr)
+        ) {
           throw new AppError(
             "E_SEMANTIC",
             "mutations are invalid in a shape's computed expression",
-            1, 1,
+            1,
+            1,
           );
         }
       }
@@ -5628,36 +6287,46 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // compiler against the virtual key/grouping/elements members.
       const grouped = peelToGroupRows(base);
       if (grouped) {
-        const parsed = parseProjectionWithComputedFallback(expr.shape, grouped.groupRows.projection, grouped.rows, ctx);
+        const parsed = parseProjectionWithComputedFallback(
+          expr.shape,
+          grouped.groupRows.projection,
+          grouped.rows,
+          ctx,
+        );
         // An `elements: {…}` re-projection reads fields off the materialized
         // element rows — when the already-compiled subject doesn't project
         // one of them, rebuild the group from its AST parts with the subject
         // augmented. Only then: a rebuild recompiles in THIS scope, which
         // loses bindings when the group's WITH lives on an inner subquery.
-        const neededElementFields = [...parsed.needs].concat((parsed.projection ?? [])
-          .flatMap((p) => {
-            if (p.kind === "elements_shape") {
-              return p.fields.map(elementFieldSubjectName);
-            }
-            if (p.kind === "element_first_path") {
-              return [p.steps[0] ?? ""];
-            }
-            if (p.kind === "element_first_shape") {
-              return p.fields;
-            }
-            if (p.kind === "element_agg") {
-              return [p.steps[0] ?? ""];
-            }
-            return [];
-          })
-          .filter((fieldName) => fieldName.length > 0));
+        const neededElementFields = [...parsed.needs].concat(
+          (parsed.projection ?? [])
+            .flatMap((p) => {
+              if (p.kind === "elements_shape") {
+                return p.fields.map(elementFieldSubjectName);
+              }
+              if (p.kind === "element_first_path") {
+                return [p.steps[0] ?? ""];
+              }
+              if (p.kind === "element_first_shape") {
+                return p.fields;
+              }
+              if (p.kind === "element_agg") {
+                return [p.steps[0] ?? ""];
+              }
+              return [];
+            })
+            .filter((fieldName) => fieldName.length > 0),
+        );
         const have = new globalThis.Set<string>();
         {
           let cursor: Set = grouped.groupRows.group.subject;
           for (;;) {
             for (const shapeEl of cursor.shape ?? []) {
-              const elName = shapeEl.name
-                ?? (shapeEl.expr.expr.kind === "pointer" ? (shapeEl.expr.expr as Pointer).ptrref.shortName : undefined);
+              const elName =
+                shapeEl.name ??
+                (shapeEl.expr.expr.kind === "pointer"
+                  ? (shapeEl.expr.expr as Pointer).ptrref.shortName
+                  : undefined);
               if (elName) have.add(elName);
             }
             if (cursor.expr.kind === "tuple") {
@@ -5675,7 +6344,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           }
         }
         const astParts = grouped.groupRows.astParts as GroupAstParts | undefined;
-        if (astParts && neededElementFields.some((fieldName) => fieldName !== "id" && !have.has(fieldName))) {
+        if (
+          astParts &&
+          neededElementFields.some((fieldName) => fieldName !== "id" && !have.has(fieldName))
+        ) {
           // Rebuilding from the AST recompiles in THIS scope — when the
           // group's WITH bindings live on an inner subquery (`X := (WITH B
           // := DETACHED User … GROUP B …)`) that fails; augment the
@@ -5685,14 +6357,21 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           // The rebuild can "succeed" with an UNLOWERABLE group when the
           // original WITH bindings are out of scope (its subject compile
           // failed quietly) — only accept a rebuild that stayed lowerable.
-          const rebuiltLowerable = rebuilt.ok
-            && (rebuilt.value.expr as GroupRowsExpr).group.byAtoms !== undefined
-            && !(rebuilt.value.expr as GroupRowsExpr).unlowerable;
+          const rebuiltLowerable =
+            rebuilt.ok &&
+            (rebuilt.value.expr as GroupRowsExpr).group.byAtoms !== undefined &&
+            !(rebuilt.value.expr as GroupRowsExpr).unlowerable;
           if (rebuilt.ok && rebuiltLowerable) {
             return rebuilt.value;
           }
-          const missing = neededElementFields.filter((fieldName) => fieldName !== "id" && !have.has(fieldName));
-          const augmented = augmentCompiledGroupSubject(grouped.groupRows.group.subject, missing, ctx);
+          const missing = neededElementFields.filter(
+            (fieldName) => fieldName !== "id" && !have.has(fieldName),
+          );
+          const augmented = augmentCompiledGroupSubject(
+            grouped.groupRows.group.subject,
+            missing,
+            ctx,
+          );
           if (augmented) {
             // The added fields stay VISIBLE on the materialized rows — the
             // computed projections read them off the elements JSON, which is
@@ -5815,9 +6494,14 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     }
 
     case "literal": {
-      const kind = (expr as { numericKind?: "integer" | "float" | "bigint" | "decimal" }).numericKind;
+      const kind = (expr as { numericKind?: "integer" | "float" | "bigint" | "decimal" })
+        .numericKind;
       const set = literalToSet(expr.value);
-      if (typeof expr.value === "number" && kind === "float" && set.expr.kind === "integer_constant") {
+      if (
+        typeof expr.value === "number" &&
+        kind === "float" &&
+        set.expr.kind === "integer_constant"
+      ) {
         // Promote `1.0` to a float constant so `IS float64` / TYPEOF
         // inspection see the parsed lexical kind. `Number.isInteger(1.0)`
         // is true in JS, so without the numericKind hint we'd silently
@@ -5906,7 +6590,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
             return compileFreeObjectExpr(arg.expr, ctx);
           }
           if (arg.kind === "parameter") {
-            return compileFreeObjectExpr({ kind: "parameter", name: arg.name, castType: arg.castType }, ctx);
+            return compileFreeObjectExpr(
+              { kind: "parameter", name: arg.name, castType: arg.castType },
+              ctx,
+            );
           }
           if (arg.kind === "literal") {
             return literalToSet(arg.value);
@@ -5935,36 +6622,59 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         };
         const isEmptySet = (value: FreeObjectExpr): boolean => {
           if (value.kind === "cast") return isEmptySet(value.expr);
-          return (value.kind === "set_expr" || value.kind === "set_literal") && value.values.length === 0;
+          return (
+            (value.kind === "set_expr" || value.kind === "set_literal") && value.values.length === 0
+          );
         };
         const bounds = expr.call.args
           .filter((arg, index) => index < 2 && arg.kind !== "named_arg")
           .map(argumentExpr);
-        const emptyArg = expr.call.args.find((arg) => arg.kind === "named_arg" && arg.name === "empty");
+        const emptyArg = expr.call.args.find(
+          (arg) => arg.kind === "named_arg" && arg.name === "empty",
+        );
         const emptyValue = emptyArg ? argumentExpr(emptyArg) : undefined;
-        if (emptyValue?.kind === "literal" && emptyValue.value === true && bounds.some((bound) => !isEmptySet(bound))) {
+        if (
+          emptyValue?.kind === "literal" &&
+          emptyValue.value === true &&
+          bounds.some((bound) => !isEmptySet(bound))
+        ) {
           failSemantic("conflicting arguments in range constructor");
         }
         const rangeType = inferAstExprTypeName(expr, ctx);
-        const subtype = rangeType?.startsWith("range<") && rangeType.endsWith(">")
-          ? rangeType.slice("range<".length, -1)
-          : undefined;
+        const subtype =
+          rangeType?.startsWith("range<") && rangeType.endsWith(">")
+            ? rangeType.slice("range<".length, -1)
+            : undefined;
         const supportedSubtypes = new Set([
-          "std::int32", "std::int64", "std::float32", "std::float64", "std::decimal",
-          "std::datetime", "std::cal::local_datetime", "std::cal::local_date",
+          "std::int32",
+          "std::int64",
+          "std::float32",
+          "std::float64",
+          "std::decimal",
+          "std::datetime",
+          "std::cal::local_datetime",
+          "std::cal::local_date",
         ]);
         if (subtype && !supportedSubtypes.has(subtype)) {
           failSemantic(`unsupported range subtype '${subtype}'`);
         }
       }
-      if (shortName === "array_agg" && args[0]?.expr.kind === "string_constant"
-          && (args[0].expr as { value: unknown }).value === null
-          && args[0].typeref.nameHint === "std::anyscalar") {
+      if (
+        shortName === "array_agg" &&
+        args[0]?.expr.kind === "string_constant" &&
+        (args[0].expr as { value: unknown }).value === null &&
+        args[0].typeref.nameHint === "std::anyscalar"
+      ) {
         failSemantic("expression returns value of indeterminate type");
       }
-      if (shortName === "array_get" && args[1]?.expr.kind === "operator_call"
-          && (args[1].expr as OperatorCall).operator === "^") {
-        failSemantic('function "array_get(array: array<anytype>, index: std::float64)" does not exist');
+      if (
+        shortName === "array_get" &&
+        args[1]?.expr.kind === "operator_call" &&
+        (args[1].expr as OperatorCall).operator === "^"
+      ) {
+        failSemantic(
+          'function "array_get(array: array<anytype>, index: std::float64)" does not exist',
+        );
       }
       // Preserve named-arg names: `to_duration(hours := 20)` must reach the
       // SQL lowering keyed as "hours", not by its positional index — the
@@ -5973,7 +6683,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const argKeys = expr.call.args.map((arg, index) =>
         arg && typeof arg === "object" && "kind" in arg && arg.kind === "named_arg"
           ? arg.name
-          : String(index));
+          : String(index),
+      );
       // Inline expr-body UDFs at AST→IR time so the SQL compiler can lower
       // the call as if the body were written inline (substituting parameter
       // references with the actual argument expressions). Falls back to a
@@ -5999,18 +6710,21 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // `assert_single(SELECT User …)` → User), build a full type ref so a
       // trailing shape resolves its pointers against the real type rather
       // than an unqualified `unknown:User` the shape compiler can't find.
-      const inferredObjectType = inferredReturnTypeName
-        && !inferredReturnTypeName.startsWith("array<")
-        && !inferredReturnTypeName.startsWith("tuple<")
-        ? getSchemaType(ctx, inferredReturnTypeName)
-        : undefined;
-      const callTyperef = inlinedBody?.typeref ?? (inferredObjectType
-        ? typeRefFromTypeDef(ctx, inferredObjectType)
-        : inferredReturnTypeName && isUniversalObjectRefName(inferredReturnTypeName)
-        ? universalObjectTypeRef(ctx, inferredReturnTypeName)
-        : inferredReturnTypeName
-        ? unknownTypeRef(inferredReturnTypeName)
-        : unknownTypeRef("std::anytype"));
+      const inferredObjectType =
+        inferredReturnTypeName &&
+        !inferredReturnTypeName.startsWith("array<") &&
+        !inferredReturnTypeName.startsWith("tuple<")
+          ? getSchemaType(ctx, inferredReturnTypeName)
+          : undefined;
+      const callTyperef =
+        inlinedBody?.typeref ??
+        (inferredObjectType
+          ? typeRefFromTypeDef(ctx, inferredObjectType)
+          : inferredReturnTypeName && isUniversalObjectRefName(inferredReturnTypeName)
+            ? universalObjectTypeRef(ctx, inferredReturnTypeName)
+            : inferredReturnTypeName
+              ? unknownTypeRef(inferredReturnTypeName)
+              : unknownTypeRef("std::anytype"));
       return {
         kind: "set",
         expr: {
@@ -6038,10 +6752,17 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     case "coalesce": {
       const leftType = inferAstExprTypeName(expr.left, ctx);
       const rightType = inferAstExprTypeName(expr.right, ctx);
-      const resultType = leftType && rightType ? commonScalarType(leftType, rightType) : leftType ?? rightType;
-      if (leftType && rightType && !resultType
-        && (typeCategory(leftType) !== "other" || typeCategory(rightType) !== "other")) {
-        failSemantic(`operator '??' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+      const resultType =
+        leftType && rightType ? commonScalarType(leftType, rightType) : (leftType ?? rightType);
+      if (
+        leftType &&
+        rightType &&
+        !resultType &&
+        (typeCategory(leftType) !== "other" || typeCategory(rightType) !== "other")
+      ) {
+        failSemantic(
+          `operator '??' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
+        );
       }
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
@@ -6053,9 +6774,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           right,
         } as CoalesceExpr,
         pathId: defaultPathId("std::coalesce"),
-        typeref: resultType && typeCategory(resultType) !== "other"
-          ? unknownTypeRef(resultType)
-          : left.typeref,
+        typeref:
+          resultType && typeCategory(resultType) !== "other"
+            ? unknownTypeRef(resultType)
+            : left.typeref,
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
@@ -6070,10 +6792,17 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       }
       const thenType = inferAstExprTypeName(expr.thenExpr, ctx);
       const elseType = inferAstExprTypeName(expr.elseExpr, ctx);
-      const resultType = thenType && elseType ? commonScalarType(thenType, elseType) : thenType ?? elseType;
-      if (thenType && elseType && !resultType
-        && (typeCategory(thenType) !== "other" || typeCategory(elseType) !== "other")) {
-        failSemantic(`operator 'IF' cannot be applied to operands of type '${thenType}' and '${elseType}'`);
+      const resultType =
+        thenType && elseType ? commonScalarType(thenType, elseType) : (thenType ?? elseType);
+      if (
+        thenType &&
+        elseType &&
+        !resultType &&
+        (typeCategory(thenType) !== "other" || typeCategory(elseType) !== "other")
+      ) {
+        failSemantic(
+          `operator 'IF' cannot be applied to operands of type '${thenType}' and '${elseType}'`,
+        );
       }
       const condition = compileFreeObjectExpr(expr.condition, ctx);
       const ifExpr = compileFreeObjectExpr(expr.thenExpr, ctx);
@@ -6087,9 +6816,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           elseExpr,
         } as IfElseExpr,
         pathId: defaultPathId("std::if_else"),
-        typeref: resultType && typeCategory(resultType) !== "other"
-          ? unknownTypeRef(resultType)
-          : ifExpr.typeref,
+        typeref:
+          resultType && typeCategory(resultType) !== "other"
+            ? unknownTypeRef(resultType)
+            : ifExpr.typeref,
         shape: [],
         isBinding: false,
         isMaterializedRef: false,
@@ -6109,12 +6839,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         // can't see module qualification or inheritance, so it wrongly rejects
         // `Issue ?= default::Issue` (same type) and `Text != Issue` (related).
         // Allow these explicitly via the schema; ordering ops stay rejected.
-        const isEqualityOp = expr.op === "=" || expr.op === "!=" || expr.op === "?=" || expr.op === "?!=";
+        const isEqualityOp =
+          expr.op === "=" || expr.op === "!=" || expr.op === "?=" || expr.op === "?!=";
         const isObjectType = (typeName: string): boolean => {
           const binding = resolveBinding(ctx, typeName);
-          return binding?.typeref.isScalar === false
-            || (ctx.schema !== undefined
-              && ctx.schema.getType(qualifyTypeName(typeName, ctx.module)) !== undefined);
+          return (
+            binding?.typeref.isScalar === false ||
+            (ctx.schema !== undefined &&
+              ctx.schema.getType(qualifyTypeName(typeName, ctx.module)) !== undefined)
+          );
         };
         const bothObjects = isObjectType(leftType) && isObjectType(rightType);
         if (!(isEqualityOp && bothObjects)) {
@@ -6152,11 +6885,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       while (rhs.kind === "cast") {
         rhs = (rhs as { expr: FreeObjectExpr }).expr;
       }
-      const members = rhs.kind === "set_literal"
-        ? rhs.values.map((value): FreeObjectExpr => ({ kind: "literal", value }))
-        : rhs.kind === "set_expr"
-          ? rhs.values
-          : undefined;
+      const members =
+        rhs.kind === "set_literal"
+          ? rhs.values.map((value): FreeObjectExpr => ({ kind: "literal", value }))
+          : rhs.kind === "set_expr"
+            ? rhs.values
+            : undefined;
       if (members) {
         const lhsIsSet = expr.left.kind === "set_expr" || expr.left.kind === "set_literal";
         if (members.length === 0) {
@@ -6169,19 +6903,29 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           }
           // else fall through to operator_call below
         } else if (!lhsIsSet) {
-          const orChain: FreeObjectExpr = members.reduceRight((acc, value, idx) => {
-            const eq: FreeObjectExpr = { kind: "compare", op: "=", left: expr.left, right: value };
-            return idx === members.length - 1 ? eq : { kind: "or", left: eq, right: acc };
-          }, undefined as unknown as FreeObjectExpr);
-          const result: FreeObjectExpr = expr.op === "not_in" ? { kind: "not", expr: orChain } : orChain;
+          const orChain: FreeObjectExpr = members.reduceRight(
+            (acc, value, idx) => {
+              const eq: FreeObjectExpr = {
+                kind: "compare",
+                op: "=",
+                left: expr.left,
+                right: value,
+              };
+              return idx === members.length - 1 ? eq : { kind: "or", left: eq, right: acc };
+            },
+            undefined as unknown as FreeObjectExpr,
+          );
+          const result: FreeObjectExpr =
+            expr.op === "not_in" ? { kind: "not", expr: orChain } : orChain;
           return compileFreeObjectExpr(result, ctx);
         }
       }
       // Singleton-RHS form (array literal, tuple, scalar): `A IN B` → `A = B`.
-      const singletonRhs = expr.right.kind === "array_literal_expr"
-        || expr.right.kind === "tuple"
-        || expr.right.kind === "literal"
-        || expr.right.kind === "cast";
+      const singletonRhs =
+        expr.right.kind === "array_literal_expr" ||
+        expr.right.kind === "tuple" ||
+        expr.right.kind === "literal" ||
+        expr.right.kind === "cast";
       if (singletonRhs) {
         const compareOp = expr.op === "in" ? "=" : "!=";
         return compileFreeObjectExpr(
@@ -6217,7 +6961,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       const leftType = inferAstExprTypeName(expr.left, ctx);
       const rightType = inferAstExprTypeName(expr.right, ctx);
       if (leftType && rightType && (leftType !== "std::bool" || rightType !== "std::bool")) {
-        failSemantic(`operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`);
+        failSemantic(
+          `operator '${expr.op}' cannot be applied to operands of type '${leftType}' and '${rightType}'`,
+        );
       }
       const left = compileFreeObjectExpr(expr.left, ctx);
       const right = compileFreeObjectExpr(expr.right, ctx);
@@ -6249,8 +6995,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           // Carry the lexical `numericKind` so `-0.0` stays a float constant
           // (not a demoted integer `0`) and `-0` keeps its sign — both are
           // needed for `<str>` of a float to render "-0" rather than "0".
-          const numericKind = (expr.expr as { numericKind?: "integer" | "float" | "bigint" | "decimal" }).numericKind;
-          return compileFreeObjectExpr({ kind: "literal", value: folded, numericKind } as typeof expr.expr, ctx);
+          const numericKind = (
+            expr.expr as { numericKind?: "integer" | "float" | "bigint" | "decimal" }
+          ).numericKind;
+          return compileFreeObjectExpr(
+            { kind: "literal", value: folded, numericKind } as typeof expr.expr,
+            ctx,
+          );
         }
       }
       // Reject unary -/+/NOT on operands whose declared type cannot accept it,
@@ -6292,7 +7043,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // rather than silently coercing in SQLite.
       const mathLeftType = inferAstExprTypeName(expr.left, ctx);
       const mathRightType = inferAstExprTypeName(expr.right, ctx);
-      if (mathLeftType && mathRightType && !arithmeticResultType(mathLeftType, mathRightType, expr.op)) {
+      if (
+        mathLeftType &&
+        mathRightType &&
+        !arithmeticResultType(mathLeftType, mathRightType, expr.op)
+      ) {
         // Math AST nodes already carry the operator symbol (`+`, `-`, …); no
         // producer emits word-form ops ("add"/"sub"/…), so the former
         // word→symbol mapping here was dead and has been removed.
@@ -6330,9 +7085,9 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         failSemantic("FOR statement has iterator of indeterminate type");
       }
       if (
-        expr.variable === "__gel_backlink_item__"
-        && expr.body.kind === "backlink_path"
-        && expr.iterator.kind === "binding_ref"
+        expr.variable === "__gel_backlink_item__" &&
+        expr.body.kind === "backlink_path" &&
+        expr.iterator.kind === "binding_ref"
       ) {
         const enumType = lookupEnumScalar(ctx, expr.iterator.name);
         if (enumType) {
@@ -6340,12 +7095,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         }
       }
       if (
-        expr.variable === "__gel_backlink_item__"
-        && expr.body.kind === "backlink_path"
-        && !expr.filter
-        && !expr.orderBy
-        && expr.limit === undefined
-        && expr.offset === undefined
+        expr.variable === "__gel_backlink_item__" &&
+        expr.body.kind === "backlink_path" &&
+        !expr.filter &&
+        !expr.orderBy &&
+        expr.limit === undefined &&
+        expr.offset === undefined
       ) {
         const iterator = compileFreeObjectExpr(expr.iterator, ctx);
         // A TYPED backlink off group-rows elements
@@ -6358,12 +7113,21 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           while (elemCursor.expr.kind === "select_expr") {
             elemCursor = (elemCursor.expr as SelectExpr).result;
           }
-          const elemField = elemCursor.expr.kind === "group_row_field" ? elemCursor.expr as GroupRowFieldExpr : undefined;
-          if (elemField && elemField.steps[0] === "elements" && elemField.steps.length === 1 && expr.body.sourceType) {
-            const targetTyperef = resolveTypeRef(ctx, expr.body.sourceType);
-            const linkPtr = targetTyperef && !targetTyperef.id.startsWith("unknown:")
-              ? resolvePointerRef(ctx, targetTyperef, expr.body.link)
+          const elemField =
+            elemCursor.expr.kind === "group_row_field"
+              ? (elemCursor.expr as GroupRowFieldExpr)
               : undefined;
+          if (
+            elemField &&
+            elemField.steps[0] === "elements" &&
+            elemField.steps.length === 1 &&
+            expr.body.sourceType
+          ) {
+            const targetTyperef = resolveTypeRef(ctx, expr.body.sourceType);
+            const linkPtr =
+              targetTyperef && !targetTyperef.id.startsWith("unknown:")
+                ? resolvePointerRef(ctx, targetTyperef, expr.body.link)
+                : undefined;
             if (targetTyperef && linkPtr && !linkPtr.outTarget.isScalar) {
               const root = setFromTypeRoot(targetTyperef);
               const linkSet = extendPathSet(root, linkPtr);
@@ -6414,14 +7178,24 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         if (groupBacklink) {
           return groupBacklink;
         }
-        const ptrref = resolveBacklinkPointerRef(ctx, iterator.typeref, expr.body.link, expr.body.sourceType);
+        const ptrref = resolveBacklinkPointerRef(
+          ctx,
+          iterator.typeref,
+          expr.body.link,
+          expr.body.sourceType,
+        );
         if (ptrref) {
           let out = extendPathSetDirectional(iterator, ptrref, "inbound");
           if (expr.body.sourceTypeExpr) {
-            const narrowed = narrowTypeIntersectionStep(ctx, universalObjectTypeRef(ctx, "Object"), undefined, {
-              typeName: expr.body.sourceType ?? "",
-              typeExpr: expr.body.sourceTypeExpr,
-            });
+            const narrowed = narrowTypeIntersectionStep(
+              ctx,
+              universalObjectTypeRef(ctx, "Object"),
+              undefined,
+              {
+                typeName: expr.body.sourceType ?? "",
+                typeExpr: expr.body.sourceTypeExpr,
+              },
+            );
             if (narrowed) {
               out = withNarrowedSource(out, narrowed.typeref);
               out = {
@@ -6488,7 +7262,14 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           optional: expr.optional ?? false,
           where: expr.filter ? compileFreeObjectExpr(expr.filter, loopCtx) : undefined,
           orderBy: expr.orderBy
-            ? [{ kind: "sort_expr", path: compileFreeObjectExpr(expr.orderBy.expr, loopCtx), direction: expr.orderBy.direction, nonesOrder: "last" }]
+            ? [
+                {
+                  kind: "sort_expr",
+                  path: compileFreeObjectExpr(expr.orderBy.expr, loopCtx),
+                  direction: expr.orderBy.direction,
+                  nonesOrder: "last",
+                },
+              ]
             : undefined,
           offset: expr.offset === undefined ? undefined : literalToSet(expr.offset),
           limit: expr.limit === undefined ? undefined : literalToSet(expr.limit),
@@ -6510,31 +7291,49 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         failSemantic(`type '${expr.castType}' does not exist`);
       }
       const normalizedCastType = normalizeScalarCastName(ctx, expr.castType);
-      if (normalizedCastType.startsWith("array<")
-          && (innerExpr.kind === "tuple"
-            || (innerExpr.kind === "free_object_constructor" && innerExpr.tupleLike))) {
+      if (
+        normalizedCastType.startsWith("array<") &&
+        (innerExpr.kind === "tuple" ||
+          (innerExpr.kind === "free_object_constructor" && innerExpr.tupleLike))
+      ) {
         failSemantic(`cannot cast tuple to ${normalizedCastType}`);
       }
-      const rangePrefix = normalizedCastType.startsWith("range<") ? "range<"
-        : normalizedCastType.startsWith("multirange<") ? "multirange<"
-        : undefined;
-      const rangeSubtype = rangePrefix && normalizedCastType.endsWith(">")
-        ? normalizedCastType.slice(rangePrefix.length, -1)
-        : undefined;
-      if (rangeSubtype && !new Set([
-        "std::int32", "std::int64", "std::float32", "std::float64", "std::decimal",
-        "std::datetime", "std::cal::local_datetime", "std::cal::local_date",
-      ]).has(rangeSubtype)) {
+      const rangePrefix = normalizedCastType.startsWith("range<")
+        ? "range<"
+        : normalizedCastType.startsWith("multirange<")
+          ? "multirange<"
+          : undefined;
+      const rangeSubtype =
+        rangePrefix && normalizedCastType.endsWith(">")
+          ? normalizedCastType.slice(rangePrefix.length, -1)
+          : undefined;
+      if (
+        rangeSubtype &&
+        !new Set([
+          "std::int32",
+          "std::int64",
+          "std::float32",
+          "std::float64",
+          "std::decimal",
+          "std::datetime",
+          "std::cal::local_datetime",
+          "std::cal::local_date",
+        ]).has(rangeSubtype)
+      ) {
         failSemantic(`unsupported range subtype '${rangeSubtype}'`);
       }
 
       if (enumTarget) {
-        const sourceExpr = innerIsJsonCast ? (innerExpr as { kind: "cast"; castType: string; expr: FreeObjectExpr }).expr : innerExpr;
+        const sourceExpr = innerIsJsonCast
+          ? (innerExpr as { kind: "cast"; castType: string; expr: FreeObjectExpr }).expr
+          : innerExpr;
         const innerSet = compileFreeObjectExpr(sourceExpr, ctx);
         if (innerIsJsonCast) {
           const innerLiteral = tryExtractAnyConstant(innerSet);
           if (innerLiteral !== undefined && typeof innerLiteral.value !== "string") {
-            failSemantic(`expected JSON string or null; got JSON ${jsonTypeNameForLiteral(innerLiteral.value)}`);
+            failSemantic(
+              `expected JSON string or null; got JSON ${jsonTypeNameForLiteral(innerLiteral.value)}`,
+            );
           }
         }
         return compileEnumCast(ctx, enumTarget.qualifiedName, enumTarget.members, innerSet);
@@ -6585,15 +7384,29 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           }
         }
         if (literal !== undefined) {
-          const shortType = expr.castType.slice("cal::".length) as "local_datetime" | "local_date" | "local_time";
+          const shortType = expr.castType.slice("cal::".length) as
+            | "local_datetime"
+            | "local_date"
+            | "local_time";
           const normalized = normalizeLocalTemporalLiteral(literal, shortType);
-          if (normalized === undefined) failSemantic(`std::${expr.castType} field value out of range`);
-          return { ...enumLiteralSet(normalized!), typeref: unknownTypeRef(expr.castType) };
+          if (normalized === undefined) {
+            throw new AppError(
+              "E_SEMANTIC",
+              `std::${expr.castType} field value out of range`,
+              1,
+              1,
+            );
+          }
+          return { ...enumLiteralSet(normalized), typeref: unknownTypeRef(expr.castType) };
         }
       }
 
-      if (innerExpr.kind === "array_literal_expr" && innerExpr.values.length === 0
-          && !expr.castType.startsWith("array<") && !expr.castType.startsWith("tuple<")) {
+      if (
+        innerExpr.kind === "array_literal_expr" &&
+        innerExpr.values.length === 0 &&
+        !expr.castType.startsWith("array<") &&
+        !expr.castType.startsWith("tuple<")
+      ) {
         const inner = compileFreeObjectExpr(innerExpr, ctx);
         const elementType = resolveTypeRef(ctx, normalizeScalarCastName(ctx, expr.castType));
         const arrayType: TypeRef = {
@@ -6607,24 +7420,35 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           collection: "array",
           subtypes: [elementType],
         };
-        return { ...inner, typeref: arrayType, expr: { ...(inner.expr as ArrayExpr), typeref: arrayType } };
+        return {
+          ...inner,
+          typeref: arrayType,
+          expr: { ...(inner.expr as ArrayExpr), typeref: arrayType },
+        };
       }
 
       // Duration literals fold to Gel's canonical ISO form ('PT24H',
       // 'P11M20D') — equality, ordering, and result serialization all
       // operate on the canonical text.
-      if (expr.castType === "duration" || expr.castType === "relative_duration"
-          || expr.castType === "date_duration"
-          || expr.castType === "cal::relative_duration" || expr.castType === "cal::date_duration") {
+      if (
+        expr.castType === "duration" ||
+        expr.castType === "relative_duration" ||
+        expr.castType === "date_duration" ||
+        expr.castType === "cal::relative_duration" ||
+        expr.castType === "cal::date_duration"
+      ) {
         const innerSet = compileFreeObjectExpr(innerExpr, ctx);
         const literal = tryExtractStringConstant(innerSet);
         if (literal !== undefined) {
           const exact = expr.castType === "duration";
           const normalized = normalizeDurationLiteral(literal, exact);
           if (normalized !== undefined) {
-            const typeName = expr.castType === "duration"
-              ? "std::duration"
-              : expr.castType.includes("date_duration") ? "cal::date_duration" : "cal::relative_duration";
+            const typeName =
+              expr.castType === "duration"
+                ? "std::duration"
+                : expr.castType.includes("date_duration")
+                  ? "cal::date_duration"
+                  : "cal::relative_duration";
             return { ...enumLiteralSet(normalized), typeref: unknownTypeRef(typeName) };
           }
         }
@@ -6640,7 +7464,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         const paramDef = ctx.params.get((inner.expr as { name: string }).name);
         if (paramDef) (paramDef as { required: boolean }).required = false;
       }
-      const toType = parseStructuredCollectionTypeRef(ctx, expr.castType) ?? resolveTypeRef(ctx, expr.castType);
+      const toType =
+        parseStructuredCollectionTypeRef(ctx, expr.castType) ?? resolveTypeRef(ctx, expr.castType);
       const castElement = (value: Set, targetType: TypeRef): Set => ({
         kind: "set",
         expr: {
@@ -6656,8 +7481,13 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         isMaterializedRef: false,
         isSchemaAlias: false,
       });
-      if (toType.collection === "array" && toType.subtypes?.[0] && inner.expr.kind === "array"
-          && (inner.expr as ArrayExpr).elements.length > 0) {
+      const arrayElementType = toType.subtypes?.[0];
+      if (
+        toType.collection === "array" &&
+        arrayElementType &&
+        inner.expr.kind === "array" &&
+        (inner.expr as ArrayExpr).elements.length > 0
+      ) {
         const array = inner.expr as ArrayExpr;
         return {
           ...inner,
@@ -6665,14 +7495,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           expr: {
             ...array,
             typeref: toType,
-            elements: array.elements.map((element) => castElement(element, toType.subtypes![0])),
+            elements: array.elements.map((element) => castElement(element, arrayElementType)),
           },
         };
       }
-      if (toType.collection === "tuple" && toType.subtypes && inner.expr.kind === "tuple") {
+      const tupleSubtypes = toType.subtypes;
+      if (toType.collection === "tuple" && tupleSubtypes && inner.expr.kind === "tuple") {
         const tuple = inner.expr as Tuple;
-        if (tuple.elements.length === toType.subtypes.length) {
-          const named = toType.subtypes.every((subtype) => subtype.elementName !== undefined);
+        if (tuple.elements.length === tupleSubtypes.length) {
+          const named = tupleSubtypes.every((subtype) => subtype.elementName !== undefined);
           return {
             ...inner,
             typeref: toType,
@@ -6681,8 +7512,8 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
               named,
               elements: tuple.elements.map((element, index) => ({
                 ...element,
-                name: toType.subtypes![index].elementName ?? String(index),
-                val: castElement(element.val, toType.subtypes![index]),
+                name: tupleSubtypes[index].elementName ?? String(index),
+                val: castElement(element.val, tupleSubtypes[index]),
               })),
             },
           };
@@ -6728,26 +7559,41 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       if ((opSymbol !== undefined || expr.op === "negate") && current) {
         const indexed: FreeObjectExpr = {
           kind: "index_access",
-          expr: { kind: "field_access", expr: { kind: "current_item" }, field: expr.field, optional: false },
+          expr: {
+            kind: "field_access",
+            expr: { kind: "current_item" },
+            field: expr.field,
+            optional: false,
+          },
           index: -expr.fromEnd,
         } as FreeObjectExpr;
-        const casted: FreeObjectExpr = { kind: "cast", castType: "int64", expr: indexed } as FreeObjectExpr;
+        const casted: FreeObjectExpr = {
+          kind: "cast",
+          castType: "int64",
+          expr: indexed,
+        } as FreeObjectExpr;
         if (expr.op === "negate") {
           // `-<int64>.field[-fromEnd]` — negation, expressed as `0 - digit`
           // since the SQL layer lowers binary `-` but not a unary neg operator.
-          return compileFreeObjectExpr({
-            kind: "math",
-            op: "-",
-            left: { kind: "literal", value: 0 },
-            right: casted,
-          } as FreeObjectExpr, ctx);
+          return compileFreeObjectExpr(
+            {
+              kind: "math",
+              op: "-",
+              left: { kind: "literal", value: 0 },
+              right: casted,
+            } as FreeObjectExpr,
+            ctx,
+          );
         }
-        return compileFreeObjectExpr({
-          kind: "math",
-          op: opSymbol,
-          left: { kind: "literal", value: expr.constant },
-          right: casted,
-        } as FreeObjectExpr, ctx);
+        return compileFreeObjectExpr(
+          {
+            kind: "math",
+            op: opSymbol,
+            left: { kind: "literal", value: expr.constant },
+            right: casted,
+          } as FreeObjectExpr,
+          ctx,
+        );
       }
       const resolved = resolveBinding(ctx, expr.field);
       if (resolved) {
@@ -6759,12 +7605,30 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
     case "select_expr": {
       // `WITH z := (...) <expr>` written inside a computed — the bindings
       // ride on the wrapper's clauses.
-      const innerCtx = (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses?._withBindings
-        ? withBindings(ctx, (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses?._withBindings)
+      const innerCtx = (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses
+        ?._withBindings
+        ? withBindings(
+            ctx,
+            (expr as { clauses?: { _withBindings?: WithBinding[] } }).clauses?._withBindings,
+          )
         : ctx;
       const inner = compileFreeObjectExpr(expr.expr, innerCtx);
-      const clauses = (expr as { clauses?: { filter?: FreeObjectExpr; orderBy?: OrderExpr; limit?: number; offset?: number } }).clauses;
-      if (!clauses?.filter && !clauses?.orderBy && clauses?.limit === undefined && clauses?.offset === undefined) {
+      const clauses = (
+        expr as {
+          clauses?: {
+            filter?: FreeObjectExpr;
+            orderBy?: OrderExpr;
+            limit?: number;
+            offset?: number;
+          };
+        }
+      ).clauses;
+      if (
+        !clauses?.filter &&
+        !clauses?.orderBy &&
+        clauses?.limit === undefined &&
+        clauses?.offset === undefined
+      ) {
         return inner;
       }
       const clauseCtx = childScope(innerCtx);
@@ -6780,12 +7644,15 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           // via compileFilterExpr (matching the `case "select"` path), while a
           // bare boolean expression keeps the free-expr compile.
           where: clauses.filter
-            ? (["predicate", "and", "or", "not", "in_predicate", "free_expr"]
-                .includes((clauses.filter as { kind: string }).kind)
+            ? ["predicate", "and", "or", "not", "in_predicate", "free_expr"].includes(
+                (clauses.filter as { kind: string }).kind,
+              )
               ? compileFilterExpr(clauses.filter as unknown as FilterExpr, inner, clauseCtx)
-              : compileFreeObjectExpr(clauses.filter, clauseCtx))
+              : compileFreeObjectExpr(clauses.filter, clauseCtx)
             : undefined,
-          orderBy: clauses.orderBy ? compileSelectOrderExprChain(clauses.orderBy, clauseCtx) : undefined,
+          orderBy: clauses.orderBy
+            ? compileSelectOrderExprChain(clauses.orderBy, clauseCtx)
+            : undefined,
           offset: clauses.offset === undefined ? undefined : literalToSet(clauses.offset),
           limit: clauses.limit === undefined ? undefined : literalToSet(clauses.limit),
           implicitWrapper: false,
@@ -6816,7 +7683,16 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         failSemantic("could not determine array type");
       }
       const values = expr.values.map((value) => compileFreeObjectExpr(value, ctx));
-      const elementType = values[0]?.typeref ?? { id: "std::anytype", nameHint: "anytype", module: "std", isView: false, isScalar: false, isAbstract: false } as TypeRef;
+      const elementType =
+        values[0]?.typeref ??
+        ({
+          id: "std::anytype",
+          nameHint: "anytype",
+          module: "std",
+          isView: false,
+          isScalar: false,
+          isAbstract: false,
+        } as TypeRef);
       const arrayTypeRef: TypeRef = {
         kind: "type_ref",
         id: `array<${elementType.id}>`,
@@ -6932,7 +7808,12 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
           isSchemaAlias: false,
         };
       }
-      throw new AppError("E_RUNTIME", `AST->IR mutation kind '${(stmt as { kind: string }).kind}' not supported in expression position`, 1, 1);
+      throw new AppError(
+        "E_RUNTIME",
+        `AST->IR mutation kind '${(stmt as { kind: string }).kind}' not supported in expression position`,
+        1,
+        1,
+      );
     }
 
     case "introspect_typeof": {
@@ -6941,9 +7822,11 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
       // `WITH A := (SELECT schema::Type {…}) … INTROSPECT A` — EdgeQL errors
       // with "type 'A' does not exist". (The `TYPEOF` form introspects the type
       // of an expression and is fine over a binding.)
-      if ((expr as { typeofForm?: boolean }).typeofForm === false
-          && expr.expr.kind === "binding_ref"
-          && resolveBinding(ctx, (expr.expr as { name: string }).name)) {
+      if (
+        (expr as { typeofForm?: boolean }).typeofForm === false &&
+        expr.expr.kind === "binding_ref" &&
+        resolveBinding(ctx, (expr.expr as { name: string }).name)
+      ) {
         const name = (expr.expr as { name: string }).name;
         throw new AppError("E_SEMANTIC", `type '${name}' does not exist`, 1, 1);
       }
@@ -6978,7 +7861,16 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
         shape: [
           {
             kind: "shape_element",
-            source: { kind: "set", expr: { kind: "type_root", typeref } as TypeRoot, pathId: defaultPathId("introspect_typeof"), typeref, shape: [], isBinding: false, isMaterializedRef: false, isSchemaAlias: false },
+            source: {
+              kind: "set",
+              expr: { kind: "type_root", typeref } as TypeRoot,
+              pathId: defaultPathId("introspect_typeof"),
+              typeref,
+              shape: [],
+              isBinding: false,
+              isMaterializedRef: false,
+              isSchemaAlias: false,
+            },
             expr: nameSet,
             shapeOp: "assign",
             shapeOrigin: "explicit",
@@ -7035,7 +7927,10 @@ export const compileFreeObjectExpr = (expr: FreeObjectExpr | ComputedExpr, ctx: 
   }
 };
 
-const compileOrderBy = (statement: Extract<EdgeQLStatement, { kind: "select_expr" }>, ctx: IRCompileContext): SortExpr[] | undefined => {
+const compileOrderBy = (
+  statement: Extract<EdgeQLStatement, { kind: "select_expr" }>,
+  ctx: IRCompileContext,
+): SortExpr[] | undefined => {
   if (!statement.orderBy) {
     return undefined;
   }
@@ -7065,7 +7960,15 @@ const compileSelectOrderExprChain = (orderBy: OrderExpr, ctx: IRCompileContext):
       kind: "sort_expr",
       path: cursor.expr
         ? compileFreeObjectExpr(cursor.expr, ctx)
-        : compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: cursor.field, optional: false }, ctx),
+        : compileFreeObjectExpr(
+            {
+              kind: "field_access",
+              expr: { kind: "binding_ref", name: "__current__" },
+              field: cursor.field,
+              optional: false,
+            },
+            ctx,
+          ),
       direction: cursor.direction,
       nonesOrder: cursor.nullsPosition ?? (cursor.direction === "desc" ? "last" : "first"),
     });
@@ -7130,7 +8033,12 @@ const tryCompileRootedFieldPath = (
 };
 
 const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return literalToSet(value);
   }
   if (value.kind === "binding_ref") {
@@ -7158,8 +8066,9 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
     // `<alias>.__source_type`.
     if (target.field === "__type__.name") {
       const isUnion = subject.typeref.id.includes("|");
-      const hasSubtypes = !subject.typeref.id.startsWith("unknown:")
-        && (ctx.schema?.listConcreteTypesAssignableTo(subject.typeref.id).length ?? 0) > 1;
+      const hasSubtypes =
+        !subject.typeref.id.startsWith("unknown:") &&
+        (ctx.schema?.listConcreteTypesAssignableTo(subject.typeref.id).length ?? 0) > 1;
       if (isUnion || hasSubtypes) {
         return { ...literalToSet(subject.typeref.id), dynamicTypeName: true } as Set;
       }
@@ -7173,8 +8082,9 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
     if ("root" in target && target.root) {
       const rootBinding = resolveBinding(ctx, target.root);
       const rootType = rootBinding ? undefined : resolveTypeRef(ctx, target.root);
-      const sameAsSubject = !rootBinding
-        && (!rootType || rootType.id.startsWith("unknown:") || rootType.id === subject.typeref.id);
+      const sameAsSubject =
+        !rootBinding &&
+        (!rootType || rootType.id.startsWith("unknown:") || rootType.id === subject.typeref.id);
       if (!sameAsSubject) {
         const rooted = tryCompileRootedFieldPath(target.root, target.field, ctx);
         if (rooted) return rooted;
@@ -7188,14 +8098,14 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
     if ("bareName" in target && target.bareName) {
       const segments = target.field.split(".");
       const first = segments[0];
-      const bound = first === "__current__" || first === "__subject__"
-        ? undefined
-        : resolveBinding(ctx, first);
-      const schemaAlias = bound || first === "__current__" || first === "__subject__"
-        ? undefined
-        : tryResolveSchemaAliasSet(ctx, first);
-      if (bound || schemaAlias) {
-        let result = bound ?? schemaAlias!;
+      const bound =
+        first === "__current__" || first === "__subject__" ? undefined : resolveBinding(ctx, first);
+      const schemaAlias =
+        bound || first === "__current__" || first === "__subject__"
+          ? undefined
+          : tryResolveSchemaAliasSet(ctx, first);
+      let result = bound ?? schemaAlias;
+      if (result) {
         for (let i = 1; i < segments.length; i++) {
           const ptrref = resolvePointerRef(ctx, result.typeref, segments[i]);
           if (!ptrref) {
@@ -7212,10 +8122,7 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
     // such type/alias/binding exists, surface the friendlier EdgeQL error.
     if ("bareName" in target && target.bareName && !target.field.includes(".")) {
       const name = target.field;
-      if (
-        !resolveBinding(ctx, name)
-        && ctx.schema
-      ) {
+      if (!resolveBinding(ctx, name) && ctx.schema) {
         const qualified = qualifyTypeName(name, ctx.module);
         const typeDef = getSchemaType(ctx, qualified) ?? ctx.schema.getType(qualified);
         if (!typeDef && !isUniversalObjectRefName(name)) {
@@ -7248,10 +8155,10 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
         // projected shape — same lookup the field-access path uses.
         const shapedComputed = result.shape?.find(
           (entry) =>
-            entry.name === segment
-            && entry.shapeOrigin === "explicit"
-            && entry.targetPtr === undefined
-            && !segment.startsWith("@"),
+            entry.name === segment &&
+            entry.shapeOrigin === "explicit" &&
+            entry.targetPtr === undefined &&
+            !segment.startsWith("@"),
         );
         if (shapedComputed) {
           result = shapedComputed.expr;
@@ -7263,18 +8170,21 @@ const compileFilterTarget = (target: FilterTarget, subject: Set, ctx: IRCompileC
         // alias a known type/binding (`FILTER User = Issue.watchers`).
         const isLeading = i === 0;
         const aliasedToBinding = isLeading && resolveBinding(ctx, segment);
-        const aliasedToType = isLeading && ctx.schema && (getSchemaType(ctx, segment) ?? ctx.schema.getType(qualifyTypeName(segment, ctx.module)));
+        const aliasedToType =
+          isLeading &&
+          ctx.schema &&
+          (getSchemaType(ctx, segment) ?? ctx.schema.getType(qualifyTypeName(segment, ctx.module)));
         if (
-          ctx.schema
-          && !aliasedToBinding
-          && !aliasedToType
-          && segment !== "id"
-          && segment !== "__type__"
-          && !segment.startsWith("@")
-          && !result.typeref.id.startsWith("unknown:")
-          && !result.typeref.id.startsWith("std::")
-          && !result.typeref.isScalar
-          && getResolvedSchemaType(ctx, result.typeref.id)
+          ctx.schema &&
+          !aliasedToBinding &&
+          !aliasedToType &&
+          segment !== "id" &&
+          segment !== "__type__" &&
+          !segment.startsWith("@") &&
+          !result.typeref.id.startsWith("unknown:") &&
+          !result.typeref.id.startsWith("std::") &&
+          !result.typeref.isScalar &&
+          getResolvedSchemaType(ctx, result.typeref.id)
         ) {
           throw new AppError(
             "E_SEMANTIC",
@@ -7372,15 +8282,22 @@ const compileFilterExpr = (filter: FilterExpr, subject: Set, ctx: IRCompileConte
   }
   if (filter.kind === "in_predicate") {
     const left = compileFilterTarget(filter.target, subject, ctx);
-    const right = filter.values.kind === "set_literal"
-      ? compileSetConstructor(filter.values.values.map((value) => literalToSet(value)), "filter:in:set_literal")
-      : filter.values.kind === "name"
-        ? compileFreeObjectExpr({ kind: "binding_ref", name: filter.values.name }, ctx)
-        : filter.values.kind === "select"
-          ? setFromTypeRoot(resolveTypeRef(ctx, filter.values.query.typeName))
-          : filter.values.kind === "expr_set"
-            ? compileSetConstructor(filter.values.values.map((value) => compileFreeObjectExpr(value, ctx)), "filter:in:expr_set")
-            : literalToSet(null);
+    const right =
+      filter.values.kind === "set_literal"
+        ? compileSetConstructor(
+            filter.values.values.map((value) => literalToSet(value)),
+            "filter:in:set_literal",
+          )
+        : filter.values.kind === "name"
+          ? compileFreeObjectExpr({ kind: "binding_ref", name: filter.values.name }, ctx)
+          : filter.values.kind === "select"
+            ? setFromTypeRoot(resolveTypeRef(ctx, filter.values.query.typeName))
+            : filter.values.kind === "expr_set"
+              ? compileSetConstructor(
+                  filter.values.values.map((value) => compileFreeObjectExpr(value, ctx)),
+                  "filter:in:expr_set",
+                )
+              : literalToSet(null);
     return {
       kind: "set",
       expr: {
@@ -7402,9 +8319,14 @@ const compileFilterExpr = (filter: FilterExpr, subject: Set, ctx: IRCompileConte
   // The filter grammar lowers `EXISTS <bare-name>` to `<name> = true`; when
   // the name resolved to an OBJECT set (a WITH binding / link), the intent
   // is an existence test, not a boolean comparison.
-  if (filter.op === "=" && filter.value === true && !left.typeref.isScalar
-      && (left.expr.kind === "select_expr" || left.expr.kind === "type_root"
-          || (left.expr.kind === "pointer" && !(left.expr as Pointer).ptrref.outTarget.isScalar))) {
+  if (
+    filter.op === "=" &&
+    filter.value === true &&
+    !left.typeref.isScalar &&
+    (left.expr.kind === "select_expr" ||
+      left.expr.kind === "type_root" ||
+      (left.expr.kind === "pointer" && !(left.expr as Pointer).ptrref.outTarget.isScalar))
+  ) {
     return {
       kind: "set",
       expr: { kind: "exists_expr", expr: left } as ExistsExpr,
@@ -7460,22 +8382,38 @@ type ComputedExprType =
 const scalarToQualified = (name: string): string => {
   if (name.includes("::")) return name;
   switch (name.toLowerCase()) {
-    case "str": return "std::str";
-    case "int16": return "std::int16";
-    case "int32": return "std::int32";
-    case "int64": return "std::int64";
-    case "int": return "std::int64";
-    case "float32": return "std::float32";
-    case "float64": return "std::float64";
-    case "decimal": return "std::decimal";
-    case "bigint": return "std::bigint";
-    case "bool": return "std::bool";
-    case "uuid": return "std::uuid";
-    case "json": return "std::json";
-    case "datetime": return "std::datetime";
-    case "duration": return "std::duration";
-    case "bytes": return "std::bytes";
-    default: return `std::${name}`;
+    case "str":
+      return "std::str";
+    case "int16":
+      return "std::int16";
+    case "int32":
+      return "std::int32";
+    case "int64":
+      return "std::int64";
+    case "int":
+      return "std::int64";
+    case "float32":
+      return "std::float32";
+    case "float64":
+      return "std::float64";
+    case "decimal":
+      return "std::decimal";
+    case "bigint":
+      return "std::bigint";
+    case "bool":
+      return "std::bool";
+    case "uuid":
+      return "std::uuid";
+    case "json":
+      return "std::json";
+    case "datetime":
+      return "std::datetime";
+    case "duration":
+      return "std::duration";
+    case "bytes":
+      return "std::bytes";
+    default:
+      return `std::${name}`;
   }
 };
 
@@ -7489,9 +8427,7 @@ const literalScalarTypeName = (value: unknown): string => {
   return "std::anyscalar";
 };
 
-const ScalarBindingNames = new globalThis.Set<string>([
-  "__subject__", "__current__", "__source__",
-]);
+const ScalarBindingNames = new globalThis.Set<string>(["__subject__", "__current__", "__source__"]);
 
 // Does a SELECT's FILTER clause guarantee at most one row by equality-matching
 // a property that carries a plain (non-`except`) exclusive constraint?
@@ -7513,15 +8449,17 @@ const selectFilterClampsToOne = (
     | { multi?: boolean; constraints?: Array<{ name?: string; exceptExpr?: string }> }
     | undefined;
   if (field && !field.multi) {
-    const excl = (field.constraints ?? []).find((c) => c.name === "std::exclusive" || c.name === "exclusive");
+    const excl = (field.constraints ?? []).find(
+      (c) => c.name === "std::exclusive" || c.name === "exclusive",
+    );
     if (excl && excl.exceptExpr === undefined) return true;
   }
   // Type-level single-field `constraint exclusive on (.field)` without `except`.
   const typeExcl = (typeDef.typeConstraints ?? []).find(
     (c) =>
-      (c.name === "std::exclusive" || c.name === "exclusive")
-      && c.fieldRefs.length === 1
-      && c.fieldRefs[0] === fieldName,
+      (c.name === "std::exclusive" || c.name === "exclusive") &&
+      c.fieldRefs.length === 1 &&
+      c.fieldRefs[0] === fieldName,
   );
   if (typeExcl && typeExcl.exceptExpr === undefined) return true;
   return false;
@@ -7626,13 +8564,17 @@ const inferFreeExprCard = (
 
 const combineCard = (a: ComputedExprCard, b: ComputedExprCard): ComputedExprCard => {
   const upper: ComputedExprCard["upper"] =
-    a.upper === "many" || b.upper === "many" ? "many"
-      : a.upper === "unknown" || b.upper === "unknown" ? "unknown"
-      : "one";
+    a.upper === "many" || b.upper === "many"
+      ? "many"
+      : a.upper === "unknown" || b.upper === "unknown"
+        ? "unknown"
+        : "one";
   const lower: ComputedExprCard["lower"] =
-    a.lower === "zero" || b.lower === "zero" ? "zero"
-      : a.lower === "unknown" || b.lower === "unknown" ? "unknown"
-      : "one";
+    a.lower === "zero" || b.lower === "zero"
+      ? "zero"
+      : a.lower === "unknown" || b.lower === "unknown"
+        ? "unknown"
+        : "one";
   return { upper, lower };
 };
 
@@ -7687,7 +8629,10 @@ const inferFreeExprType = (
       if (ScalarBindingNames.has(expr.name)) return { kind: "object", typeName: subjectTypeRef.id };
       const typeDef = getSchemaType(ctx, expr.name);
       if (typeDef) {
-        return { kind: "object", typeName: qualifyTypeName(typeDef.name, typeDef.module ?? "default") };
+        return {
+          kind: "object",
+          typeName: qualifyTypeName(typeDef.name, typeDef.module ?? "default"),
+        };
       }
       return { kind: "unknown" };
     }
@@ -7721,11 +8666,17 @@ const inferFreeExprType = (
 const isScalarSubtypeOf = (childName: string, parentName: string): boolean => {
   if (childName === parentName) return true;
   if (parentName === "std::anyscalar") return true;
-  if (parentName === "std::number" && (
-    childName === "std::int16" || childName === "std::int32" || childName === "std::int64"
-    || childName === "std::float32" || childName === "std::float64"
-    || childName === "std::decimal" || childName === "std::bigint"
-  )) return true;
+  if (
+    parentName === "std::number" &&
+    (childName === "std::int16" ||
+      childName === "std::int32" ||
+      childName === "std::int64" ||
+      childName === "std::float32" ||
+      childName === "std::float64" ||
+      childName === "std::decimal" ||
+      childName === "std::bigint")
+  )
+    return true;
   return false;
 };
 
@@ -7737,15 +8688,18 @@ const validateOperatorTypes = (
   if (expr.kind === "if_else") {
     const thenType = inferFreeExprType(expr.thenExpr, ctx, subjectTypeRef);
     const elseType = inferFreeExprType(expr.elseExpr, ctx, subjectTypeRef);
-    if (thenType.kind === "scalar" && elseType.kind === "scalar"
-      && thenType.typeName !== elseType.typeName
-      && !isScalarSubtypeOf(thenType.typeName, elseType.typeName)
-      && !isScalarSubtypeOf(elseType.typeName, thenType.typeName)
+    if (
+      thenType.kind === "scalar" &&
+      elseType.kind === "scalar" &&
+      thenType.typeName !== elseType.typeName &&
+      !isScalarSubtypeOf(thenType.typeName, elseType.typeName) &&
+      !isScalarSubtypeOf(elseType.typeName, thenType.typeName)
     ) {
       throw new AppError(
         "E_SEMANTIC",
         `operator 'IF' cannot be applied to operands of type '${thenType.typeName}' and '${elseType.typeName}'`,
-        1, 1,
+        1,
+        1,
       );
     }
     validateOperatorTypes(expr.thenExpr, ctx, subjectTypeRef);
@@ -7756,15 +8710,18 @@ const validateOperatorTypes = (
   if (expr.kind === "coalesce") {
     const leftType = inferFreeExprType(expr.left, ctx, subjectTypeRef);
     const rightType = inferFreeExprType(expr.right, ctx, subjectTypeRef);
-    if (leftType.kind === "scalar" && rightType.kind === "scalar"
-      && leftType.typeName !== rightType.typeName
-      && !isScalarSubtypeOf(leftType.typeName, rightType.typeName)
-      && !isScalarSubtypeOf(rightType.typeName, leftType.typeName)
+    if (
+      leftType.kind === "scalar" &&
+      rightType.kind === "scalar" &&
+      leftType.typeName !== rightType.typeName &&
+      !isScalarSubtypeOf(leftType.typeName, rightType.typeName) &&
+      !isScalarSubtypeOf(rightType.typeName, leftType.typeName)
     ) {
       throw new AppError(
         "E_SEMANTIC",
         `operator '??' cannot be applied to operands of type '${leftType.typeName}' and '${rightType.typeName}'`,
-        1, 1,
+        1,
+        1,
       );
     }
     validateOperatorTypes(expr.left, ctx, subjectTypeRef);
@@ -7805,7 +8762,10 @@ const inferComputedExprType = (
       if (ScalarBindingNames.has(expr.name)) return { kind: "object", typeName: subjectTypeRef.id };
       const typeDef = getSchemaType(ctx, expr.name);
       if (typeDef) {
-        return { kind: "object", typeName: qualifyTypeName(typeDef.name, typeDef.module ?? "default") };
+        return {
+          kind: "object",
+          typeName: qualifyTypeName(typeDef.name, typeDef.module ?? "default"),
+        };
       }
       return { kind: "unknown" };
     }
@@ -7819,7 +8779,10 @@ const findInheritedFieldOwner = (
   typeId: string,
   fieldName: string,
   seen = new globalThis.Set<string>(),
-): { kind: "field"; owner: string; field: FieldDef } | { kind: "link"; owner: string; link: LinkDef } | undefined => {
+):
+  | { kind: "field"; owner: string; field: FieldDef }
+  | { kind: "link"; owner: string; link: LinkDef }
+  | undefined => {
   if (seen.has(typeId)) return undefined;
   seen.add(typeId);
   const typeDef = getSchemaTypeByQualifiedName(ctx, typeId);
@@ -7829,7 +8792,12 @@ const findInheritedFieldOwner = (
   const directLink = (typeDef.links ?? []).find((c) => c.name === fieldName);
   if (directLink) return { kind: "link", owner: typeId, link: directLink };
   for (const baseName of typeDef.extends ?? []) {
-    const inherited = findInheritedFieldOwner(ctx, qualifyTypeName(baseName, typeDef.module ?? "default"), fieldName, seen);
+    const inherited = findInheritedFieldOwner(
+      ctx,
+      qualifyTypeName(baseName, typeDef.module ?? "default"),
+      fieldName,
+      seen,
+    );
     if (inherited) return inherited;
   }
   return undefined;
@@ -7899,8 +8867,8 @@ const scalarTypeNameOfSet = (ctx: IRCompileContext, set: Set): string | undefine
 const typeExprOperatorSymbol = (typeExpr: TypeExpr): "|" | "&" | undefined => {
   if (typeExpr.kind === "type_union") return "|";
   if (typeExpr.kind === "type_intersection") {
-    return typeExprOperatorSymbol(typeExpr.left) === "|"
-      || typeExprOperatorSymbol(typeExpr.right) === "|"
+    return typeExprOperatorSymbol(typeExpr.left) === "|" ||
+      typeExprOperatorSymbol(typeExpr.right) === "|"
       ? "|"
       : "&";
   }
@@ -7918,7 +8886,9 @@ const typeExprHasNonObjectLeaf = (ctx: IRCompileContext, typeExpr: TypeExpr): bo
       return false;
     }
   }
-  return typeExprHasNonObjectLeaf(ctx, typeExpr.left) || typeExprHasNonObjectLeaf(ctx, typeExpr.right);
+  return (
+    typeExprHasNonObjectLeaf(ctx, typeExpr.left) || typeExprHasNonObjectLeaf(ctx, typeExpr.right)
+  );
 };
 
 // True when a type expression names `FreeObject` as one of its leaves. Free
@@ -7971,7 +8941,9 @@ const narrowTypeIntersectionStep = (
   if (!ctx.schema) return undefined;
   const branch = step.typeExpr
     ? evalTypeExprConcreteNames(ctx, step.typeExpr)
-    : new globalThis.Set(ctx.schema.concreteTypeNamesUnder(qualifyTypeName(step.typeName, ctx.module)));
+    : new globalThis.Set(
+        ctx.schema.concreteTypeNamesUnder(qualifyTypeName(step.typeName, ctx.module)),
+      );
   if (!branch) return undefined;
   // Build the narrowed typeref from the concrete names themselves, NOT by
   // spreading the base typeref: the SQL polymorphic source derives a non-`|`
@@ -7996,23 +8968,25 @@ const narrowTypeIntersectionStep = (
       children: leaves.length > 0 ? leaves : undefined,
     };
   };
-  const baseNames = running ?? (() => {
-    const fromSchema = new globalThis.Set(ctx.schema.concreteTypeNamesUnder(baseTyperef.id));
-    if (fromSchema.size > 0) return fromSchema;
-    const fromUnion = new globalThis.Set<string>();
-    for (const rawBranch of baseTyperef.id.split("|")) {
-      const branch = rawBranch.trim().replace(/^unknown:/, "");
-      for (const name of ctx.schema.concreteTypeNamesUnder(branch)) fromUnion.add(name);
-    }
-    if (fromUnion.size > 0) return fromUnion;
-    const concrete = new globalThis.Set<string>();
-    const visit = (ref: TypeRef): void => {
-      if (!ref.isAbstract && !ref.id.includes(" | ")) concrete.add(ref.id);
-      for (const child of ref.children ?? []) visit(child);
-    };
-    visit(baseTyperef);
-    return concrete;
-  })();
+  const baseNames =
+    running ??
+    (() => {
+      const fromSchema = new globalThis.Set(ctx.schema.concreteTypeNamesUnder(baseTyperef.id));
+      if (fromSchema.size > 0) return fromSchema;
+      const fromUnion = new globalThis.Set<string>();
+      for (const rawBranch of baseTyperef.id.split("|")) {
+        const branch = rawBranch.trim().replace(/^unknown:/, "");
+        for (const name of ctx.schema.concreteTypeNamesUnder(branch)) fromUnion.add(name);
+      }
+      if (fromUnion.size > 0) return fromUnion;
+      const concrete = new globalThis.Set<string>();
+      const visit = (ref: TypeRef): void => {
+        if (!ref.isAbstract && !ref.id.includes(" | ")) concrete.add(ref.id);
+        for (const child of ref.children ?? []) visit(child);
+      };
+      visit(baseTyperef);
+      return concrete;
+    })();
   // A base closure we cannot resolve (e.g. an already-`|`-union binding
   // typeref) means we cannot intersect safely — narrow to the branch set alone
   // rather than wrongly emptying the result.
@@ -8028,12 +9002,12 @@ const narrowTypeIntersectionStep = (
   // the same closure (`Text[IS Owned]`, every Text is also Owned) must still
   // narrow to the concrete union so the branch's own members (`owner`) resolve
   // via the union probe. A compound `&`/`|` branch never no-ops.
-  const singleBranchName = step.typeName
-    || (step.typeExpr?.kind === "type_name" ? step.typeExpr.name : undefined);
+  const singleBranchName =
+    step.typeName || (step.typeExpr?.kind === "type_name" ? step.typeExpr.name : undefined);
   if (
-    narrowed.size === baseNames.size
-    && singleBranchName
-    && isSubtypeOf(ctx, baseTyperef.id, qualifyTypeName(singleBranchName, ctx.module))
+    narrowed.size === baseNames.size &&
+    singleBranchName &&
+    isSubtypeOf(ctx, baseTyperef.id, qualifyTypeName(singleBranchName, ctx.module))
   ) {
     return { concrete: baseNames, typeref: baseTyperef };
   }
@@ -8048,8 +9022,8 @@ const narrowTypeIntersectionStep = (
 // pointer chains) keep the set-level typeref only.
 const withNarrowedSource = (set: Set, typeref: TypeRef): Set =>
   set.expr.kind === "type_root"
-    ? { ...set, typeref, expr: { ...set.expr, typeref }, typeIntersectionNarrowed: true } as Set
-    : { ...set, typeref, typeIntersectionNarrowed: true } as Set;
+    ? ({ ...set, typeref, expr: { ...set.expr, typeref }, typeIntersectionNarrowed: true } as Set)
+    : ({ ...set, typeref, typeIntersectionNarrowed: true } as Set);
 
 // The fullest TypeDef available, including `computeds` — `getSchemaTypeByQualifiedName`
 // prefers the generated schema model, which omits computed pointers, so the
@@ -8063,9 +9037,9 @@ const fullTypeDef = (ctx: IRCompileContext, typeId: string): TypeDef | undefined
 // pointer iff they share this origin.
 const pointerDeclOrigin = (ctx: IRCompileContext, typeId: string, ptrName: string): string => {
   const hasPtr = (def: TypeDef): boolean =>
-    (def.fields ?? []).some((f) => f.name === ptrName && !f.isLinkColumn)
-    || (def.links ?? []).some((l) => l.name === ptrName)
-    || (def.computeds ?? []).some((c) => c.name === ptrName);
+    (def.fields ?? []).some((f) => f.name === ptrName && !f.isLinkColumn) ||
+    (def.links ?? []).some((l) => l.name === ptrName) ||
+    (def.computeds ?? []).some((c) => c.name === ptrName);
   let origin = typeId;
   const visit = (id: string, seen: globalThis.Set<string>): void => {
     if (seen.has(id)) return;
@@ -8081,7 +9055,12 @@ const pointerDeclOrigin = (ctx: IRCompileContext, typeId: string, ptrName: strin
   return origin;
 };
 
-type IntersectionPointerInfo = { kind: "property" | "link"; computed: boolean; multi: boolean; origin: string };
+type IntersectionPointerInfo = {
+  kind: "property" | "link";
+  computed: boolean;
+  multi: boolean;
+  origin: string;
+};
 
 const intersectionPointerInfo = (
   ctx: IRCompileContext,
@@ -8092,11 +9071,21 @@ const intersectionPointerInfo = (
   if (!def) return undefined;
   const field = (def.fields ?? []).find((f) => f.name === ptrName && !f.isLinkColumn);
   if (field) {
-    return { kind: "property", computed: false, multi: !!field.multi, origin: pointerDeclOrigin(ctx, typeId, ptrName) };
+    return {
+      kind: "property",
+      computed: false,
+      multi: !!field.multi,
+      origin: pointerDeclOrigin(ctx, typeId, ptrName),
+    };
   }
   const link = (def.links ?? []).find((l) => l.name === ptrName);
   if (link) {
-    return { kind: "link", computed: false, multi: !!link.multi, origin: pointerDeclOrigin(ctx, typeId, ptrName) };
+    return {
+      kind: "link",
+      computed: false,
+      multi: !!link.multi,
+      origin: pointerDeclOrigin(ctx, typeId, ptrName),
+    };
   }
   const computed = (def.computeds ?? []).find((c) => c.name === ptrName);
   if (computed) {
@@ -8244,7 +9233,8 @@ const validateComputedShapeElement = (
     throw new AppError(
       "E_SEMANTIC",
       "mutations are invalid in a shape's computed expression",
-      1, 1,
+      1,
+      1,
     );
   }
   const subjectTypeId = subject.typeref.id;
@@ -8255,8 +9245,10 @@ const validateComputedShapeElement = (
   if (inherited) {
     const ownerName = inherited.owner;
     const memberKind = inherited.kind;
-    const expectedRequired = memberKind === "field" ? inherited.field.required === true : inherited.link.required === true;
-    const expectedMulti = memberKind === "field" ? inherited.field.multi === true : inherited.link.multi === true;
+    const expectedRequired =
+      memberKind === "field" ? inherited.field.required === true : inherited.link.required === true;
+    const expectedMulti =
+      memberKind === "field" ? inherited.field.multi === true : inherited.link.multi === true;
 
     if (memberKind === "field") {
       const expectedScalar = scalarToStdName(inherited.field.type);
@@ -8264,14 +9256,20 @@ const validateComputedShapeElement = (
         throw new AppError(
           "E_SEMANTIC",
           `cannot redefine property '${el.name}' of object type '${ownerName}' as object type '${inferredType.typeName}'`,
-          1, 1,
+          1,
+          1,
         );
       }
-      if (inferredType.kind === "scalar" && inferredType.typeName !== expectedScalar && inferredType.typeName !== "std::anyscalar") {
+      if (
+        inferredType.kind === "scalar" &&
+        inferredType.typeName !== expectedScalar &&
+        inferredType.typeName !== "std::anyscalar"
+      ) {
         throw new AppError(
           "E_SEMANTIC",
           `cannot redefine property '${el.name}' of object type '${ownerName}' as scalar type '${inferredType.typeName}'`,
-          1, 1,
+          1,
+          1,
         );
       }
     } else {
@@ -8280,14 +9278,20 @@ const validateComputedShapeElement = (
         throw new AppError(
           "E_SEMANTIC",
           `cannot redefine link '${el.name}' of object type '${ownerName}' as scalar type '${inferredType.typeName}'`,
-          1, 1,
+          1,
+          1,
         );
       }
-      if (inferredType.kind === "object" && !isSubtypeOf(ctx, inferredType.typeName, expectedTargetId) && inferredType.typeName !== expectedTargetId) {
+      if (
+        inferredType.kind === "object" &&
+        !isSubtypeOf(ctx, inferredType.typeName, expectedTargetId) &&
+        inferredType.typeName !== expectedTargetId
+      ) {
         throw new AppError(
           "E_SEMANTIC",
           `cannot redefine link '${el.name}' of object type '${ownerName}' as object type '${inferredType.typeName}'`,
-          1, 1,
+          1,
+          1,
         );
       }
     }
@@ -8296,44 +9300,58 @@ const validateComputedShapeElement = (
       throw new AppError(
         "E_SEMANTIC",
         `cannot redefine the cardinality of ${memberKind} '${el.name}': it is defined as 'single' in the base object type '${ownerName}'`,
-        1, 1,
+        1,
+        1,
       );
     }
     if (el.cardinality === "one" && expectedMulti) {
       throw new AppError(
         "E_SEMANTIC",
         `cannot redefine the cardinality of ${memberKind} '${el.name}': it is defined as 'multi' in the base object type '${ownerName}'`,
-        1, 1,
+        1,
+        1,
       );
     }
     if (el.required === false && expectedRequired) {
       throw new AppError(
         "E_SEMANTIC",
         `cannot redefine ${memberKind} '${el.name}' as optional: it is defined as required in the base object type '${ownerName}'`,
-        1, 1,
+        1,
+        1,
       );
     }
   }
 
-  const memberKindForMsg = inherited ? inherited.kind : (inferredType.kind === "object" ? "link" : "property");
+  const memberKindForMsg = inherited
+    ? inherited.kind
+    : inferredType.kind === "object"
+      ? "link"
+      : "property";
 
-  const inheritedMulti = inherited && (inherited.kind === "field" ? inherited.field.multi : inherited.link.multi) === true;
-  const inheritedRequired = inherited && (inherited.kind === "field" ? inherited.field.required : inherited.link.required) === true;
-  const declaredSingle = el.cardinality === "one" || (inherited && !inheritedMulti && el.cardinality !== "many");
+  const inheritedMulti =
+    inherited &&
+    (inherited.kind === "field" ? inherited.field.multi : inherited.link.multi) === true;
+  const inheritedRequired =
+    inherited &&
+    (inherited.kind === "field" ? inherited.field.required : inherited.link.required) === true;
+  const declaredSingle =
+    el.cardinality === "one" || (inherited && !inheritedMulti && el.cardinality !== "many");
   const declaredRequired = el.required === true || (inheritedRequired && el.required !== false);
 
   if (declaredSingle && inferredCard.upper === "many") {
     throw new AppError(
       "E_SEMANTIC",
       `possibly more than one element returned by an expression for a computed ${memberKindForMsg} '${el.name}' declared as 'single'`,
-      1, 1,
+      1,
+      1,
     );
   }
   if (declaredRequired && inferredCard.lower === "zero") {
     throw new AppError(
       "E_SEMANTIC",
       `possibly an empty set returned by an expression for a computed ${memberKindForMsg} '${el.name}' declared as 'required'`,
-      1, 1,
+      1,
+      1,
     );
   }
 
@@ -8355,7 +9373,8 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
       if (ptr.direction === "inbound") {
         return ptr.ptrref.inCardinality === "many" || ptr.ptrref.inCardinality === "at_least_one";
       }
-      if (ptr.ptrref.outCardinality === "many" || ptr.ptrref.outCardinality === "at_least_one") return true;
+      if (ptr.ptrref.outCardinality === "many" || ptr.ptrref.outCardinality === "at_least_one")
+        return true;
       cur = ptr.source;
       continue;
     }
@@ -8380,7 +9399,9 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
         return Object.values(oc.args).some((arg: CallArg) => {
           let argSet: Set = arg.expr;
           while (argSet.expr.kind === "select_expr") argSet = (argSet.expr as SelectExpr).result;
-          return argSet.expr.kind === "pointer" && (argSet.expr as Pointer).ptrref.isExclusive === true;
+          return (
+            argSet.expr.kind === "pointer" && (argSet.expr as Pointer).ptrref.isExclusive === true
+          );
         });
       };
       let cursor: Set = se.result;
@@ -8419,8 +9440,16 @@ const inferComputedShapeIsMany = (set: Set): boolean => {
       const fc = expr as IRFunctionCall;
       const shortName = (fc.functionName ?? "").split("::").pop() ?? "";
       const collapsing = new globalThis.Set([
-        "count", "sum", "min", "max", "avg", "all", "any",
-        "array_agg", "assert_single", "exists",
+        "count",
+        "sum",
+        "min",
+        "max",
+        "avg",
+        "all",
+        "any",
+        "array_agg",
+        "assert_single",
+        "exists",
       ]);
       if (collapsing.has(shortName)) return false;
       return Object.values(fc.args).some((arg: CallArg) => inferComputedShapeIsMany(arg.expr));
@@ -8459,7 +9488,13 @@ const synthesizeTypePointerSet = (source: Set): Set => {
   };
   return {
     kind: "set",
-    expr: { kind: "pointer", source, ptrref, direction: "outbound", isDefinition: false } as Pointer,
+    expr: {
+      kind: "pointer",
+      source,
+      ptrref,
+      direction: "outbound",
+      isDefinition: false,
+    } as Pointer,
     pathId: defaultPathId(`${source.typeref.id}.__type__`),
     typeref: objectTypeRef,
     shape: [],
@@ -8497,7 +9532,13 @@ const synthesizeTypeNamePointerSet = (typeSet: Set): Set => {
   };
   return {
     kind: "set",
-    expr: { kind: "pointer", source: typeSet, ptrref, direction: "outbound", isDefinition: false } as Pointer,
+    expr: {
+      kind: "pointer",
+      source: typeSet,
+      ptrref,
+      direction: "outbound",
+      isDefinition: false,
+    } as Pointer,
     pathId: defaultPathId(`${typeSet.typeref.id}.__type__.name`),
     typeref: strRef,
     shape: [],
@@ -8540,7 +9581,14 @@ const synthesizeTypeLinkShapeElement = (
     hasProperties: false,
   };
   const childNames = (el.shape ?? [])
-    .map((child) => (child.kind === "field" || child.kind === "computed" || child.kind === "link" || child.kind === "backlink") ? child.name : "")
+    .map((child) =>
+      child.kind === "field" ||
+      child.kind === "computed" ||
+      child.kind === "link" ||
+      child.kind === "backlink"
+        ? child.name
+        : "",
+    )
     .filter((name) => name && !name.startsWith("@"));
   const exprSet: Set = {
     kind: "set",
@@ -8604,7 +9652,8 @@ const validateSplatTypeIntersections = (
   // Publication are unrelated concrete types. Strip the `unknown:` marker
   // each branch may carry so the subsequent `isTypeSubtypeOf` lookups land
   // on the canonical schema names.
-  const stripUnknown = (name: string): string => name.startsWith("unknown:") ? name.slice("unknown:".length) : name;
+  const stripUnknown = (name: string): string =>
+    name.startsWith("unknown:") ? name.slice("unknown:".length) : name;
   const subjectBranches = new globalThis.Set<string>();
   if (subjectTypeId.includes("|")) {
     for (const branch of subjectTypeId.split("|")) {
@@ -8626,8 +9675,12 @@ const validateSplatTypeIntersections = (
       // an ancestor of both), the splats are still considered related
       // because each intersection refines the subject independently.
       if (!subjectIsUniversal) {
-        const aRelatedToSubject = [...subjectBranches].some((branch) => schema.isTypeSubtypeOf(a, branch));
-        const bRelatedToSubject = [...subjectBranches].some((branch) => schema.isTypeSubtypeOf(b, branch));
+        const aRelatedToSubject = [...subjectBranches].some((branch) =>
+          schema.isTypeSubtypeOf(a, branch),
+        );
+        const bRelatedToSubject = [...subjectBranches].some((branch) =>
+          schema.isTypeSubtypeOf(b, branch),
+        );
         if (aRelatedToSubject && bRelatedToSubject) continue;
       }
       throw new AppError(
@@ -8649,7 +9702,12 @@ const compileShape = (
   const out: ShapeElement[] = [];
   const explicitNames = new globalThis.Set<string>();
   for (const el of shape) {
-    if (el.kind === "field" || el.kind === "link" || el.kind === "computed" || el.kind === "backlink") {
+    if (
+      el.kind === "field" ||
+      el.kind === "link" ||
+      el.kind === "computed" ||
+      el.kind === "backlink"
+    ) {
       explicitNames.add(el.name);
     }
   }
@@ -8659,7 +9717,13 @@ const compileShape = (
   // the same expression-list quirk used to silently accept it.
   const seenExplicit = new globalThis.Set<string>();
   for (const el of shape) {
-    if (el.kind !== "field" && el.kind !== "link" && el.kind !== "computed" && el.kind !== "backlink") continue;
+    if (
+      el.kind !== "field" &&
+      el.kind !== "link" &&
+      el.kind !== "computed" &&
+      el.kind !== "backlink"
+    )
+      continue;
     if (!el.name || el.name.startsWith("@")) continue;
     if (el.origin && el.origin !== "explicit") continue;
     if (seenExplicit.has(el.name)) {
@@ -8675,7 +9739,9 @@ const compileShape = (
     seenExplicit.add(el.name);
   }
 
-  const resolveShapeOrigin = (el: EdgeQLShapeElement): "explicit" | "default" | "splat_expansion" | "materialization" => {
+  const resolveShapeOrigin = (
+    el: EdgeQLShapeElement,
+  ): "explicit" | "default" | "splat_expansion" | "materialization" => {
     if (el.origin) {
       return el.origin;
     }
@@ -8788,7 +9854,14 @@ const compileShape = (
         nextAncestry.add(targetType.id);
         const canDescend = !nextAncestry.has(linkTarget.id);
         const nested = canDescend
-          ? expandSplatEntries(expr, linkTarget, 1, new globalThis.Set<string>(), undefined, nextAncestry)
+          ? expandSplatEntries(
+              expr,
+              linkTarget,
+              1,
+              new globalThis.Set<string>(),
+              undefined,
+              nextAncestry,
+            )
           : [];
         // Also surface this link's link properties (e.g. `@note` on
         // `owner`) as part of the deep splat. Without this the projection
@@ -8827,7 +9900,8 @@ const compileShape = (
       for (const computed of typeDef.computeds ?? []) {
         if (skipNames.has(computed.name)) continue;
         if (computed.kind !== "property") continue;
-        if (computed.expr.kind === "link_aggregate" && futureFlagForbidsLinkfulComputedSplats(ctx)) continue;
+        if (computed.expr.kind === "link_aggregate" && futureFlagForbidsLinkfulComputedSplats(ctx))
+          continue;
         const compiledExpr = tryLowerComputedPropertyOnTypePath(innerCtx, baseSet, computed.name);
         if (!compiledExpr) continue;
         expanded.push({
@@ -8925,7 +9999,12 @@ const compileShape = (
       // (`tag_set1 FILTER Item.tag_set1 > 'p'`) keep the outer scope.
       // Also used to resolve a computed-sibling ORDER BY key against the link
       // target (`stw: { typename := … } ORDER BY .typename`).
-      if ((!el.where && !el.orderBy?.length) || expr.typeref.isScalar || expr.expr.kind !== "pointer") return ctx;
+      if (
+        (!el.where && !el.orderBy?.length) ||
+        expr.typeref.isScalar ||
+        expr.expr.kind !== "pointer"
+      )
+        return ctx;
       const scoped = childScope(ctx);
       bindValue(scoped, "__current__", expr);
       bindValue(scoped, "__subject__", expr);
@@ -8937,13 +10016,15 @@ const compileShape = (
     // and/or/not/in connective forms) must be decomposed by compileFilterExpr,
     // which builds the operator_call from target/op/value. Routed against the
     // link's target rows (the bound `__subject__`).
-    const whereIsFilterExpr = el.where !== undefined
-      && ["predicate", "and", "or", "not", "in_predicate", "free_expr"]
-        .includes((el.where as { kind: string }).kind);
+    const whereIsFilterExpr =
+      el.where !== undefined &&
+      ["predicate", "and", "or", "not", "in_predicate", "free_expr"].includes(
+        (el.where as { kind: string }).kind,
+      );
     const where = el.where
-      ? (whereIsFilterExpr
+      ? whereIsFilterExpr
         ? compileFilterExpr(el.where as unknown as FilterExpr, expr, filterCtx)
-        : compileFreeObjectExpr(el.where, filterCtx))
+        : compileFreeObjectExpr(el.where, filterCtx)
       : undefined;
     const orderBy = el.orderBy?.map((entry) => {
       // `ORDER BY @prop` — a link-property sort key on the link being shaped
@@ -9060,10 +10141,10 @@ const compileShape = (
         linkPtrRef = linkPtr;
         const linkSourceType = getResolvedSchemaType(ctx, linkPointer.source.typeref.id);
         if (linkSourceType) {
-          const linkDef = linkSourceType.resolvedLinks.find(l => l.name === linkPtr.shortName);
+          const linkDef = linkSourceType.resolvedLinks.find((l) => l.name === linkPtr.shortName);
           if (linkDef?.properties) {
             const propName = propertyName.slice(1);
-            const propDef = linkDef.properties.find(p => p.name === propName);
+            const propDef = linkDef.properties.find((p) => p.name === propName);
             if (propDef) {
               const propertyPtrRef: PointerRef = {
                 kind: "pointer_ref",
@@ -9140,8 +10221,13 @@ const compileShape = (
       // so resolvePointerRef can't see it. Synthesise the id pointer so the
       // element surfaces `id` in the projection (and keeps it in materialised
       // rows the GROUP runtime traverses) instead of being silently dropped.
-      if (el.name === "id" && !resolvePointerRef(ctx, subject.typeref, "id")
-        && Boolean(getResolvedSchemaType(ctx, subject.typeref.id) ?? ctx.schema?.getType(subject.typeref.id))) {
+      if (
+        el.name === "id" &&
+        !resolvePointerRef(ctx, subject.typeref, "id") &&
+        Boolean(
+          getResolvedSchemaType(ctx, subject.typeref.id) ?? ctx.schema?.getType(subject.typeref.id),
+        )
+      ) {
         const idPtr = idPointerRef(subject.typeref);
         out.push({
           kind: "shape_element",
@@ -9168,14 +10254,17 @@ const compileShape = (
           // doesn't repeat the modifier.
           const computedDecl = ctx.schema
             ?.getType(subject.typeref.id)
-            ?.computeds
-            ?.find((c) => c.kind === "property" && c.name === el.name);
+            ?.computeds?.find((c) => c.kind === "property" && c.name === el.name);
           const declMulti = computedDecl?.multi === true;
           const declRequired = computedDecl?.required === true;
           const inferredMulti = declMulti || computedSet.typeref.collection === "array";
           const cardinality: Cardinality = inferredMulti
-            ? (declRequired ? "at_least_one" : "many")
-            : (declRequired ? "one" : "at_most_one");
+            ? declRequired
+              ? "at_least_one"
+              : "many"
+            : declRequired
+              ? "one"
+              : "at_most_one";
           out.push({
             kind: "shape_element",
             source: subject,
@@ -9193,8 +10282,11 @@ const compileShape = (
         // but the binding's compiled shape carries the element — adopt it so
         // the projection keeps the computed value.
         const carried = gatherBindingShape(subject).find((s) => {
-          const carriedName = s.name
-            ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
+          const carriedName =
+            s.name ??
+            (s.expr.expr.kind === "pointer"
+              ? (s.expr.expr as Pointer).ptrref.shortName
+              : undefined);
           return carriedName === el.name;
         });
         if (carried) {
@@ -9230,7 +10322,7 @@ const compileShape = (
         expr: withShapeModifiers(expr, el),
         shapeOp: el.operation,
         shapeOrigin: resolveShapeOrigin(el),
-        required: el.required ?? (effectivePointerCardinality(ptrref) === "one"),
+        required: el.required ?? effectivePointerCardinality(ptrref) === "one",
         cardinality: el.cardinality ?? effectivePointerCardinality(ptrref),
         // Project under the requested field name. For a plain field this equals
         // `ptrref.shortName`, but a computed link alias (`winner := .<awards`)
@@ -9331,12 +10423,20 @@ const compileShape = (
           // Adopt the carried element so the key resolves; the FOR lowering
           // re-projects it correlated against the iterated element.
           const carried = gatherBindingShape(subject).find((s) => {
-            const carriedName = s.name
-              ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
+            const carriedName =
+              s.name ??
+              (s.expr.expr.kind === "pointer"
+                ? (s.expr.expr as Pointer).ptrref.shortName
+                : undefined);
             return carriedName === fieldName;
           });
           if (carried) {
-            out.push({ ...carried, shapeOp: el.operation, shapeOrigin: resolveShapeOrigin(el), name: el.name });
+            out.push({
+              ...carried,
+              shapeOp: el.operation,
+              shapeOrigin: resolveShapeOrigin(el),
+              name: el.name,
+            });
           }
           continue;
         }
@@ -9359,10 +10459,15 @@ const compileShape = (
       // field_access falls back to the shape lookup when pointer resolution
       // fails. Only pointer-less computeds: real pointers must keep
       // resolving through the schema, not the projected shape.
-      const siblingComputeds = out.filter((prior) =>
-        prior.name !== undefined && prior.targetPtr === undefined && prior.shapeOrigin === "explicit"
-        && prior.expr.expr.kind !== "pointer");
-      const shapedSubject = siblingComputeds.length > 0 ? { ...subject, shape: siblingComputeds } : subject;
+      const siblingComputeds = out.filter(
+        (prior) =>
+          prior.name !== undefined &&
+          prior.targetPtr === undefined &&
+          prior.shapeOrigin === "explicit" &&
+          prior.expr.expr.kind !== "pointer",
+      );
+      const shapedSubject =
+        siblingComputeds.length > 0 ? { ...subject, shape: siblingComputeds } : subject;
       bindValue(computedCtx, "__subject__", shapedSubject);
       bindValue(computedCtx, "__current__", shapedSubject);
       const compiledExpr = compileFreeObjectExpr(el.expr, computedCtx);
@@ -9412,34 +10517,44 @@ const compileShape = (
         // (`select X { b: {c, d} }` where X := User { b := {…} }): adopt the
         // binding's carried element, as in the field branch above.
         const carried = gatherBindingShape(subject).find((s) => {
-          const carriedName = s.name
-            ?? (s.expr.expr.kind === "pointer" ? (s.expr.expr as Pointer).ptrref.shortName : undefined);
+          const carriedName =
+            s.name ??
+            (s.expr.expr.kind === "pointer"
+              ? (s.expr.expr as Pointer).ptrref.shortName
+              : undefined);
           return carriedName === el.name;
         });
         if (carried) {
           // The written sub-shape (`b: {c}`) selects which fields of the
           // carried value stay visible — record it on the adopted expr so
           // the SQL stage filters tuple fields accordingly.
-          const subShape = el.shape && el.shape.length > 0 && carried.expr.expr.kind === "tuple"
-            ? el.shape
-                .filter((sub): sub is Extract<EdgeQLShapeElement, { name: string }> =>
-                  "name" in sub && typeof sub.name === "string" && sub.kind === "field")
-                .map((sub): ShapeElement => ({
-                  kind: "shape_element",
-                  source: carried.expr,
-                  expr: carried.expr,
-                  name: sub.name,
-                  shapeOp: "assign",
-                  shapeOrigin: "explicit",
-                  required: false,
-                  cardinality: "one",
-                } as ShapeElement))
-            : undefined;
+          const subShape =
+            el.shape && el.shape.length > 0 && carried.expr.expr.kind === "tuple"
+              ? el.shape
+                  .filter(
+                    (sub): sub is Extract<EdgeQLShapeElement, { name: string }> =>
+                      "name" in sub && typeof sub.name === "string" && sub.kind === "field",
+                  )
+                  .map(
+                    (sub): ShapeElement =>
+                      ({
+                        kind: "shape_element",
+                        source: carried.expr,
+                        expr: carried.expr,
+                        name: sub.name,
+                        shapeOp: "assign",
+                        shapeOrigin: "explicit",
+                        required: false,
+                        cardinality: "one",
+                      }) as ShapeElement,
+                  )
+              : undefined;
           out.push({
             ...carried,
-            expr: subShape && subShape.length === (el.shape ?? []).length
-              ? { ...carried.expr, shape: subShape }
-              : carried.expr,
+            expr:
+              subShape && subShape.length === (el.shape ?? []).length
+                ? { ...carried.expr, shape: subShape }
+                : carried.expr,
             shapeOp: el.operation,
             shapeOrigin: resolveShapeOrigin(el),
             name: el.name,
@@ -9481,17 +10596,18 @@ const compileShape = (
       // direction (single). Traversed backward, the effective cardinality is
       // the forward link's `inCardinality` (many unless the forward link is
       // exclusive).
-      const linkCardinality = (expr.expr.kind === "pointer" && (expr.expr as Pointer).direction === "inbound")
-        || ptrref.computedLinkAliasIsBackward
-        ? ptrref.inCardinality
-        : ptrref.outCardinality;
+      const linkCardinality =
+        (expr.expr.kind === "pointer" && (expr.expr as Pointer).direction === "inbound") ||
+        ptrref.computedLinkAliasIsBackward
+          ? ptrref.inCardinality
+          : ptrref.outCardinality;
       out.push({
         kind: "shape_element",
         source: subject,
         expr: withShapeModifiers(expr, el),
         shapeOp: el.operation,
         shapeOrigin: resolveShapeOrigin(el),
-        required: el.required ?? (linkCardinality === "one"),
+        required: el.required ?? linkCardinality === "one",
         cardinality: el.cardinality ?? linkCardinality,
         name: el.name,
       });
@@ -9499,7 +10615,12 @@ const compileShape = (
     }
 
     if (el.kind === "backlink") {
-      const ptrref = resolveBacklinkPointerRef(ctx, subject.typeref, el.expr.link, el.expr.sourceType);
+      const ptrref = resolveBacklinkPointerRef(
+        ctx,
+        subject.typeref,
+        el.expr.link,
+        el.expr.sourceType,
+      );
       if (!ptrref) {
         continue;
       }
@@ -9544,7 +10665,9 @@ const compileShape = (
         // opaque set with no resolvable members (scalar / computed value),
         // where `json(value)` on a bare object id would be malformed JSON.
         const splatType = el.sourceType ? resolveTypeRef(ctx, el.sourceType) : subject.typeref;
-        const isObjectType = Boolean(getResolvedSchemaType(ctx, splatType.id) ?? ctx.schema?.getType(splatType.id));
+        const isObjectType = Boolean(
+          getResolvedSchemaType(ctx, splatType.id) ?? ctx.schema?.getType(splatType.id),
+        );
         if (!isObjectType) {
           out.push({
             kind: "shape_element",
@@ -9568,11 +10691,17 @@ const compileShape = (
   return out;
 };
 
-const compileInsertValue = (value: InsertValue, ctx: IRCompileContext, seenInsertTypes: globalThis.Set<string> = new globalThis.Set<string>()): Set => {
+const compileInsertValue = (
+  value: InsertValue,
+  ctx: IRCompileContext,
+  seenInsertTypes: globalThis.Set<string> = new globalThis.Set<string>(),
+): Set => {
   if (value && typeof value === "object") {
     if ("kind" in value) {
       if (value.kind === "set") {
-        const compiled = value.values.map((entry) => compileInsertValue(entry, ctx, seenInsertTypes));
+        const compiled = value.values.map((entry) =>
+          compileInsertValue(entry, ctx, seenInsertTypes),
+        );
         return compileSetConstructor(compiled, "insert_set");
       }
       if (value.kind === "binding_ref") {
@@ -9589,7 +10718,8 @@ const compileInsertValue = (value: InsertValue, ctx: IRCompileContext, seenInser
         const subjectSet = bound ?? setFromTypeRoot(resolveTypeRef(ctx, value.typeName));
         return {
           ...subjectSet,
-          shape: value.shape.length > 0 ? compileShape(subjectSet, value.shape, ctx) : subjectSet.shape,
+          shape:
+            value.shape.length > 0 ? compileShape(subjectSet, value.shape, ctx) : subjectSet.shape,
         };
       }
       if (value.kind === "insert") {
@@ -9635,17 +10765,31 @@ const compileInsertValue = (value: InsertValue, ctx: IRCompileContext, seenInser
         return literalToSet(value.values.length);
       }
       if (value.kind === "tuple_literal") {
-        return literalToSet(Array.isArray(value.values) ? value.values.length : Object.keys(value.values).length);
+        return literalToSet(
+          Array.isArray(value.values) ? value.values.length : Object.keys(value.values).length,
+        );
       }
       if (value.kind === "for") {
-        return compileFreeObjectExpr({ kind: "for_expr", variable: value.variable, iterator: value.iteratorExpr, body: { kind: "literal", value: null }, optional: value.optional }, ctx);
+        return compileFreeObjectExpr(
+          {
+            kind: "for_expr",
+            variable: value.variable,
+            iterator: value.iteratorExpr,
+            body: { kind: "literal", value: null },
+            optional: value.optional,
+          },
+          ctx,
+        );
       }
     }
   }
   return literalToSet(value as string | number | boolean | null);
 };
 
-const compileSelectExprStatement = (statement: Extract<EdgeQLStatement, { kind: "select_expr" }>, ctx: IRCompileContext): SelectStmt => {
+const compileSelectExprStatement = (
+  statement: Extract<EdgeQLStatement, { kind: "select_expr" }>,
+  ctx: IRCompileContext,
+): SelectStmt => {
   const scoped = withBindings(ctx, statement.with);
   const result = compileFreeObjectExpr(statement.expr, scoped);
   // `SELECT _ := EXPR ORDER BY _` — the result alias (`_`) is only bound while
@@ -9801,8 +10945,13 @@ const substituteCurrentItemInFreeExpr = (
           args: expr.call.args.map((arg) => {
             if (arg.kind === "expr") return { ...arg, expr: rec(arg.expr) };
             if (arg.kind === "function_call") {
-              const innerCall = substituteCurrentItemInFreeExpr({ kind: "function_call", call: arg.call }, newRoot);
-              return innerCall.kind === "function_call" ? { kind: "function_call", call: innerCall.call } : arg;
+              const innerCall = substituteCurrentItemInFreeExpr(
+                { kind: "function_call", call: arg.call },
+                newRoot,
+              );
+              return innerCall.kind === "function_call"
+                ? { kind: "function_call", call: innerCall.call }
+                : arg;
             }
             return arg;
           }),
@@ -9821,7 +10970,12 @@ const substituteCurrentItemInFreeExpr = (
     case "unary":
       return { ...expr, expr: rec(expr.expr) };
     case "if_else":
-      return { ...expr, condition: rec(expr.condition), thenExpr: rec(expr.thenExpr), elseExpr: rec(expr.elseExpr) };
+      return {
+        ...expr,
+        condition: rec(expr.condition),
+        thenExpr: rec(expr.thenExpr),
+        elseExpr: rec(expr.elseExpr),
+      };
     case "concat":
       return { ...expr, parts: expr.parts.map(rec) };
     case "tuple":
@@ -9844,7 +10998,12 @@ const substituteCurrentItemInFreeExpr = (
 // Returns undefined for value shapes we can't inline (set literals, sub-selects
 // inside the comparison RHS — the existing predicate path handles those).
 const filterValueToFreeObjectExpr = (value: FilterValue): FreeObjectExpr | undefined => {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null
+  ) {
     return { kind: "literal", value };
   }
   if (Array.isArray(value)) {
@@ -9956,7 +11115,10 @@ export const rewriteAliasFilterEagerly = (
       if (ch === "(") depth += 1;
       else if (ch === ")") {
         depth -= 1;
-        if (depth < 0) { balanced = false; break; }
+        if (depth < 0) {
+          balanced = false;
+          break;
+        }
       }
     }
     if (!balanced || depth !== 0) break;
@@ -9966,7 +11128,10 @@ export const rewriteAliasFilterEagerly = (
   for (const candidate of [body, `SELECT ${body}`]) {
     const parsed = tryResult(() => parseEdgeQL(candidate));
     if (!parsed.ok) continue; // query failure only — try next candidate
-    if (parsed.value.kind === "select") { aliasAst = parsed.value; break; }
+    if (parsed.value.kind === "select") {
+      aliasAst = parsed.value;
+      break;
+    }
   }
   if (!aliasAst || aliasAst.kind !== "select") return statement;
   const aliasBodyShape = aliasAst.shape;
@@ -9998,7 +11163,10 @@ const expandAliasInSelectStatement = (
       if (ch === "(") depth += 1;
       else if (ch === ")") {
         depth -= 1;
-        if (depth < 0) { balanced = false; break; }
+        if (depth < 0) {
+          balanced = false;
+          break;
+        }
       }
     }
     if (!balanced || depth !== 0) break;
@@ -10047,7 +11215,12 @@ const expandAliasInSelectStatement = (
     return outerInnerShape.map((outerInner) => {
       if (!("name" in outerInner) || outerInner.kind !== "field") return outerInner;
       const aliasInner = innerByName.get(outerInner.name);
-      if (aliasInner && (aliasInner.kind === "computed" || aliasInner.kind === "link" || aliasInner.kind === "backlink")) {
+      if (
+        aliasInner &&
+        (aliasInner.kind === "computed" ||
+          aliasInner.kind === "link" ||
+          aliasInner.kind === "backlink")
+      ) {
         return aliasInner;
       }
       return outerInner;
@@ -10084,10 +11257,9 @@ const expandAliasInSelectStatement = (
   // "default"}]`), `SELECT Alias` means "select the alias body" — adopt the
   // alias's body shape verbatim so alias-defined computeds (e.g.
   // `SpecialCardAlias.el_cost`) are projected onto each row.
-  const outerShapeIsImplicit = statement.shape.length > 0
-    && statement.shape.every((el) =>
-      "name" in el && (el as { origin?: string }).origin === "default",
-    );
+  const outerShapeIsImplicit =
+    statement.shape.length > 0 &&
+    statement.shape.every((el) => "name" in el && (el as { origin?: string }).origin === "default");
 
   const mergedShape: EdgeQLShapeElement[] = [];
   if (outerShapeIsImplicit) {
@@ -10102,9 +11274,11 @@ const expandAliasInSelectStatement = (
       // A plain `field` reference in the outer shape that names a computed or
       // link defined on the alias body should use the alias's definition,
       // since the outer query is asking to project that named value.
-      if (outerEl.kind === "field"
-        && aliasEl
-        && (aliasEl.kind === "computed" || aliasEl.kind === "link" || aliasEl.kind === "backlink")) {
+      if (
+        outerEl.kind === "field" &&
+        aliasEl &&
+        (aliasEl.kind === "computed" || aliasEl.kind === "link" || aliasEl.kind === "backlink")
+      ) {
         mergedShape.push(aliasEl);
         continue;
       }
@@ -10113,7 +11287,10 @@ const expandAliasInSelectStatement = (
       // nested projections into the alias's inner shape so the outer's
       // explicit projection (`winner: { name }`) wins over the alias's
       // default inner shape (`{ name_upper := ... }`).
-      if ((outerEl.kind === "link" || outerEl.kind === "backlink") && aliasEl?.kind === "computed") {
+      if (
+        (outerEl.kind === "link" || outerEl.kind === "backlink") &&
+        aliasEl?.kind === "computed"
+      ) {
         const outerInner = (outerEl as { shape?: EdgeQLShapeElement[] }).shape ?? [];
         const aliasInner = computedInnerShape(aliasEl.expr);
         if (aliasInner) {
@@ -10131,9 +11308,10 @@ const expandAliasInSelectStatement = (
     }
   }
 
-  const mergedFilterRaw = statement.filter && expandedAlias.filter
-    ? { kind: "and" as const, left: expandedAlias.filter, right: statement.filter }
-    : statement.filter ?? expandedAlias.filter;
+  const mergedFilterRaw =
+    statement.filter && expandedAlias.filter
+      ? { kind: "and" as const, left: expandedAlias.filter, right: statement.filter }
+      : (statement.filter ?? expandedAlias.filter);
   const mergedFilter = mergedFilterRaw
     ? rewriteFilterThroughShapeComputeds(mergedFilterRaw, mergedShape)
     : mergedFilterRaw;
@@ -10152,7 +11330,10 @@ const expandAliasInSelectStatement = (
   };
 };
 
-const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileContext): SelectStmt => {
+const compileSelectStatement = (
+  rawStatement: SelectStatement,
+  ctx: IRCompileContext,
+): SelectStmt => {
   const statement = expandAliasInSelectStatement(rawStatement, ctx, new globalThis.Set<string>());
   const scoped = withBindings(ctx, statement.with);
   // `select Foo { ... }` may name either a type or a WITH-bound expression
@@ -10189,7 +11370,10 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
   {
     let running: globalThis.Set<string> | undefined;
     for (const filterExpr of statement.typeFilterExprs ?? []) {
-      const narrowed = narrowTypeIntersectionStep(scoped, subject.typeref, running, { typeName: "", typeExpr: filterExpr });
+      const narrowed = narrowTypeIntersectionStep(scoped, subject.typeref, running, {
+        typeName: "",
+        typeExpr: filterExpr,
+      });
       if (narrowed) {
         running = narrowed.concrete;
         subject = withNarrowedSource(subject, narrowed.typeref);
@@ -10273,16 +11457,23 @@ const compileSelectStatement = (rawStatement: SelectStatement, ctx: IRCompileCon
     // surfaced every row at the SQL layer.
     limit: statement.limitExpr
       ? compileFreeObjectExpr(statement.limitExpr, scoped)
-      : statement.limit === undefined ? undefined : literalToSet(statement.limit),
+      : statement.limit === undefined
+        ? undefined
+        : literalToSet(statement.limit),
     offset: statement.offsetExpr
       ? compileFreeObjectExpr(statement.offsetExpr, scoped)
-      : statement.offset === undefined ? undefined : literalToSet(statement.offset),
+      : statement.offset === undefined
+        ? undefined
+        : literalToSet(statement.offset),
     implicitWrapper: false,
     span: statement.pos,
   };
 };
 
-const compileSelectFreeStatement = (statement: SelectFreeStatement, ctx: IRCompileContext): SelectStmt => {
+const compileSelectFreeStatement = (
+  statement: SelectFreeStatement,
+  ctx: IRCompileContext,
+): SelectStmt => {
   const scoped = withBindings(ctx, statement.with);
   // `select { single x := <expr> }` requires `<expr>` to be provably single-or-
   // empty. An exclusive constraint on the filtered property clamps to one, but
@@ -10301,10 +11492,18 @@ const compileSelectFreeStatement = (statement: SelectFreeStatement, ctx: IRCompi
       );
     }
   }
-  const tupleValues = statement.entries.map((entry) => ({ name: entry.name, val: compileFreeObjectExpr(entry.expr, scoped) }));
+  const tupleValues = statement.entries.map((entry) => ({
+    name: entry.name,
+    val: compileFreeObjectExpr(entry.expr, scoped),
+  }));
   const tupleSet: Set = {
     kind: "set",
-    expr: { kind: "tuple", named: true, isFreeObject: true, elements: tupleValues.map((entry) => ({ name: entry.name, val: entry.val })) },
+    expr: {
+      kind: "tuple",
+      named: true,
+      isFreeObject: true,
+      elements: tupleValues.map((entry) => ({ name: entry.name, val: entry.val })),
+    },
     pathId: defaultPathId("free_object"),
     typeref: unknownTypeRef("std::tuple"),
     shape: [],
@@ -10401,14 +11600,24 @@ const compileDeleteStatement = (statement: DeleteStatement, ctx: IRCompileContex
   bindValue(scoped, "__subject__", expr);
   bindValue(scoped, "__current__", expr);
   const orderBy: SortExpr[] | undefined = statement.orderBy
-    ? [{
-        kind: "sort_expr",
-        path: statement.orderBy.expr
-          ? compileFreeObjectExpr(statement.orderBy.expr, scoped)
-          : compileFreeObjectExpr({ kind: "field_access", expr: { kind: "binding_ref", name: "__current__" }, field: statement.orderBy.field, optional: false }, scoped),
-        direction: statement.orderBy.direction,
-        nonesOrder: "last",
-      }]
+    ? [
+        {
+          kind: "sort_expr",
+          path: statement.orderBy.expr
+            ? compileFreeObjectExpr(statement.orderBy.expr, scoped)
+            : compileFreeObjectExpr(
+                {
+                  kind: "field_access",
+                  expr: { kind: "binding_ref", name: "__current__" },
+                  field: statement.orderBy.field,
+                  optional: false,
+                },
+                scoped,
+              ),
+          direction: statement.orderBy.direction,
+          nonesOrder: "last",
+        },
+      ]
     : undefined;
   return {
     kind: "delete_stmt",
@@ -10428,12 +11637,32 @@ const compileForStatement = (statement: ForStatement, ctx: IRCompileContext): Se
   const iteratorSet = compileFreeObjectExpr(statement.iteratorExpr, scoped);
   const loopCtx = childScope(scoped);
   bindValue(loopCtx, statement.variable, iteratorSet);
-  const bodyExpr: FreeObjectExpr = statement.body.kind === "select_expr"
-    ? statement.body.expr
-    : statement.body.kind === "select"
-      ? { kind: "select", typeName: statement.body.typeName, shape: statement.body.shape, clauses: { filter: statement.body.filter, orderBy: statement.body.orderBy, limit: statement.body.limit, offset: statement.body.offset } }
-      : { kind: "literal", value: null };
-  const set = compileFreeObjectExpr({ kind: "for_expr", variable: statement.variable, iterator: statement.iteratorExpr, body: bodyExpr, optional: statement.optional }, loopCtx);
+  const bodyExpr: FreeObjectExpr =
+    statement.body.kind === "select_expr"
+      ? statement.body.expr
+      : statement.body.kind === "select"
+        ? {
+            kind: "select",
+            typeName: statement.body.typeName,
+            shape: statement.body.shape,
+            clauses: {
+              filter: statement.body.filter,
+              orderBy: statement.body.orderBy,
+              limit: statement.body.limit,
+              offset: statement.body.offset,
+            },
+          }
+        : { kind: "literal", value: null };
+  const set = compileFreeObjectExpr(
+    {
+      kind: "for_expr",
+      variable: statement.variable,
+      iterator: statement.iteratorExpr,
+      body: bodyExpr,
+      optional: statement.optional,
+    },
+    loopCtx,
+  );
   return {
     kind: "select_stmt",
     expr: set,
@@ -10454,7 +11683,9 @@ const compileForStatement = (statement: ForStatement, ctx: IRCompileContext): Se
 // references, free-object subjects, lossy projections) leave `byAtoms`
 // undefined so the engine falls back to the runtime grouper.
 type GroupStatementAst = Extract<EdgeQLStatement, { kind: "group" }>;
-type GroupAstParts = Pick<GroupStatementAst, "source" | "using" | "by"> & { pos?: GroupStatementAst["pos"] };
+type GroupAstParts = Pick<GroupStatementAst, "source" | "using" | "by"> & {
+  pos?: GroupStatementAst["pos"];
+};
 
 // A USING expression that references a WITH binding or the subject itself
 // (`using z := N <= 1` where N is volatile-once, `using l := C.len` where C
@@ -10472,7 +11703,11 @@ const containsBindingRef = (node: unknown, seen = new globalThis.Set<unknown>())
 // Whether `node` references a binding_ref with the given name — used to tell a
 // USING self-reference to the subject (`group X using z := X`) apart from a
 // reference to an unrelated WITH binding (`using z := N <= 1`).
-const containsBindingRefNamed = (node: unknown, name: string, seen = new globalThis.Set<unknown>()): boolean => {
+const containsBindingRefNamed = (
+  node: unknown,
+  name: string,
+  seen = new globalThis.Set<unknown>(),
+): boolean => {
   if (!node || typeof node !== "object" || seen.has(node)) return false;
   seen.add(node);
   const obj = node as { kind?: unknown; name?: unknown };
@@ -10496,8 +11731,11 @@ const augmentCompiledGroupSubject = (
   }
   if (subject.expr.kind !== "type_root") return undefined;
   const have = new globalThis.Set(
-    (subject.shape ?? []).map((el) => el.name
-      ?? (el.expr.expr.kind === "pointer" ? (el.expr.expr as Pointer).ptrref.shortName : undefined)),
+    (subject.shape ?? []).map(
+      (el) =>
+        el.name ??
+        (el.expr.expr.kind === "pointer" ? (el.expr.expr as Pointer).ptrref.shortName : undefined),
+    ),
   );
   const additions: ShapeElement[] = [];
   for (const field of fields) {
@@ -10515,7 +11753,9 @@ const augmentCompiledGroupSubject = (
       cardinality: ptrref.outCardinality ?? "at_most_one",
     } as ShapeElement);
   }
-  return additions.length > 0 ? { ...subject, shape: [...(subject.shape ?? []), ...additions] } : subject;
+  return additions.length > 0
+    ? { ...subject, shape: [...(subject.shape ?? []), ...additions] }
+    : subject;
 };
 
 // Deep-rewrite paths rooted at the group SUBJECT's binding name into
@@ -10523,20 +11763,33 @@ const augmentCompiledGroupSubject = (
 // `GROUP B`): per-row reads, not whole-set references. Bare `B` references
 // (no trailing steps) are left alone — those ARE whole-set.
 const rewriteSubjectBindingPathsToCurrentItem = (node: unknown, subjectName: string): unknown => {
-  if (Array.isArray(node)) return node.map((item) => rewriteSubjectBindingPathsToCurrentItem(item, subjectName));
+  if (Array.isArray(node))
+    return node.map((item) => rewriteSubjectBindingPathsToCurrentItem(item, subjectName));
   if (!node || typeof node !== "object") return node;
   const obj = node as Record<string, unknown> & { kind?: string };
   if (obj.kind === "path" && Array.isArray(obj.steps)) {
     const steps = obj.steps as Array<{ kind?: string; name?: string }>;
     if (steps.length > 1 && steps[0]?.kind === "object_ref" && steps[0].name === subjectName) {
-      return { ...obj, head: undefined, steps: steps.slice(1).map((step) => rewriteSubjectBindingPathsToCurrentItem(step, subjectName)) };
+      return {
+        ...obj,
+        head: undefined,
+        steps: steps
+          .slice(1)
+          .map((step) => rewriteSubjectBindingPathsToCurrentItem(step, subjectName)),
+      };
     }
   }
   if (obj.kind === "field_access") {
-    const src = obj.expr as { kind?: string; name?: string; steps?: Array<{ kind?: string; name?: string }> } | undefined;
-    const isBareSubjectRef = (src?.kind === "binding_ref" && src.name === subjectName)
-      || (src?.kind === "path" && Array.isArray(src.steps) && src.steps.length === 1
-          && src.steps[0]?.kind === "object_ref" && src.steps[0].name === subjectName);
+    const src = obj.expr as
+      | { kind?: string; name?: string; steps?: Array<{ kind?: string; name?: string }> }
+      | undefined;
+    const isBareSubjectRef =
+      (src?.kind === "binding_ref" && src.name === subjectName) ||
+      (src?.kind === "path" &&
+        Array.isArray(src.steps) &&
+        src.steps.length === 1 &&
+        src.steps[0]?.kind === "object_ref" &&
+        src.steps[0].name === subjectName);
     if (isBareSubjectRef) {
       return { ...obj, expr: { kind: "current_item" } };
     }
@@ -10574,10 +11827,15 @@ const tryBuildScalarGroupSubject = (
   const kind = cursor.expr.kind;
   // group_rows subjects (an outer GROUP over an inner one) iterate one row
   // per inner group; their USING keys read fields off the row JSON.
-  const valueLike = kind.endsWith("_constant")
-    || kind === "function_call" || kind === "operator_call"
-    || kind === "index_expr" || kind === "type_cast" || kind === "array"
-    || kind === "group_rows" || kind === "group_row_field";
+  const valueLike =
+    kind.endsWith("_constant") ||
+    kind === "function_call" ||
+    kind === "operator_call" ||
+    kind === "index_expr" ||
+    kind === "type_cast" ||
+    kind === "array" ||
+    kind === "group_rows" ||
+    kind === "group_row_field";
   if (!valueLike) return undefined;
 
   const iterScopeTag = `for:__group_element__:${ctx.nextScopeId++}`;
@@ -10592,7 +11850,10 @@ const tryBuildScalarGroupSubject = (
   bindValue(loopCtx, "__current__", iterator);
   const elements: TupleElement[] = [{ name: GROUP_ELEMENT_VALUE_FIELD, val: iterator }];
   for (const usingBinding of statement.using ?? []) {
-    if (containsBindingRef(usingBinding.expr) && !resolveBinding(loopCtx, usingNameOfBindingRef(usingBinding.expr) ?? "")) {
+    if (
+      containsBindingRef(usingBinding.expr) &&
+      !resolveBinding(loopCtx, usingNameOfBindingRef(usingBinding.expr) ?? "")
+    ) {
       return undefined;
     }
     const compiled = tryResult(() => compileFreeObjectExpr(usingBinding.expr, loopCtx));
@@ -10606,10 +11867,17 @@ const tryBuildScalarGroupSubject = (
   // read the current element's field.
   for (const atom of fieldAtoms) {
     if (elements.some((el) => el.name === atom)) continue;
-    const compiled = tryResult(() => compileFreeObjectExpr(
-      { kind: "field_access", expr: { kind: "current_item" }, field: atom, optional: false } as FreeObjectExpr,
-      loopCtx,
-    ));
+    const compiled = tryResult(() =>
+      compileFreeObjectExpr(
+        {
+          kind: "field_access",
+          expr: { kind: "current_item" },
+          field: atom,
+          optional: false,
+        } as FreeObjectExpr,
+        loopCtx,
+      ),
+    );
     if (!compiled.ok) return undefined;
     elements.push({ name: atom, val: compiled.value });
   }
@@ -10652,7 +11920,10 @@ const usingNameOfBindingRef = (expr: unknown): string | undefined =>
 const buildGroupStmtParts = (
   statement: GroupAstParts,
   scoped: IRCompileContext,
-): Pick<GroupStmt, "byAtoms" | "groupingSets" | "hiddenByFields" | "elementValueField" | "selfKeyAliases"> & { subject: Set } => {
+): Pick<
+  GroupStmt,
+  "byAtoms" | "groupingSets" | "hiddenByFields" | "elementValueField" | "selfKeyAliases"
+> & { subject: Set } => {
   let lowerable = true;
 
   // --- Expand BY into the atom-name union + grouping sets. ---
@@ -10692,13 +11963,23 @@ const buildGroupStmtParts = (
   };
   let groupingSets: string[][] = [[]];
   for (const element of statement.by) {
-    if (element.kind === "field_ref" || element.kind === "name_ref" || element.kind === "link_property_ref") {
+    if (
+      element.kind === "field_ref" ||
+      element.kind === "name_ref" ||
+      element.kind === "link_property_ref"
+    ) {
       const name = addAtom(element);
       groupingSets = groupingSets.map((s) => [...s, name]);
     } else if (element.kind === "sets") {
-      groupingSets = crossProduct(groupingSets, element.sets.map((atoms) => atoms.map(addAtom)));
+      groupingSets = crossProduct(
+        groupingSets,
+        element.sets.map((atoms) => atoms.map(addAtom)),
+      );
     } else {
-      groupingSets = crossProduct(groupingSets, subsetsOfList(element.atoms.map(addAtom), element.kind));
+      groupingSets = crossProduct(
+        groupingSets,
+        subsetsOfList(element.atoms.map(addAtom), element.kind),
+      );
     }
   }
   if (groupingSets.length === 0) {
@@ -10709,7 +11990,9 @@ const buildGroupStmtParts = (
   // A USING expression becomes a computed shape entry compiled along the same
   // path as a hand-written `alias := <expr>` inside the shape, so the alias
   // is a regular (hidden) field on each element row.
-  const usingExprToComputed = (expr: NonNullable<typeof statement.using>[number]["expr"]): Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"] => {
+  const usingExprToComputed = (
+    expr: NonNullable<typeof statement.using>[number]["expr"],
+  ): Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"] => {
     if (expr.kind === "function_call") {
       return { kind: "function_call", call: expr.call };
     }
@@ -10732,14 +12015,22 @@ const buildGroupStmtParts = (
   while (sourceAst.kind === "select_expr_subquery") {
     const wrapper = sourceAst as unknown as {
       expr?: GroupAstParts["source"];
-      filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown;
+      filter?: unknown;
+      orderBy?: unknown;
+      limit?: unknown;
+      offset?: unknown;
       clauses?: { _withBindings?: WithBinding[] };
       _withBindings?: WithBinding[];
     };
     const inner = wrapper.expr;
     if (!inner || (inner.kind !== "select" && inner.kind !== "shape_projection")) break;
-    if (wrapper.filter !== undefined || wrapper.orderBy !== undefined
-        || wrapper.limit !== undefined || wrapper.offset !== undefined) break;
+    if (
+      wrapper.filter !== undefined ||
+      wrapper.orderBy !== undefined ||
+      wrapper.limit !== undefined ||
+      wrapper.offset !== undefined
+    )
+      break;
     const wb = wrapper._withBindings ?? wrapper.clauses?._withBindings;
     if (wb && wb.length > 0) {
       scoped = withBindings(scoped, wb);
@@ -10751,22 +12042,29 @@ const buildGroupStmtParts = (
   // displayed elements) read the whole `value`, so there is no object shape to
   // fold and no per-element tuple to build (which would cross-join the value
   // against itself). Handled here, before the shaped / scalar-element paths.
-  const subjectName = sourceAst.kind === "select"
-    ? sourceAst.typeName
-    : sourceAst.kind === "shape_projection" && sourceAst.expr.kind === "binding_ref"
-      ? sourceAst.expr.name
-      : sourceAst.kind === "binding_ref"
-        ? (sourceAst as { name?: string }).name
-        : undefined;
+  const subjectName =
+    sourceAst.kind === "select"
+      ? sourceAst.typeName
+      : sourceAst.kind === "shape_projection" && sourceAst.expr.kind === "binding_ref"
+        ? sourceAst.expr.name
+        : sourceAst.kind === "binding_ref"
+          ? (sourceAst as { name?: string }).name
+          : undefined;
   const selfAliasNames = subjectName
     ? (statement.using ?? [])
-        .filter((u) => u.expr.kind === "binding_ref" && (u.expr as { name?: string }).name === subjectName)
+        .filter(
+          (u) =>
+            u.expr.kind === "binding_ref" && (u.expr as { name?: string }).name === subjectName,
+        )
         .map((u) => u.alias)
     : [];
-  if (selfAliasNames.length > 0
-      && (statement.using ?? []).length === selfAliasNames.length
-      && atomOrder.length > 0 && atomOrder.every((a) => selfAliasNames.includes(a))
-      && fieldAtoms.length === 0) {
+  if (
+    selfAliasNames.length > 0 &&
+    (statement.using ?? []).length === selfAliasNames.length &&
+    atomOrder.length > 0 &&
+    atomOrder.every((a) => selfAliasNames.includes(a)) &&
+    fieldAtoms.length === 0
+  ) {
     const compiled = tryResult(() => compileFreeObjectExpr(sourceAst, scoped));
     if (compiled.ok) {
       return {
@@ -10780,15 +12078,25 @@ const buildGroupStmtParts = (
     }
   }
   const hiddenByFields: string[] = [];
-  if (sourceAst.kind === "shape_projection" || sourceAst.kind === "select" || sourceAst.kind === "binding_ref") {
+  if (
+    sourceAst.kind === "shape_projection" ||
+    sourceAst.kind === "select" ||
+    sourceAst.kind === "binding_ref"
+  ) {
     const originalShape = sourceAst.kind === "binding_ref" ? [] : (sourceAst.shape ?? []);
     const shape = [...originalShape];
     const present = new globalThis.Set<string>(
       shape
-        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
+        .filter(
+          (s): s is Extract<EdgeQLShapeElement, { name: string }> =>
+            "name" in s && typeof s.name === "string",
+        )
         .map((s) => s.name),
     );
-    const usingComputeds = new Map<string, Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"]>();
+    const usingComputeds = new Map<
+      string,
+      Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"]
+    >();
     const containsVolatileCall = (node: unknown): boolean =>
       JSON.stringify(node ?? null).includes('"random"');
     for (const usingBinding of statement.using ?? []) {
@@ -10798,7 +12106,10 @@ const buildGroupStmtParts = (
       // would diverge between the two fields, so it stays on the runtime
       // grouper.
       let computed: Extract<EdgeQLShapeElement, { kind: "computed" }>["expr"] | undefined;
-      const prior = usingBinding.expr.kind === "binding_ref" ? usingComputeds.get(usingBinding.expr.name) : undefined;
+      const prior =
+        usingBinding.expr.kind === "binding_ref"
+          ? usingComputeds.get(usingBinding.expr.name)
+          : undefined;
       if (prior !== undefined && !containsVolatileCall(prior)) {
         computed = prior;
       }
@@ -10810,13 +12121,14 @@ const buildGroupStmtParts = (
         let usingExpr = usingBinding.expr;
         // The subject's name itself (binding OR type name): paths through it
         // inside USING are per-row reads of the subject element.
-        const subjectBindingName = sourceAst.kind === "select"
-          ? sourceAst.typeName
-          : sourceAst.kind === "shape_projection" && sourceAst.expr.kind === "binding_ref"
-            ? sourceAst.expr.name
-            : sourceAst.kind === "binding_ref"
-              ? (sourceAst as { name?: string }).name
-            : undefined;
+        const subjectBindingName =
+          sourceAst.kind === "select"
+            ? sourceAst.typeName
+            : sourceAst.kind === "shape_projection" && sourceAst.expr.kind === "binding_ref"
+              ? sourceAst.expr.name
+              : sourceAst.kind === "binding_ref"
+                ? (sourceAst as { name?: string }).name
+                : undefined;
         if (subjectBindingName && containsBindingRef(usingExpr)) {
           const rewritten = rewriteSubjectBindingPathsToCurrentItem(usingExpr, subjectBindingName);
           if (rewritten && !containsBindingRef(rewritten)) {
@@ -10829,12 +12141,14 @@ const buildGroupStmtParts = (
         // (`using z := N <= 1` where N := random()) is inlined: it resolves
         // against the surrounding scope when the subject shape compiles below.
         if (subjectBindingName && containsBindingRefNamed(usingExpr, subjectBindingName)) {
+          // oxlint-disable-next-line eslint/no-useless-assignment -- consumed by lowerable checks after this loop
           lowerable = false;
           continue;
         }
         if (containsBindingRef(usingExpr) && !subjectBindingName) {
           // No identifiable subject binding to disambiguate a self-reference —
           // keep the conservative bail (e.g. `group <tuple set> using z := X`).
+          // oxlint-disable-next-line eslint/no-useless-assignment -- consumed by lowerable checks after this loop
           lowerable = false;
           continue;
         }
@@ -10861,9 +12175,10 @@ const buildGroupStmtParts = (
       present.add(name);
     }
     if (shape.length !== originalShape.length) {
-      sourceAst = sourceAst.kind === "binding_ref"
-        ? { kind: "shape_projection", expr: sourceAst, shape }
-        : { ...sourceAst, shape };
+      sourceAst =
+        sourceAst.kind === "binding_ref"
+          ? { kind: "shape_projection", expr: sourceAst, shape }
+          : { ...sourceAst, shape };
     }
   }
 
@@ -10872,8 +12187,11 @@ const buildGroupStmtParts = (
   // tryBuildScalarGroupSubject). Field-ref BY atoms can't resolve against a
   // value row, so those bail.
   let scalarElementSubject: Set | undefined;
-  if (sourceAst.kind !== "shape_projection" && sourceAst.kind !== "select"
-      && ((statement.using ?? []).length > 0 || fieldAtoms.length > 0)) {
+  if (
+    sourceAst.kind !== "shape_projection" &&
+    sourceAst.kind !== "select" &&
+    ((statement.using ?? []).length > 0 || fieldAtoms.length > 0)
+  ) {
     // A single-row named-tuple source (a free object) takes the
     // tuple-extension path below instead — its USING aliases become extra
     // tuple fields.
@@ -10886,14 +12204,15 @@ const buildGroupStmtParts = (
         probeCursor = (probeCursor.expr as SelectExpr).result;
       }
       probeIsTuple = probeCursor.expr.kind === "tuple" && (probeCursor.expr as Tuple).named;
-      probeIsValueLike = probeCursor.expr.kind === "group_row_field"
-        || probeCursor.expr.kind === "group_rows"
-        || probeCursor.expr.kind === "function_call"
-        || probeCursor.expr.kind === "operator_call"
-        || probeCursor.expr.kind === "index_expr"
-        || probeCursor.expr.kind === "type_cast"
-        || probeCursor.expr.kind === "array"
-        || probeCursor.expr.kind.endsWith("_constant");
+      probeIsValueLike =
+        probeCursor.expr.kind === "group_row_field" ||
+        probeCursor.expr.kind === "group_rows" ||
+        probeCursor.expr.kind === "function_call" ||
+        probeCursor.expr.kind === "operator_call" ||
+        probeCursor.expr.kind === "index_expr" ||
+        probeCursor.expr.kind === "type_cast" ||
+        probeCursor.expr.kind === "array" ||
+        probeCursor.expr.kind.endsWith("_constant");
     }
     if (!probeIsTuple && ((statement.using ?? []).length > 0 || probeIsValueLike)) {
       scalarElementSubject = tryBuildScalarGroupSubject(statement, sourceAst, scoped, fieldAtoms);
@@ -10916,11 +12235,12 @@ const buildGroupStmtParts = (
     while (probeAst && probeAst.kind === "select_expr_subquery") {
       probeAst = (probeAst as { expr?: typeof sourceAst }).expr;
     }
-    const bindingName = probeAst && probeAst.kind === "select"
-      ? probeAst.typeName
-      : probeAst && probeAst.kind === "shape_projection" && probeAst.expr.kind === "binding_ref"
-        ? probeAst.expr.name
-        : undefined;
+    const bindingName =
+      probeAst && probeAst.kind === "select"
+        ? probeAst.typeName
+        : probeAst && probeAst.kind === "shape_projection" && probeAst.expr.kind === "binding_ref"
+          ? probeAst.expr.name
+          : undefined;
     const bound = bindingName ? resolveBinding(scoped, bindingName) : undefined;
     if (bound) {
       let cursor: Set = bound;
@@ -10939,7 +12259,9 @@ const buildGroupStmtParts = (
   // non-lowerable GroupStmt (byAtoms cleared) so the SQL stage bails and the
   // engine falls back to the runtime grouper, which handles it.
   let subject: Set;
-  const subjectAttempt = tryResult(() => tupleBindingSubject ?? scalarElementSubject ?? compileFreeObjectExpr(sourceAst, scoped));
+  const subjectAttempt = tryResult(
+    () => tupleBindingSubject ?? scalarElementSubject ?? compileFreeObjectExpr(sourceAst, scoped),
+  );
   if (subjectAttempt.ok) {
     subject = subjectAttempt.value;
   } else {
@@ -10956,7 +12278,12 @@ const buildGroupStmtParts = (
   // breaks the one-row-per-element contract, so it stays on the runtime
   // grouper.
   const SET_RETURNING_FUNCTIONS = new globalThis.Set([
-    "array_unpack", "enumerate", "range_unpack", "json_array_unpack", "json_object_unpack", "sequence",
+    "array_unpack",
+    "enumerate",
+    "range_unpack",
+    "json_array_unpack",
+    "json_object_unpack",
+    "sequence",
   ]);
   const isSingleTupleElement = (val: Set): boolean => {
     const kind = val.expr.kind;
@@ -11005,14 +12332,20 @@ const buildGroupStmtParts = (
       return body.expr.kind !== "tuple" && (body.shape?.length ?? 0) === 0;
     };
     const isTupleElementValue = (val: Set): boolean =>
-      isSingleTupleElement(val)
-      || (val.expr.kind === "operator_call" && (val.expr as OperatorCall).operator === "union")
-      || (val.expr.kind === "for_expr" && forBodyIsScalarish(val.expr as ForExpr))
-      || (val.expr.kind === "visible_binding_expr"
-        && Boolean(scoped.objectBindings?.some((binding) => binding.id === (val.expr as { bindingId: string }).bindingId)));
-    if (cursor.expr.kind === "tuple"
-      && (cursor.expr as Tuple).named
-      && (cursor.expr as Tuple).elements.every((el) => el.name && isTupleElementValue(el.val))) {
+      isSingleTupleElement(val) ||
+      (val.expr.kind === "operator_call" && (val.expr as OperatorCall).operator === "union") ||
+      (val.expr.kind === "for_expr" && forBodyIsScalarish(val.expr as ForExpr)) ||
+      (val.expr.kind === "visible_binding_expr" &&
+        Boolean(
+          scoped.objectBindings?.some(
+            (binding) => binding.id === (val.expr as { bindingId: string }).bindingId,
+          ),
+        ));
+    if (
+      cursor.expr.kind === "tuple" &&
+      (cursor.expr as Tuple).named &&
+      (cursor.expr as Tuple).elements.every((el) => el.name && isTupleElementValue(el.val))
+    ) {
       subjectTuple = cursor.expr as Tuple;
     }
     // USING aliases over a tuple subject become extra (hidden) tuple fields,
@@ -11028,7 +12361,10 @@ const buildGroupStmtParts = (
       for (const usingBinding of statement.using ?? []) {
         if (fieldNames.has(usingBinding.alias)) continue;
         const compiledUsing = tryResult(() => compileFreeObjectExpr(usingBinding.expr, usingCtx));
-        if (!compiledUsing.ok) { extendOk = false; break; }
+        if (!compiledUsing.ok) {
+          extendOk = false;
+          break;
+        }
         extendedElements.push({ name: usingBinding.alias, val: compiledUsing.value });
         bindValue(usingCtx, usingBinding.alias, compiledUsing.value);
         fieldNames.add(usingBinding.alias);
@@ -11041,9 +12377,13 @@ const buildGroupStmtParts = (
         lowerable = false;
       }
     }
-    if (cursor.expr.kind !== "for_expr" && cursor.expr.kind !== "type_root"
-      && cursor.expr.kind !== "visible_binding_expr"
-      && cursor.expr.kind !== "group_rows" && !subjectTuple) {
+    if (
+      cursor.expr.kind !== "for_expr" &&
+      cursor.expr.kind !== "type_root" &&
+      cursor.expr.kind !== "visible_binding_expr" &&
+      cursor.expr.kind !== "group_rows" &&
+      !subjectTuple
+    ) {
       lowerable = false;
     }
     // The shape compiler silently skips elements it can't resolve (e.g. a
@@ -11057,16 +12397,23 @@ const buildGroupStmtParts = (
       while (shapedAst && shapedAst.kind === "select_expr_subquery") {
         shapedAst = (shapedAst as { expr?: typeof sourceAst }).expr;
       }
-      const wanted = shapedAst && (shapedAst.kind === "shape_projection" || shapedAst.kind === "select")
-        ? (shapedAst.shape ?? [])
-            .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
-            .map((s) => s.name)
-        : [];
+      const wanted =
+        shapedAst && (shapedAst.kind === "shape_projection" || shapedAst.kind === "select")
+          ? (shapedAst.shape ?? [])
+              .filter(
+                (s): s is Extract<EdgeQLShapeElement, { name: string }> =>
+                  "name" in s && typeof s.name === "string",
+              )
+              .map((s) => s.name)
+          : [];
       const have = new globalThis.Set<string>();
       const collect = (set: Set): void => {
         for (const el of set.shape ?? []) {
-          const name = el.name
-            ?? (el.expr.expr.kind === "pointer" ? (el.expr.expr as Pointer).ptrref.shortName : undefined);
+          const name =
+            el.name ??
+            (el.expr.expr.kind === "pointer"
+              ? (el.expr.expr as Pointer).ptrref.shortName
+              : undefined);
           if (name) have.add(name);
         }
         if (set.expr.kind === "tuple") {
@@ -11168,7 +12515,8 @@ const parseGroupRowProjection = (
   };
   const out: GroupRowProjection[] = [];
   const dbg = (reason: string, el?: unknown): { unlowerable: true } => {
-    if (process.env.DBG_GROUP_PROJ) console.error("[group-proj] unlowerable:", reason, JSON.stringify(el ?? null)?.slice(0, 220));
+    if (process.env.DBG_GROUP_PROJ)
+      console.error("[group-proj] unlowerable:", reason, JSON.stringify(el ?? null)?.slice(0, 220));
     return { unlowerable: true };
   };
   for (const el of shape) {
@@ -11182,7 +12530,10 @@ const parseGroupRowProjection = (
         continue;
       }
       const fields = el.shape
-        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string" && s.kind === "field")
+        .filter(
+          (s): s is Extract<EdgeQLShapeElement, { name: string }> =>
+            "name" in s && typeof s.name === "string" && s.kind === "field",
+        )
         .map((s) => s.name);
       if (fields.length !== el.shape.length) return dbg("site3", el);
       if (name === "key") {
@@ -11215,15 +12566,22 @@ const parseGroupRowProjection = (
         const fname = (computed.call?.name ?? "").split("::").pop();
         const args = computed.call?.args ?? [];
         const arg0 = args[0] as { kind?: string; expr?: unknown } | undefined;
-        const steps = fname === "count" && args.length === 1 && arg0?.kind === "expr"
-          ? pathSteps(arg0.expr)
-          : null;
+        const steps =
+          fname === "count" && args.length === 1 && arg0?.kind === "expr"
+            ? pathSteps(arg0.expr)
+            : null;
         if (steps && steps.length === 1 && steps[0] === "elements") {
           out.push({ name, kind: "count_elements" });
           continue;
         }
         // `minCost := min(.elements.cost)` — aggregate over an element field.
-        const AGG_FNS: Record<string, "min" | "max" | "sum" | "avg"> = { min: "min", max: "max", sum: "sum", avg: "avg", mean: "avg" };
+        const AGG_FNS: Record<string, "min" | "max" | "sum" | "avg"> = {
+          min: "min",
+          max: "max",
+          sum: "sum",
+          avg: "avg",
+          mean: "avg",
+        };
         if (fname && AGG_FNS[fname] && args.length === 1 && arg0?.kind === "expr") {
           const aggSteps = pathSteps(arg0.expr);
           if (aggSteps && aggSteps.length >= 2 && aggSteps[0] === "elements") {
@@ -11247,13 +12605,17 @@ const parseGroupRowProjection = (
         return dbg("site6", el);
       }
       if (computed.kind === "select_expr") {
-        const computedClauses = (computed.clauses ?? {}) as Record<string, unknown> & { limit?: unknown };
-        const computedClauseKeys = Object.keys(computed.clauses ?? {})
-          .filter((key) => computedClauses[key] !== undefined);
+        const computedClauses = (computed.clauses ?? {}) as Record<string, unknown> & {
+          limit?: unknown;
+        };
+        const computedClauseKeys = Object.keys(computed.clauses ?? {}).filter(
+          (key) => computedClauses[key] !== undefined,
+        );
         // The parser stores `limit 1` as both `limit` and `limitExpr`.
-        const onlyLimitOne = computedClauseKeys.length > 0
-          && computedClauseKeys.every((key) => key === "limit" || key === "limitExpr")
-          && computedClauses.limit === 1;
+        const onlyLimitOne =
+          computedClauseKeys.length > 0 &&
+          computedClauseKeys.every((key) => key === "limit" || key === "limitExpr") &&
+          computedClauses.limit === 1;
         if (computedClauseKeys.length > 0 && !onlyLimitOne) return dbg("site7", el);
         const steps = pathSteps(computed.expr);
         if (steps && !onlyLimitOne) {
@@ -11274,8 +12636,13 @@ const parseGroupRowProjection = (
           orderBy?: unknown;
           offset?: unknown;
         };
-        if (sub.kind === "select_expr_subquery" && sub.limit === 1
-          && !sub.filter && !sub.orderBy && !sub.offset) {
+        if (
+          sub.kind === "select_expr_subquery" &&
+          sub.limit === 1 &&
+          !sub.filter &&
+          !sub.orderBy &&
+          !sub.offset
+        ) {
           const subSteps = pathSteps(sub.expr);
           if (subSteps && subSteps.length >= 2 && subSteps[0] === "elements") {
             out.push({ name, kind: "element_first_path", steps: subSteps.slice(1) });
@@ -11289,10 +12656,17 @@ const parseGroupRowProjection = (
           if (onlyLimitOne && sub.shape) {
             const baseSteps = pathSteps(sub.expr);
             const fields = sub.shape
-              .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string" && s.kind === "field")
+              .filter(
+                (s): s is Extract<EdgeQLShapeElement, { name: string }> =>
+                  "name" in s && typeof s.name === "string" && s.kind === "field",
+              )
               .map((s) => s.name);
-            if (baseSteps && baseSteps.length === 1 && baseSteps[0] === "elements"
-              && fields.length === sub.shape.length) {
+            if (
+              baseSteps &&
+              baseSteps.length === 1 &&
+              baseSteps[0] === "elements" &&
+              fields.length === sub.shape.length
+            ) {
               out.push({ name, kind: "element_first_shape", fields });
               continue;
             }
@@ -11334,14 +12708,25 @@ const parseElementsFields = (
       continue;
     }
     if (sub.kind === "computed" && sub.expr.kind === "select_expr") {
-      const inner = sub.expr.expr as { kind?: string; op?: string; left?: unknown; right?: unknown };
+      const inner = sub.expr.expr as {
+        kind?: string;
+        op?: string;
+        left?: unknown;
+        right?: unknown;
+      };
       const ops = new globalThis.Set(["=", "!=", "<", "<=", ">", ">="]);
       const rhs = inner.right as { kind?: string; value?: unknown } | undefined;
-      const steps = inner.kind === "compare" && typeof inner.op === "string" && ops.has(inner.op)
-        ? pathSteps(inner.left)
-        : null;
-      if (steps && rhs?.kind === "literal"
-        && (typeof rhs.value === "string" || typeof rhs.value === "number" || typeof rhs.value === "boolean")) {
+      const steps =
+        inner.kind === "compare" && typeof inner.op === "string" && ops.has(inner.op)
+          ? pathSteps(inner.left)
+          : null;
+      if (
+        steps &&
+        rhs?.kind === "literal" &&
+        (typeof rhs.value === "string" ||
+          typeof rhs.value === "number" ||
+          typeof rhs.value === "boolean")
+      ) {
         fields.push({
           name: sub.name,
           kind: "compare",
@@ -11359,9 +12744,13 @@ const parseElementsFields = (
       while ((computedInner as { kind?: string })?.kind === "select_expr") {
         computedInner = (computedInner as { expr?: unknown }).expr;
       }
-      const call = (computedInner as { kind?: string; call?: { name?: string; args?: unknown[] } });
-      if (call?.kind === "function_call" && (call.call?.name === "count" || call.call?.name === "std::count")
-          && Array.isArray(call.call?.args) && call.call.args.length === 1) {
+      const call = computedInner as { kind?: string; call?: { name?: string; args?: unknown[] } };
+      if (
+        call?.kind === "function_call" &&
+        (call.call?.name === "count" || call.call?.name === "std::count") &&
+        Array.isArray(call.call?.args) &&
+        call.call.args.length === 1
+      ) {
         const arg = call.call.args[0] as { kind?: string; expr?: unknown };
         const steps = pathSteps(arg?.kind === "expr" ? arg.expr : arg);
         if (steps && steps.length > 0) {
@@ -11377,7 +12766,9 @@ const parseElementsFields = (
 
 // Like peelToGroupRows, but unwraps CLAUSED select layers too — `rows` stays
 // the FULL claused set so consumers apply ORDER BY/LIMIT before flattening.
-const peelToGroupRowsThroughClauses = (set: Set): { rows: Set; groupRows: GroupRowsExpr } | undefined => {
+const peelToGroupRowsThroughClauses = (
+  set: Set,
+): { rows: Set; groupRows: GroupRowsExpr } | undefined => {
   let cursor: Set = set;
   while (cursor.expr.kind === "select_expr") {
     cursor = (cursor.expr as SelectExpr).result;
@@ -11392,7 +12783,13 @@ const peelToGroupRows = (set: Set): { rows: Set; groupRows: GroupRowsExpr } | un
   let cursor: Set = set;
   while (cursor.expr.kind === "select_expr") {
     const wrapper = cursor.expr as SelectExpr;
-    if (wrapper.where || wrapper.limit || wrapper.offset || (wrapper.orderBy && wrapper.orderBy.length > 0)) break;
+    if (
+      wrapper.where ||
+      wrapper.limit ||
+      wrapper.offset ||
+      (wrapper.orderBy && wrapper.orderBy.length > 0)
+    )
+      break;
     cursor = wrapper.result;
   }
   if (cursor.expr.kind !== "group_rows") return undefined;
@@ -11428,13 +12825,24 @@ const buildGroupRowsBaseSet = (
 
 // Field names a computed projection reads off group elements — any
 // group_row_field with steps [elements, X, …] anywhere in its compiled IR.
-const collectComputedElementNeeds = (node: unknown, out: globalThis.Set<string>, seen = new globalThis.Set<unknown>()): void => {
+const collectComputedElementNeeds = (
+  node: unknown,
+  out: globalThis.Set<string>,
+  seen = new globalThis.Set<unknown>(),
+): void => {
   if (!node || typeof node !== "object" || seen.has(node)) return;
   seen.add(node);
-  if (Array.isArray(node)) { node.forEach((item) => collectComputedElementNeeds(item, out, seen)); return; }
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectComputedElementNeeds(item, out, seen));
+    return;
+  }
   const obj = node as { kind?: unknown; steps?: unknown };
-  if (obj.kind === "group_row_field" && Array.isArray(obj.steps)
-      && obj.steps[0] === "elements" && typeof obj.steps[1] === "string") {
+  if (
+    obj.kind === "group_row_field" &&
+    Array.isArray(obj.steps) &&
+    obj.steps[0] === "elements" &&
+    typeof obj.steps[1] === "string"
+  ) {
     out.add(obj.steps[1]);
   }
   for (const value of Object.values(node)) collectComputedElementNeeds(value, out, seen);
@@ -11453,7 +12861,11 @@ const parseProjectionWithComputedFallback = (
 ): { projection?: GroupRowProjection[]; unlowerable?: boolean; needs: globalThis.Set<string> } => {
   const needs = new globalThis.Set<string>();
   const parsed = parseGroupRowProjection(trailingShape, priorProjection);
-  if (!parsed.unlowerable || !trailingShape || !trailingShape.some((el) => el.kind === "computed")) {
+  if (
+    !parsed.unlowerable ||
+    !trailingShape ||
+    !trailingShape.some((el) => el.kind === "computed")
+  ) {
     return { ...parsed, needs };
   }
   const computedCtx = childScope(ctx);
@@ -11482,7 +12894,10 @@ const parseProjectionWithComputedFallback = (
           const findInnerRows = (node: unknown, seen = new globalThis.Set<unknown>()): void => {
             if (!node || typeof node !== "object" || seen.has(node)) return;
             seen.add(node);
-            if (Array.isArray(node)) { node.forEach((item) => findInnerRows(item, seen)); return; }
+            if (Array.isArray(node)) {
+              node.forEach((item) => findInnerRows(item, seen));
+              return;
+            }
             const obj = node as { kind?: unknown; rows?: Set };
             if (obj.kind === "group_row_field" && obj.rows && obj.rows !== baseRows) {
               innerRows.add(obj.rows);
@@ -11494,7 +12909,13 @@ const parseProjectionWithComputedFallback = (
             const iterator = [...innerRows][0];
             value = {
               kind: "set",
-              expr: { kind: "for_expr", iterator, body: value, bindingKind: "with", optional: false } as ForExpr,
+              expr: {
+                kind: "for_expr",
+                iterator,
+                body: value,
+                bindingKind: "with",
+                optional: false,
+              } as ForExpr,
               pathId: defaultPathId("group_inner_iteration"),
               typeref: value.typeref,
               shape: [],
@@ -11520,41 +12941,52 @@ const buildGroupRowsSet = (
   ctx: IRCompileContext,
   extraElementFields: string[] = [],
 ): Set => {
-  let parsed: { projection?: GroupRowProjection[]; unlowerable?: boolean } = parseGroupRowProjection(trailingShape);
+  let parsed: { projection?: GroupRowProjection[]; unlowerable?: boolean } =
+    parseGroupRowProjection(trailingShape);
   if (parsed.unlowerable && trailingShape && trailingShape.some((el) => el.kind === "computed")) {
     const baseRows = buildGroupRowsBaseSet(parts, ctx, extraElementFields);
-    const withComputed = parseProjectionWithComputedFallback(trailingShape, undefined, baseRows, ctx);
+    const withComputed = parseProjectionWithComputedFallback(
+      trailingShape,
+      undefined,
+      baseRows,
+      ctx,
+    );
     if (!withComputed.unlowerable) {
       parsed = withComputed;
       extraElementFields = [...extraElementFields, ...withComputed.needs];
     }
   }
-  const elementFields = extraElementFields.concat((parsed.projection ?? [])
-    .flatMap((p) => {
-      if (p.kind === "elements_shape") {
-        return p.fields.map(elementFieldSubjectName);
-      }
-      if (p.kind === "element_first_path") {
-        return [p.steps[0] ?? ""];
-      }
-      if (p.kind === "element_first_shape") {
-        return p.fields;
-      }
-      if (p.kind === "element_agg") {
-        return [p.steps[0] ?? ""];
-      }
-      return [];
-    })
-    .filter((name) => name.length > 0));
+  const elementFields = extraElementFields.concat(
+    (parsed.projection ?? [])
+      .flatMap((p) => {
+        if (p.kind === "elements_shape") {
+          return p.fields.map(elementFieldSubjectName);
+        }
+        if (p.kind === "element_first_path") {
+          return [p.steps[0] ?? ""];
+        }
+        if (p.kind === "element_first_shape") {
+          return p.fields;
+        }
+        if (p.kind === "element_agg") {
+          return [p.steps[0] ?? ""];
+        }
+        return [];
+      })
+      .filter((name) => name.length > 0),
+  );
   let source = parts.source;
   if (
-    elementFields.length > 0
-    && (source.kind === "select" || source.kind === "shape_projection")
+    elementFields.length > 0 &&
+    (source.kind === "select" || source.kind === "shape_projection")
   ) {
     const shape = [...(source.shape ?? [])];
     const present = new globalThis.Set<string>(
       shape
-        .filter((s): s is Extract<EdgeQLShapeElement, { name: string }> => "name" in s && typeof s.name === "string")
+        .filter(
+          (s): s is Extract<EdgeQLShapeElement, { name: string }> =>
+            "name" in s && typeof s.name === "string",
+        )
         .map((s) => s.name),
     );
     const additions: EdgeQLShapeElement[] = [];
@@ -11617,7 +13049,10 @@ const compileGroupExprSet = (
   );
 };
 
-const compileConfigureStatement = (statement: ConfigureStatement, ctx: IRCompileContext): ConfigStmt => {
+const compileConfigureStatement = (
+  statement: ConfigureStatement,
+  ctx: IRCompileContext,
+): ConfigStmt => {
   const scoped = withBindings(ctx, statement.with);
   return {
     kind: "config_stmt",
@@ -11631,7 +13066,10 @@ const compileConfigureStatement = (statement: ConfigureStatement, ctx: IRCompile
   };
 };
 
-export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompileOptions = {}): Statement => {
+export const compileASTToGelIR = (
+  statement: EdgeQLStatement,
+  options: IRCompileOptions = {},
+): Statement => {
   const schemaModel = resolveSchemaModelForCompile(options);
   const ctx: IRCompileContext = {
     module: options.module ?? statement.withModule ?? "default",
@@ -11659,15 +13097,24 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
 
   const buildResult = (): Statement => {
     switch (statement.kind) {
-      case "select_expr": return compileSelectExprStatement(statement, ctx);
-      case "select": return compileSelectStatement(statement, ctx);
-      case "select_free": return compileSelectFreeStatement(statement, ctx);
-      case "insert": return compileInsertStatement(statement, ctx);
-      case "update": return compileUpdateStatement(statement, ctx);
-      case "delete": return compileDeleteStatement(statement, ctx);
-      case "for": return compileForStatement(statement, ctx);
-      case "configure": return compileConfigureStatement(statement, ctx);
-      case "group": return compileGroupStatement(statement, ctx);
+      case "select_expr":
+        return compileSelectExprStatement(statement, ctx);
+      case "select":
+        return compileSelectStatement(statement, ctx);
+      case "select_free":
+        return compileSelectFreeStatement(statement, ctx);
+      case "insert":
+        return compileInsertStatement(statement, ctx);
+      case "update":
+        return compileUpdateStatement(statement, ctx);
+      case "delete":
+        return compileDeleteStatement(statement, ctx);
+      case "for":
+        return compileForStatement(statement, ctx);
+      case "configure":
+        return compileConfigureStatement(statement, ctx);
+      case "group":
+        return compileGroupStatement(statement, ctx);
       default:
         throw new AppError(
           "E_RUNTIME",
@@ -11709,17 +13156,29 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
     // default if the walk hits a pathological shape (e.g. a self-referential
     // WITH binding that would recurse without bound).
     try {
-      (result as { volatility: Volatility }).volatility = inferStatementVolatility(statement, ctx.schema, ctx.module);
+      (result as { volatility: Volatility }).volatility = inferStatementVolatility(
+        statement,
+        ctx.schema,
+        ctx.module,
+      );
     } catch {
       // leave default volatility
     }
     try {
-      (result as { cardinality: string }).cardinality = inferStatementCardinality(statement, ctx.schema, ctx.module);
+      (result as { cardinality: string }).cardinality = inferStatementCardinality(
+        statement,
+        ctx.schema,
+        ctx.module,
+      );
     } catch {
       // leave default cardinality
     }
     try {
-      (result as { multiplicity: string }).multiplicity = inferStatementMultiplicity(statement, ctx.schema, ctx.module);
+      (result as { multiplicity: string }).multiplicity = inferStatementMultiplicity(
+        statement,
+        ctx.schema,
+        ctx.module,
+      );
     } catch {
       // leave default multiplicity
     }
@@ -11737,15 +13196,17 @@ export const compileASTToGelIR = (statement: EdgeQLStatement, options: IRCompile
 };
 
 export const isGelIRCompatibleStatement = (statement: EdgeQLStatement): boolean => {
-  return statement.kind === "select"
-    || statement.kind === "select_expr"
-    || statement.kind === "select_free"
-    || statement.kind === "insert"
-    || statement.kind === "update"
-    || statement.kind === "delete"
-    || statement.kind === "for"
-    || statement.kind === "configure"
-    || statement.kind === "group";
+  return (
+    statement.kind === "select" ||
+    statement.kind === "select_expr" ||
+    statement.kind === "select_free" ||
+    statement.kind === "insert" ||
+    statement.kind === "update" ||
+    statement.kind === "delete" ||
+    statement.kind === "for" ||
+    statement.kind === "configure" ||
+    statement.kind === "group"
+  );
 };
 
 export type GelIRCompileResult = Statement;
@@ -11773,7 +13234,8 @@ const walkAndValidateShapes = (
           throw new AppError(
             "E_SEMANTIC",
             `possibly an empty set returned by an expression for a computed link '${el.name}' declared as 'required'`,
-            1, 1,
+            1,
+            1,
           );
         }
         const childSubject = extendPathSet(subject, ptrref);
@@ -11814,14 +13276,15 @@ const validateSingletonClauses = (statement: EdgeQLStatement, ctx: IRCompileCont
   };
   const fallbackSubject = scalarTypeRef("str");
   for (const expr of [clauseStatement.limitExpr, clauseStatement.offsetExpr]) {
-    if (expr && inferFreeExprCard(expr, ctx, fallbackSubject).upper === "many") failSingletonClause();
+    if (expr && inferFreeExprCard(expr, ctx, fallbackSubject).upper === "many")
+      failSingletonClause();
   }
 
   const singletonOrderBarriers = new globalThis.Set(["exists", "in_expr", "set_expr", "distinct"]);
   if (
-    statement.kind === "select_expr"
-    && statement.orderBy
-    && singletonOrderBarriers.has(statement.expr.kind)
+    statement.kind === "select_expr" &&
+    statement.orderBy &&
+    singletonOrderBarriers.has(statement.expr.kind)
   ) {
     failSingletonClause();
   }
@@ -11838,16 +13301,16 @@ const validateSingletonClauses = (statement: EdgeQLStatement, ctx: IRCompileCont
 
 const validateDeterminateTopLevelType = (statement: EdgeQLStatement): void => {
   if (
-    statement.kind === "select_expr"
-    && statement.expr.kind === "array_literal_expr"
-    && statement.expr.values.length === 0
+    statement.kind === "select_expr" &&
+    statement.expr.kind === "array_literal_expr" &&
+    statement.expr.values.length === 0
   ) {
     throw new AppError("E_SEMANTIC", "expression returns value of indeterminate type", 1, 1);
   }
   if (
-    statement.kind === "select_expr"
-    && statement.expr.kind === "index_access"
-    && statement.expr.expr.kind === "current_item"
+    statement.kind === "select_expr" &&
+    statement.expr.kind === "index_access" &&
+    statement.expr.expr.kind === "current_item"
   ) {
     throw new AppError("E_SEMANTIC", "could not resolve partial path", 1, 1);
   }
@@ -11878,7 +13341,13 @@ export const validateParsedStatement = (
 // ─── qlast path-routing gate (consumed by compileFreeObjectExpr) ────────────
 // The path-shaped expression kinds eligible for routing through the
 // qlast-consuming path compiler.
-const QLAST_GATED_PATH_KINDS = new globalThis.Set<string>(["path", "path_chain", "path_steps", "field_access", "for_expr"]);
+const QLAST_GATED_PATH_KINDS = new globalThis.Set<string>([
+  "path",
+  "path_chain",
+  "path_steps",
+  "field_access",
+  "for_expr",
+]);
 
 // Routing is ON by default — path-shaped expressions compile through the
 // qlast-consuming `compilePathQlast` (with QLAST_DEFERRED falling back to the
@@ -11905,11 +13374,14 @@ export const qlastPathDeps: QlastPathDeps = {
   narrowTypeIntersectionSet: (ctx, source, typeName) => {
     const target = resolveTypeRef(ctx, typeName);
     validateTypeIntersectionOperand(ctx, source.typeref, target);
-    const base = source.expr.kind === "pointer" && source.expr.direction === "inbound"
-      ? universalObjectTypeRef(ctx, "Object")
-      : source.typeref;
+    const base =
+      source.expr.kind === "pointer" && source.expr.direction === "inbound"
+        ? universalObjectTypeRef(ctx, "Object")
+        : source.typeref;
     const narrowed = narrowTypeIntersectionStep(ctx, base, undefined, { typeName });
-    return narrowed ? withNarrowedSource(source, narrowed.typeref) : withNarrowedSource(source, target);
+    return narrowed
+      ? withNarrowedSource(source, narrowed.typeref)
+      : withNarrowedSource(source, target);
   },
   lookupEnumScalar,
   resolvePathToEnumLiteral,

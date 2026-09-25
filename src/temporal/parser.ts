@@ -10,12 +10,21 @@ export interface LocalTemporalParts {
   fraction: string;
 }
 
-type FormatField = "year" | "month" | "day" | "hour" | "minute" | "second" | "zoneHour" | "zoneMinute";
+type FormatField =
+  | "year"
+  | "month"
+  | "day"
+  | "hour"
+  | "minute"
+  | "second"
+  | "zoneHour"
+  | "zoneMinute";
 type FormatToken =
   | { kind: "field"; field: FormatField; width: number }
   | { kind: "literal"; value: string; quoted: boolean };
 
-const isDigit = (value: string | undefined): boolean => value !== undefined && value >= "0" && value <= "9";
+const isDigit = (value: string | undefined): boolean =>
+  value !== undefined && value >= "0" && value <= "9";
 
 class TemporalParser {
   private offset = 0;
@@ -24,7 +33,11 @@ class TemporalParser {
 
   digits(width: number): number | undefined {
     const start = this.offset;
-    while (this.offset < this.input.length && this.offset - start < width && isDigit(this.input[this.offset])) {
+    while (
+      this.offset < this.input.length &&
+      this.offset - start < width &&
+      isDigit(this.input[this.offset])
+    ) {
       this.offset += 1;
     }
     if (this.offset - start !== width) return undefined;
@@ -54,7 +67,9 @@ class TemporalParser {
   }
 }
 
-const parseDate = (parser: TemporalParser): Pick<LocalTemporalParts, "year" | "month" | "day"> | undefined => {
+const parseDate = (
+  parser: TemporalParser,
+): Pick<LocalTemporalParts, "year" | "month" | "day"> | undefined => {
   const year = parser.digits(4);
   if (year === undefined || !parser.consume("-")) return undefined;
   const month = parser.digits(2);
@@ -63,7 +78,9 @@ const parseDate = (parser: TemporalParser): Pick<LocalTemporalParts, "year" | "m
   return day === undefined ? undefined : { year, month, day };
 };
 
-const parseTime = (parser: TemporalParser): Pick<LocalTemporalParts, "hour" | "minute" | "second" | "fraction"> | undefined => {
+const parseTime = (
+  parser: TemporalParser,
+): Pick<LocalTemporalParts, "hour" | "minute" | "second" | "fraction"> | undefined => {
   const hour = parser.digits(2);
   if (hour === undefined || !parser.consume(":")) return undefined;
   const minute = parser.digits(2);
@@ -74,12 +91,16 @@ const parseTime = (parser: TemporalParser): Pick<LocalTemporalParts, "hour" | "m
   return fraction === undefined ? undefined : { hour, minute, second, fraction };
 };
 
-export const parseLocalTemporal = (input: string, kind: LocalTemporalKind): LocalTemporalParts | undefined => {
+export const parseLocalTemporal = (
+  input: string,
+  kind: LocalTemporalKind,
+): LocalTemporalParts | undefined => {
   const parser = new TemporalParser(input.trim());
   const date = kind === "time" ? { year: 2000, month: 1, day: 1 } : parseDate(parser);
   if (!date) return undefined;
   if (kind === "datetime" && !parser.consume("T") && !parser.consume(" ")) return undefined;
-  const time = kind === "date" ? { hour: 0, minute: 0, second: 0, fraction: "" } : parseTime(parser);
+  const time =
+    kind === "date" ? { hour: 0, minute: 0, second: 0, fraction: "" } : parseTime(parser);
   return time && parser.done() ? { ...date, ...time } : undefined;
 };
 
@@ -120,7 +141,10 @@ const tokenizeFormat = (format: string): FormatToken[] | undefined => {
 
 export type FormattedTemporalResult =
   | { ok: true; parts: LocalTemporalParts; zone: string | null }
-  | { ok: false; reason: "invalidFormat" | "missingZoneFormat" | "unexpectedZoneFormat" | "invalidInput" };
+  | {
+      ok: false;
+      reason: "invalidFormat" | "missingZoneFormat" | "unexpectedZoneFormat" | "invalidInput";
+    };
 
 export const parseFormattedTemporal = (
   input: string,
@@ -130,7 +154,10 @@ export const parseFormattedTemporal = (
   const tokens = tokenizeFormat(format);
   if (!tokens) return { ok: false, reason: "invalidFormat" };
   const hasZoneHour = tokens.some((token) => token.kind === "field" && token.field === "zoneHour");
-  const hasZone = tokens.some((token) => token.kind === "field" && (token.field === "zoneHour" || token.field === "zoneMinute"));
+  const hasZone = tokens.some(
+    (token) =>
+      token.kind === "field" && (token.field === "zoneHour" || token.field === "zoneMinute"),
+  );
   if (requireZone && !hasZoneHour) return { ok: false, reason: "missingZoneFormat" };
   if (!requireZone && hasZone) return { ok: false, reason: "unexpectedZoneFormat" };
 

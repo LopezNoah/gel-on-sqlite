@@ -13,10 +13,10 @@ import type { ScalarValue } from "../types.js";
 import type { ShapeElement, WithBindingValue } from "../edgeql/ast.js";
 
 export type InferredAssignType =
-  | { kind: "indeterminate" }   // bare `[]` — no element type
-  | { kind: "array"; element: string }  // `array<element>`
-  | { kind: "scalar"; name: string }    // a plain scalar
-  | undefined;                  // not inferable / not relevant
+  | { kind: "indeterminate" } // bare `[]` — no element type
+  | { kind: "array"; element: string } // `array<element>`
+  | { kind: "scalar"; name: string } // a plain scalar
+  | undefined; // not inferable / not relevant
 
 // Std scalar name for a literal node based on its runtime JS value.
 const literalScalarName = (node: Record<string, unknown>): string | undefined => {
@@ -89,7 +89,10 @@ export const inferArrayValuedType = (value: unknown, depth = 0): InferredAssignT
 };
 
 // Std scalar name for a literal carrying an explicit value + numeric kind hint.
-export const literalStdTypeName = (literal: { value: ScalarValue; numericKind?: string }): string | undefined => {
+export const literalStdTypeName = (literal: {
+  value: ScalarValue;
+  numericKind?: string;
+}): string | undefined => {
   const { value, numericKind } = literal;
   if (typeof value === "string") return "std::str";
   if (typeof value === "boolean") return "std::bool";
@@ -106,7 +109,11 @@ export const computedExprIsMulti = (expr: unknown, depth = 0): boolean => {
   const node = expr as Record<string, unknown> & { kind?: string };
   if (node.kind === "set_literal") return ((node.values as unknown[]) ?? []).length > 1;
   if (node.kind === "set_expr") return ((node.values as unknown[]) ?? []).length > 1;
-  if (node.kind === "select_expr" || node.kind === "select_expr_subquery" || node.kind === "subquery_expr") {
+  if (
+    node.kind === "select_expr" ||
+    node.kind === "select_expr_subquery" ||
+    node.kind === "subquery_expr"
+  ) {
     return computedExprIsMulti(node.expr, depth + 1);
   }
   return false;
@@ -144,11 +151,15 @@ export const unwrapSubqueryWrappers = (expr: unknown): unknown => {
 };
 
 // The SELECT shape a WITH binding projects, across the binding's value forms.
-export const bindingSelectShape = (binding: WithBindingValue | undefined): ShapeElement[] | undefined => {
+export const bindingSelectShape = (
+  binding: WithBindingValue | undefined,
+): ShapeElement[] | undefined => {
   if (!binding) return undefined;
   if (binding.kind === "subquery") return binding.query.shape;
   if (binding.kind === "subquery_expr") {
-    const inner = unwrapSubqueryWrappers(binding.expr) as Record<string, unknown> & { kind?: string };
+    const inner = unwrapSubqueryWrappers(binding.expr) as Record<string, unknown> & {
+      kind?: string;
+    };
     if (inner?.kind === "select") return inner.shape as ShapeElement[];
     return undefined;
   }
@@ -171,9 +182,17 @@ export const insertValueHasUnscopedPartialPath = (value: unknown, depth = 0): bo
   if (node.kind === "current_item") return true;
   // Don't descend into nested query scopes — a partial path inside them
   // resolves against that scope's subject, not the INSERT shape.
-  if (node.kind === "select" || node.kind === "select_expr" || node.kind === "select_expr_subquery"
-      || node.kind === "subquery_expr" || node.kind === "subquery_statement"
-      || node.kind === "for" || node.kind === "insert" || node.kind === "update" || node.kind === "delete") {
+  if (
+    node.kind === "select" ||
+    node.kind === "select_expr" ||
+    node.kind === "select_expr_subquery" ||
+    node.kind === "subquery_expr" ||
+    node.kind === "subquery_statement" ||
+    node.kind === "for" ||
+    node.kind === "insert" ||
+    node.kind === "update" ||
+    node.kind === "delete"
+  ) {
     return false;
   }
   return Object.values(node).some((v) => insertValueHasUnscopedPartialPath(v, depth + 1));

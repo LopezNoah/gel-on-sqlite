@@ -8,7 +8,7 @@ guards over strict boolean operands, and the anchored object-chain JOIN builder
 they share — as ten module-private functions, exercised only end-to-end.
 
 **Finding (same as ADR 0051 — verify before extracting):** the cluster is not a
-free-standing leaf. `compilePredicateSetSQL` / `compileOperatorValueSQL` *call*
+free-standing leaf. `compilePredicateSetSQL` / `compileOperatorValueSQL` _call_
 the existence functions, and the existence functions call
 `compilePredicateSetSQL` / `compileValueSetSQL` / `compileSelectSource` /
 `compilePolymorphicSource` back — mutual recursion. They also reach ~10 pure

@@ -58,9 +58,7 @@ export class AnnotationRegistry {
   ensureKnown(name: string, context: string): void {
     if (!this.definitions.has(name)) {
       // Matches logic in Python when an annotation is referenced but not defined
-      throw new errors.SchemaDefinitionError(
-        `Unknown annotation '${name}' in ${context}`
-      );
+      throw new errors.SchemaDefinitionError(`Unknown annotation '${name}' in ${context}`);
     }
   }
 
@@ -77,7 +75,7 @@ export class AnnotationSet {
       // Python CreateAnnotationValue check: Annotation values must be strings
       if (typeof annotation.value !== "string") {
         throw new errors.InvalidValueError(
-          `annotation values must be 'std::str', got ${typeof annotation.value}`
+          `annotation values must be 'std::str', got ${typeof annotation.value}`,
         );
       }
       this.annotations.set(annotation.name, { ...annotation });
@@ -92,19 +90,13 @@ export class AnnotationSet {
   mustGet(name: string, context: string): string {
     const anno = this.annotations.get(name);
     if (!anno) {
-      throw new errors.SchemaDefinitionError(
-        `annotation ${name} on ${context} is not set`
-      );
+      throw new errors.SchemaDefinitionError(`annotation ${name} on ${context} is not set`);
     }
     return anno.value;
   }
 
   // Implementation of Python's AnnotationSubject.get_json_annotation
-  getJson<T>(
-    name: string, 
-    context: string, 
-    validator: (val: unknown) => T
-  ): T | undefined {
+  getJson<T>(name: string, context: string, validator: (val: unknown) => T): T | undefined {
     const anno = this.annotations.get(name);
     if (!anno) return undefined;
 
@@ -113,7 +105,7 @@ export class AnnotationSet {
       parsed = JSON.parse(anno.value);
     } catch {
       throw new errors.SchemaDefinitionError(
-        `annotation ${name} on ${context} is not set to a valid JSON value`
+        `annotation ${name} on ${context} is not set to a valid JSON value`,
       );
     }
 
@@ -121,22 +113,16 @@ export class AnnotationSet {
       return validator(parsed);
     } catch (error) {
       throw new errors.SchemaDefinitionError(
-        `annotation ${name} on ${context} is not set to JSON containing a valid value: ${error}`
+        `annotation ${name} on ${context} is not set to JSON containing a valid value: ${error}`,
       );
     }
   }
 
   // Implementation of Python's AnnotationSubject.must_get_json_annotation
-  mustGetJson<T>(
-    name: string, 
-    context: string, 
-    validator: (val: unknown) => T
-  ): T {
+  mustGetJson<T>(name: string, context: string, validator: (val: unknown) => T): T {
     const value = this.getJson(name, context, validator);
     if (value === undefined) {
-      throw new errors.SchemaDefinitionError(
-        `annotation ${name} is not set on ${context}`
-      );
+      throw new errors.SchemaDefinitionError(`annotation ${name} is not set on ${context}`);
     }
     return value;
   }
@@ -158,8 +144,8 @@ export class AnnotationSet {
   }
 
   inherit(registry: AnnotationRegistry): AnnotationSet {
-    const filtered = [...this.annotations.values()].filter((annotation) => 
-      registry.isInheritable(annotation.name)
+    const filtered = [...this.annotations.values()].filter((annotation) =>
+      registry.isInheritable(annotation.name),
     );
     return new AnnotationSet(filtered);
   }
@@ -201,9 +187,7 @@ export class AnnotationResolver<T extends { extends?: string[]; annotations?: An
       const base = this.lookup(baseName);
       if (!base) {
         // Matches standard EdgeDB "Unknown base" error logic
-        throw new errors.SchemaError(
-          `Unknown base type '${baseName}' in ${qualifiedName}`
-        );
+        throw new errors.SchemaError(`Unknown base type '${baseName}' in ${qualifiedName}`);
       }
       const baseAnnotations = this.resolve(base, stack).inherit(this.registry);
       inherited = inherited.merge(baseAnnotations);

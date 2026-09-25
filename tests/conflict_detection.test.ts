@@ -32,7 +32,9 @@ const loadSchema = (): SchemaSnapshot =>
 describe("conflict_detection — parseExclusivityViolation", () => {
   it("recovers the property from a shared cross-type bookkeeping table", () => {
     expect(
-      parseExclusivityViolation("UNIQUE constraint failed: __gel_excl__default__Account__col__email__excl__email"),
+      parseExclusivityViolation(
+        "UNIQUE constraint failed: __gel_excl__default__Account__col__email__excl__email",
+      ),
     ).toEqual({ property: "email", crossType: true });
   });
 
@@ -56,19 +58,48 @@ describe("conflict_detection — insertValueIsVolatile", () => {
   it("flags a volatile function call, qualified or bare, however nested", () => {
     expect(insertValueIsVolatile({ kind: "function_call", name: "random" })).toBe(true);
     expect(insertValueIsVolatile({ kind: "call", name: "std::random" })).toBe(true);
-    expect(insertValueIsVolatile({ kind: "binary", left: { kind: "func_call", name: "datetime_current" } })).toBe(true);
-    expect(insertValueIsVolatile([{ kind: "literal", value: 1 }, { kind: "call", name: "uuid_generate_v4" }])).toBe(true);
+    expect(
+      insertValueIsVolatile({
+        kind: "binary",
+        left: { kind: "func_call", name: "datetime_current" },
+      }),
+    ).toBe(true);
+    expect(
+      insertValueIsVolatile([
+        { kind: "literal", value: 1 },
+        { kind: "call", name: "uuid_generate_v4" },
+      ]),
+    ).toBe(true);
   });
 
   it("does not flag a non-volatile expression", () => {
-    expect(insertValueIsVolatile({ kind: "call", name: "str_upper", args: [{ kind: "literal", value: "x" }] })).toBe(false);
+    expect(
+      insertValueIsVolatile({
+        kind: "call",
+        name: "str_upper",
+        args: [{ kind: "literal", value: "x" }],
+      }),
+    ).toBe(false);
     expect(insertValueIsVolatile({ kind: "literal", value: 42 })).toBe(false);
   });
 });
 
 describe("conflict_detection — planExclusiveConflictProbe (the pure emitter)", () => {
-  const single: ExclusiveCheck = { fields: ["email"], columns: ["email"], lower: false, tables: ["t_account"], fromParent: false };
-  const multi: ExclusiveCheck = { fields: ["handle"], columns: ["handle"], lower: false, multiProp: "handle", tables: ["t_account"], fromParent: false };
+  const single: ExclusiveCheck = {
+    fields: ["email"],
+    columns: ["email"],
+    lower: false,
+    tables: ["t_account"],
+    fromParent: false,
+  };
+  const multi: ExclusiveCheck = {
+    fields: ["handle"],
+    columns: ["handle"],
+    lower: false,
+    multiProp: "handle",
+    tables: ["t_account"],
+    fromParent: false,
+  };
 
   it("plans a single-column probe with the resolved value", () => {
     expect(planExclusiveConflictProbe(single, { email: "a@b.com" })).toEqual({
@@ -86,7 +117,9 @@ describe("conflict_detection — planExclusiveConflictProbe (the pure emitter)",
   });
 
   it("preserves the case-insensitive flag", () => {
-    expect(planExclusiveConflictProbe({ ...single, lower: true }, { email: "A@B.com" })).toMatchObject({ lower: true });
+    expect(
+      planExclusiveConflictProbe({ ...single, lower: true }, { email: "A@B.com" }),
+    ).toMatchObject({ lower: true });
   });
 
   // A multi-property's resolved value is the multi-SET (an array); the write
@@ -101,7 +134,9 @@ describe("conflict_detection — planExclusiveConflictProbe (the pure emitter)",
       multiProp: "handle",
       items: ["x", "y"],
     });
-    expect(planExclusiveConflictProbe(multi, { handle: "solo" })).toMatchObject({ items: ["solo"] });
+    expect(planExclusiveConflictProbe(multi, { handle: "solo" })).toMatchObject({
+      items: ["solo"],
+    });
   });
 
   it("declines an empty multi set", () => {
@@ -115,9 +150,15 @@ describe("conflict_detection — exclusiveChecksFor (every constraint kind, no D
     const account = schema.getType("default::Account")!;
     const checks = exclusiveChecksFor(schema, account, undefined);
 
-    expect(checks.some((c) => c.fields.length === 1 && c.fields[0] === "email" && !c.multiProp)).toBe(true);
+    expect(
+      checks.some((c) => c.fields.length === 1 && c.fields[0] === "email" && !c.multiProp),
+    ).toBe(true);
     expect(checks.some((c) => c.multiProp === "handle")).toBe(true);
-    expect(checks.some((c) => c.fields.length === 2 && c.fields.includes("first") && c.fields.includes("last"))).toBe(true);
+    expect(
+      checks.some(
+        (c) => c.fields.length === 2 && c.fields.includes("first") && c.fields.includes("last"),
+      ),
+    ).toBe(true);
     expect(checks.some((c) => c.fields.length === 1 && c.fields[0] === "id")).toBe(true);
   });
 

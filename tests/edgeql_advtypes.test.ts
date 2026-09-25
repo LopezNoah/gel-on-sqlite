@@ -1,17 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
-import {
-  assertQueryResult,
-  unorderedBag,
-  unorderedSet
-} from "./python_query_test_helpers.js";
+import { assertQueryResult, unorderedBag, unorderedSet } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLAdvancedTypes", () => {
   let h: QueryHarness;
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "advtypes"
+      schema: "advtypes",
     });
   });
 
@@ -38,7 +34,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
             INSERT XBb {bb := 91};
             INSERT XBc {bc := 90.5};
             INSERT XBc {bc := 90.5};
-        `
+        `,
     );
   }
 
@@ -53,7 +49,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                     SELECT V FILTER .name = 'v0'
                 ),
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -61,14 +57,14 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 SELECT Z {stw0: {name}} FILTER .name = 'z0';
             `,
       [
+        {
+          stw0: [
             {
-              "stw0": [
-                {
-                  "name": "v0",
-                },
-              ],
+              name: "v0",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -83,7 +79,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 u := 'u1',
                 l_a := (SELECT A FILTER .name = 'a1'),
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -93,10 +89,10 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       [
-            {
-              "cla": 1,
-            },
-          ]
+        {
+          cla: 1,
+        },
+      ],
     );
   });
 
@@ -116,79 +112,79 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 .bc EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+      ],
     );
   });
 
@@ -203,23 +199,23 @@ describe("TestEdgeQLAdvancedTypes", () => {
             } ORDER BY .bb;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "bb": 2,
-            },
-            {
-              "tn": "default::CBaBb",
-              "bb": 3,
-            },
-            {
-              "tn": "default::CBbBc",
-              "bb": 6,
-            },
-            {
-              "tn": "default::CBbBc",
-              "bb": 7,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          bb: 2,
+        },
+        {
+          tn: "default::CBaBb",
+          bb: 3,
+        },
+        {
+          tn: "default::CBbBc",
+          bb: 6,
+        },
+        {
+          tn: "default::CBbBc",
+          bb: 7,
+        },
+      ],
     );
   });
 
@@ -235,27 +231,27 @@ describe("TestEdgeQLAdvancedTypes", () => {
             } ORDER BY .bb;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+        },
+      ],
     );
   });
 
@@ -266,7 +262,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
       `
             SELECT Ba[IS Bb].__type__.name;
             `,
-      unorderedSet(["default::CBaBb", "default::CBaBbBc"])
+      unorderedSet(["default::CBaBb", "default::CBaBbBc"]),
     );
   });
 
@@ -277,7 +273,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
       `
             SELECT Ba[IS Bb].ba;
             `,
-      unorderedSet(["cba2", "cba3", "cba8", "cba9"])
+      unorderedSet(["cba2", "cba3", "cba8", "cba9"]),
     );
   });
 
@@ -288,7 +284,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
       `
             SELECT Ba[IS Bb].bb;
             `,
-      unorderedSet([2, 3, 8, 9])
+      unorderedSet([2, 3, 8, 9]),
     );
   });
 
@@ -306,19 +302,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -336,43 +332,43 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -390,19 +386,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -420,31 +416,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -462,31 +458,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -504,31 +500,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -546,31 +542,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -591,67 +587,67 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 .bc EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+      ],
     );
   });
 
@@ -672,67 +668,67 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 .bc EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+      ],
     );
   });
 
@@ -753,91 +749,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 .bc EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -858,43 +854,43 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 .bc EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -915,55 +911,55 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 .bc EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -979,31 +975,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-            },
-            {
-              "tn": "default::XBa",
-              "ba": "xba0",
-            },
-            {
-              "tn": "default::XBa",
-              "ba": "xba1",
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+        },
+        {
+          tn: "default::XBa",
+          ba: "xba0",
+        },
+        {
+          tn: "default::XBa",
+          ba: "xba1",
+        },
+      ],
     );
   });
 
@@ -1019,31 +1015,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-            },
-            {
-              "tn": "default::XBa",
-              "ba": "xba0",
-            },
-            {
-              "tn": "default::XBa",
-              "ba": "xba1",
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+        },
+        {
+          tn: "default::XBa",
+          ba: "xba0",
+        },
+        {
+          tn: "default::XBa",
+          ba: "xba1",
+        },
+      ],
     );
   });
 
@@ -1062,47 +1058,47 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 .bb EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-            },
-            {
-              "tn": "default::XBa",
-              "ba": "xba0",
-              "bb": null,
-            },
-            {
-              "tn": "default::XBa",
-              "ba": "xba1",
-              "bb": null,
-            },
-            {
-              "tn": "default::XBb",
-              "ba": null,
-              "bb": 90,
-            },
-            {
-              "tn": "default::XBb",
-              "ba": null,
-              "bb": 91,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+        },
+        {
+          tn: "default::XBa",
+          ba: "xba0",
+          bb: null,
+        },
+        {
+          tn: "default::XBa",
+          ba: "xba1",
+          bb: null,
+        },
+        {
+          tn: "default::XBb",
+          ba: null,
+          bb: 90,
+        },
+        {
+          tn: "default::XBb",
+          ba: null,
+          bb: 91,
+        },
+      ],
     );
   });
 
@@ -1121,7 +1117,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 u := 'u',
                 l_a := (select A)
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -1129,16 +1125,16 @@ describe("TestEdgeQLAdvancedTypes", () => {
             SELECT A.<l_a[is S | T] { name } ORDER BY .name;
             `,
       [
-            {
-              "name": "sss",
-            },
-            {
-              "name": "ttt",
-            },
-            {
-              "name": "vvv",
-            },
-          ]
+        {
+          name: "sss",
+        },
+        {
+          name: "ttt",
+        },
+        {
+          name: "vvv",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1146,10 +1142,10 @@ describe("TestEdgeQLAdvancedTypes", () => {
             SELECT A.<l_a[is S & T] { name } ORDER BY .name;
             `,
       [
-            {
-              "name": "vvv",
-            },
-          ]
+        {
+          name: "vvv",
+        },
+      ],
     );
   });
 
@@ -1165,31 +1161,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1201,31 +1197,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1237,39 +1233,39 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba EMPTY LAST;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+        },
+      ],
     );
   });
 
@@ -1288,31 +1284,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1327,19 +1323,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1354,55 +1350,55 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1410,7 +1406,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
             WITH x := Ba
             SELECT x[IS Bb].ba
             `,
-      unorderedBag(["cba2", "cba3", "cba8", "cba9"])
+      unorderedBag(["cba2", "cba3", "cba8", "cba9"]),
     );
     assertQueryResult(
       h,
@@ -1425,19 +1421,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-          ])
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+      ]),
     );
   });
 
@@ -1456,19 +1452,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1483,19 +1479,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1510,31 +1506,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -1542,7 +1538,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
             WITH x := Ba[IS Bb]
             SELECT x[IS Bc].ba
             `,
-      unorderedBag(["cba8", "cba9"])
+      unorderedBag(["cba8", "cba9"]),
     );
   });
 
@@ -1560,55 +1556,55 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .ba;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
   });
 
@@ -1626,55 +1622,55 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .bb;
             `,
       [
-            {
-              "tn": "default::CBb",
-              "bb": 0,
-              "ua": null,
-              "ia": null,
-            },
-            {
-              "tn": "default::CBb",
-              "bb": 1,
-              "ua": null,
-              "ia": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "bb": 2,
-              "ua": 2,
-              "ia": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "bb": 3,
-              "ua": 3,
-              "ia": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "bb": 6,
-              "ua": 6,
-              "ia": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "bb": 7,
-              "ua": 7,
-              "ia": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "bb": 8,
-              "ua": 8,
-              "ia": 8,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "bb": 9,
-              "ua": 9,
-              "ia": 9,
-            },
-          ]
+        {
+          tn: "default::CBb",
+          bb: 0,
+          ua: null,
+          ia: null,
+        },
+        {
+          tn: "default::CBb",
+          bb: 1,
+          ua: null,
+          ia: null,
+        },
+        {
+          tn: "default::CBaBb",
+          bb: 2,
+          ua: 2,
+          ia: null,
+        },
+        {
+          tn: "default::CBaBb",
+          bb: 3,
+          ua: 3,
+          ia: null,
+        },
+        {
+          tn: "default::CBbBc",
+          bb: 6,
+          ua: 6,
+          ia: null,
+        },
+        {
+          tn: "default::CBbBc",
+          bb: 7,
+          ua: 7,
+          ia: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          bb: 8,
+          ua: 8,
+          ia: 8,
+        },
+        {
+          tn: "default::CBaBbBc",
+          bb: 9,
+          ua: 9,
+          ia: 9,
+        },
+      ],
     );
   });
 
@@ -1692,91 +1688,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .tn;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "a": true,
-              "b": false,
-              "c": false,
-            },
-            {
-              "tn": "default::CBa",
-              "a": true,
-              "b": false,
-              "c": false,
-            },
-            {
-              "tn": "default::CBaBb",
-              "a": true,
-              "b": true,
-              "c": false,
-            },
-            {
-              "tn": "default::CBaBb",
-              "a": true,
-              "b": true,
-              "c": false,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "a": true,
-              "b": true,
-              "c": true,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "a": true,
-              "b": true,
-              "c": true,
-            },
-            {
-              "tn": "default::CBaBc",
-              "a": true,
-              "b": false,
-              "c": true,
-            },
-            {
-              "tn": "default::CBaBc",
-              "a": true,
-              "b": false,
-              "c": true,
-            },
-            {
-              "tn": "default::CBb",
-              "a": false,
-              "b": true,
-              "c": false,
-            },
-            {
-              "tn": "default::CBb",
-              "a": false,
-              "b": true,
-              "c": false,
-            },
-            {
-              "tn": "default::CBbBc",
-              "a": false,
-              "b": true,
-              "c": true,
-            },
-            {
-              "tn": "default::CBbBc",
-              "a": false,
-              "b": true,
-              "c": true,
-            },
-            {
-              "tn": "default::CBc",
-              "a": false,
-              "b": false,
-              "c": true,
-            },
-            {
-              "tn": "default::CBc",
-              "a": false,
-              "b": false,
-              "c": true,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          a: true,
+          b: false,
+          c: false,
+        },
+        {
+          tn: "default::CBa",
+          a: true,
+          b: false,
+          c: false,
+        },
+        {
+          tn: "default::CBaBb",
+          a: true,
+          b: true,
+          c: false,
+        },
+        {
+          tn: "default::CBaBb",
+          a: true,
+          b: true,
+          c: false,
+        },
+        {
+          tn: "default::CBaBbBc",
+          a: true,
+          b: true,
+          c: true,
+        },
+        {
+          tn: "default::CBaBbBc",
+          a: true,
+          b: true,
+          c: true,
+        },
+        {
+          tn: "default::CBaBc",
+          a: true,
+          b: false,
+          c: true,
+        },
+        {
+          tn: "default::CBaBc",
+          a: true,
+          b: false,
+          c: true,
+        },
+        {
+          tn: "default::CBb",
+          a: false,
+          b: true,
+          c: false,
+        },
+        {
+          tn: "default::CBb",
+          a: false,
+          b: true,
+          c: false,
+        },
+        {
+          tn: "default::CBbBc",
+          a: false,
+          b: true,
+          c: true,
+        },
+        {
+          tn: "default::CBbBc",
+          a: false,
+          b: true,
+          c: true,
+        },
+        {
+          tn: "default::CBc",
+          a: false,
+          b: false,
+          c: true,
+        },
+        {
+          tn: "default::CBc",
+          a: false,
+          b: false,
+          c: true,
+        },
+      ],
     );
   });
 
@@ -1794,91 +1790,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .tn;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ab": true,
-              "ac": true,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBa",
-              "ab": true,
-              "ac": true,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBb",
-              "ab": true,
-              "ac": false,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBb",
-              "ab": true,
-              "ac": false,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBc",
-              "ab": false,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBc",
-              "ab": false,
-              "ac": true,
-              "bc": true,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ab: true,
+          ac: true,
+          bc: false,
+        },
+        {
+          tn: "default::CBa",
+          ab: true,
+          ac: true,
+          bc: false,
+        },
+        {
+          tn: "default::CBaBb",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBaBb",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBaBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBaBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBb",
+          ab: true,
+          ac: false,
+          bc: true,
+        },
+        {
+          tn: "default::CBb",
+          ab: true,
+          ac: false,
+          bc: true,
+        },
+        {
+          tn: "default::CBbBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBbBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBc",
+          ab: false,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBc",
+          ab: false,
+          ac: true,
+          bc: true,
+        },
+      ],
     );
   });
 
@@ -1896,91 +1892,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .tn;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ab": false,
-              "ac": false,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBa",
-              "ab": false,
-              "ac": false,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ab": true,
-              "ac": false,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ab": true,
-              "ac": false,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ab": true,
-              "ac": true,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ab": false,
-              "ac": true,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ab": false,
-              "ac": true,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBb",
-              "ab": false,
-              "ac": false,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBb",
-              "ab": false,
-              "ac": false,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ab": false,
-              "ac": false,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ab": false,
-              "ac": false,
-              "bc": true,
-            },
-            {
-              "tn": "default::CBc",
-              "ab": false,
-              "ac": false,
-              "bc": false,
-            },
-            {
-              "tn": "default::CBc",
-              "ab": false,
-              "ac": false,
-              "bc": false,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ab: false,
+          ac: false,
+          bc: false,
+        },
+        {
+          tn: "default::CBa",
+          ab: false,
+          ac: false,
+          bc: false,
+        },
+        {
+          tn: "default::CBaBb",
+          ab: true,
+          ac: false,
+          bc: false,
+        },
+        {
+          tn: "default::CBaBb",
+          ab: true,
+          ac: false,
+          bc: false,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ab: true,
+          ac: true,
+          bc: true,
+        },
+        {
+          tn: "default::CBaBc",
+          ab: false,
+          ac: true,
+          bc: false,
+        },
+        {
+          tn: "default::CBaBc",
+          ab: false,
+          ac: true,
+          bc: false,
+        },
+        {
+          tn: "default::CBb",
+          ab: false,
+          ac: false,
+          bc: false,
+        },
+        {
+          tn: "default::CBb",
+          ab: false,
+          ac: false,
+          bc: false,
+        },
+        {
+          tn: "default::CBbBc",
+          ab: false,
+          ac: false,
+          bc: true,
+        },
+        {
+          tn: "default::CBbBc",
+          ab: false,
+          ac: false,
+          bc: true,
+        },
+        {
+          tn: "default::CBc",
+          ab: false,
+          ac: false,
+          bc: false,
+        },
+        {
+          tn: "default::CBc",
+          ab: false,
+          ac: false,
+          bc: false,
+        },
+      ],
     );
   });
 
@@ -1997,77 +1993,77 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .tn;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBa",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBaBb",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBaBb",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "u": true,
-              "i": true,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "u": true,
-              "i": true,
-            },
-            {
-              "tn": "default::CBaBc",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBaBc",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBb",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBb",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBbBc",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBbBc",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBc",
-              "u": true,
-              "i": false,
-            },
-            {
-              "tn": "default::CBc",
-              "u": true,
-              "i": false,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBa",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBaBb",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBaBb",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBaBbBc",
+          u: true,
+          i: true,
+        },
+        {
+          tn: "default::CBaBbBc",
+          u: true,
+          i: true,
+        },
+        {
+          tn: "default::CBaBc",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBaBc",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBb",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBb",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBbBc",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBbBc",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBc",
+          u: true,
+          i: false,
+        },
+        {
+          tn: "default::CBc",
+          u: true,
+          i: false,
+        },
+      ],
     );
   });
 
@@ -2081,7 +2077,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 name := 'zzz',
                 stw0 := {S, T, W},
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2090,7 +2086,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
             SELECT _ := My_Z.stw0[IS R].name
             ORDER BY _
             `,
-      ["sss", "ttt"]
+      ["sss", "ttt"],
     );
   });
 
@@ -2105,7 +2101,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 name := 'zzz',
                 stw0 := {S, T, W},
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2114,7 +2110,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
             SELECT _ := My_Z.stw0[IS X].name
             ORDER BY _
             `,
-      ["xxx"]
+      ["xxx"],
     );
   });
 
@@ -2131,7 +2127,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 name := 'www-2',
                 w := (SELECT (DETACHED W) FILTER .name = 'www'),
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2144,14 +2140,14 @@ describe("TestEdgeQLAdvancedTypes", () => {
             FILTER .name = 'www'
             `,
       [
+        {
+          w_of: [
             {
-              "w_of": [
-                {
-                  "name": "xxx",
-                },
-              ],
+              name: "xxx",
             },
-          ]
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2164,14 +2160,14 @@ describe("TestEdgeQLAdvancedTypes", () => {
             FILTER .name = 'www'
             `,
       [
+        {
+          w_of: [
             {
-              "w_of": [
-                {
-                  "u": "xxx_uuu",
-                },
-              ],
+              u: "xxx_uuu",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -2180,20 +2176,16 @@ describe("TestEdgeQLAdvancedTypes", () => {
       `
             INSERT A { name := 'aaa' };
             INSERT S { name := 'sss', s := 'sss', l_a := A };
-        `
+        `,
     );
-    assertQueryResult(
-      h,
-      `SELECT A.<l_a[IS R].name`,
-      ["sss"]
-    );
+    assertQueryResult(h, `SELECT A.<l_a[IS R].name`, ["sss"]);
   });
 
   it("test_edgeql_advtypes_intersection_with_comp", () => {
     h.script(
       `
             INSERT A { name := 'aaa' };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2201,7 +2193,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
             WITH Rc := R
             SELECT Rc[IS A].name
             `,
-      ["aaa"]
+      ["aaa"],
     );
   });
 
@@ -2210,7 +2202,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
       `
             INSERT S { name := 'aaa', s := '' };
             INSERT Z { name := 'lol', stw0 := S };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2219,10 +2211,10 @@ describe("TestEdgeQLAdvancedTypes", () => {
             SELECT X { name }
             `,
       [
-            {
-              "name": "aaa",
-            },
-          ]
+        {
+          name: "aaa",
+        },
+      ],
     );
   });
 
@@ -2233,7 +2225,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                 name := "x", s := "!", t := "!", u := '...',
                 l_a := (insert A { name := "test" })
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2241,10 +2233,10 @@ describe("TestEdgeQLAdvancedTypes", () => {
             select S[is T].l_a { name }
             `,
       [
-            {
-              "name": "test",
-            },
-          ]
+        {
+          name: "test",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2252,14 +2244,14 @@ describe("TestEdgeQLAdvancedTypes", () => {
             select S[is T] { l_a: {name} }
             `,
       [
+        {
+          l_a: [
             {
-              "l_a": [
-                {
-                  "name": "test",
-                },
-              ],
+              name: "test",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -2284,31 +2276,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 4,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 9,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 10,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 4,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 9,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 10,
+          bc: 9.5,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2322,91 +2314,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 4,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 9,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 10,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 4,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 9,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 10,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -2432,19 +2424,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 9,
-              "bc": 8.6,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 10,
-              "bc": 9.6,
-            },
-          ]
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 9,
+          bc: 8.6,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 10,
+          bc: 9.6,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2458,91 +2450,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 9,
-              "bc": 8.6,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 10,
-              "bc": 9.6,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 9,
+          bc: 8.6,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 10,
+          bc: 9.6,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -2566,43 +2558,43 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4!",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5!",
-              "bb": null,
-              "bc": 5.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4!",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5!",
+          bb: null,
+          bc: 5.5,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2616,91 +2608,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4!",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5!",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4!",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5!",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -2726,19 +2718,19 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 9,
-              "bc": 8.6,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 10,
-              "bc": 9.6,
-            },
-          ]
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 9,
+          bc: 8.6,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 10,
+          bc: 9.6,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2752,91 +2744,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 9,
-              "bc": 8.6,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 10,
-              "bc": 9.6,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 9,
+          bc: 8.6,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 10,
+          bc: 9.6,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -2860,31 +2852,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2898,91 +2890,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3006,31 +2998,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3044,91 +3036,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1!",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1!",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3152,43 +3144,43 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4!",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5!",
-              "bb": null,
-              "bc": 5.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4!",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5!",
+          bb: null,
+          bc: 5.5,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3202,91 +3194,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4!",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5!",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4!",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5!",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3310,43 +3302,43 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4!",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5!",
-              "bb": null,
-              "bc": 5.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4!",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5!",
+          bb: null,
+          bc: 5.5,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3360,91 +3352,91 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2!",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3!",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8!",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9!",
-              "bb": 9,
-              "bc": 9.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4!",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5!",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2!",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3!",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8!",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9!",
+          bb: 9,
+          bc: 9.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4!",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5!",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3453,7 +3445,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete Ba[is Bb];
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -3467,67 +3459,67 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3536,7 +3528,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete Ba[is Bb][is Bc];
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -3550,79 +3542,79 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3631,7 +3623,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete Ba[is Bb | Bc];
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -3645,55 +3637,55 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3702,7 +3694,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete Ba[is Bb & Bc];
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -3716,79 +3708,79 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3797,7 +3789,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete Ba[IS CBa | Bb & Bc];
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -3811,67 +3803,67 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3880,7 +3872,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete {CBa, Ba[IS Bb & Bc]};
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -3894,67 +3886,67 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba4",
-              "bb": null,
-              "bc": 4.5,
-            },
-            {
-              "tn": "default::CBaBc",
-              "ba": "cba5",
-              "bb": null,
-              "bc": 5.5,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba4",
+          bb: null,
+          bc: 4.5,
+        },
+        {
+          tn: "default::CBaBc",
+          ba: "cba5",
+          bb: null,
+          bc: 5.5,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -3963,7 +3955,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete Object[IS (Ba & Bb) | (Ba & Bc)];
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -3977,55 +3969,55 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -4034,7 +4026,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
     h.script(
       `
             delete {Object[IS Ba & Bb], Object[IS Ba & Bc]};
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -4048,55 +4040,55 @@ describe("TestEdgeQLAdvancedTypes", () => {
             order by .tn then .ba then .bb then .bc;
             `,
       [
-            {
-              "tn": "default::CBa",
-              "ba": "cba0",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBa",
-              "ba": "cba1",
-              "bb": null,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 0,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBb",
-              "ba": null,
-              "bb": 1,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 6,
-              "bc": 6.5,
-            },
-            {
-              "tn": "default::CBbBc",
-              "ba": null,
-              "bb": 7,
-              "bc": 7.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 0.5,
-            },
-            {
-              "tn": "default::CBc",
-              "ba": null,
-              "bb": null,
-              "bc": 1.5,
-            },
-          ]
+        {
+          tn: "default::CBa",
+          ba: "cba0",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBa",
+          ba: "cba1",
+          bb: null,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 0,
+          bc: null,
+        },
+        {
+          tn: "default::CBb",
+          ba: null,
+          bb: 1,
+          bc: null,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 6,
+          bc: 6.5,
+        },
+        {
+          tn: "default::CBbBc",
+          ba: null,
+          bb: 7,
+          bc: 7.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 0.5,
+        },
+        {
+          tn: "default::CBc",
+          ba: null,
+          bb: null,
+          bc: 1.5,
+        },
+      ],
     );
   });
 
@@ -4116,31 +4108,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             )
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -4154,31 +4146,31 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       unorderedBag([
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba2",
-              "bb": 2,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBb",
-              "ba": "cba3",
-              "bb": 3,
-              "bc": null,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba8",
-              "bb": 8,
-              "bc": 8.5,
-            },
-            {
-              "tn": "default::CBaBbBc",
-              "ba": "cba9",
-              "bb": 9,
-              "bc": 9.5,
-            },
-          ])
+        {
+          tn: "default::CBaBb",
+          ba: "cba2",
+          bb: 2,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBb",
+          ba: "cba3",
+          bb: 3,
+          bc: null,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba8",
+          bb: 8,
+          bc: 8.5,
+        },
+        {
+          tn: "default::CBaBbBc",
+          ba: "cba9",
+          bb: 9,
+          bc: 9.5,
+        },
+      ]),
     );
   });
 
@@ -4191,7 +4183,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -4201,7 +4193,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -4212,9 +4204,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4224,9 +4220,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4236,9 +4236,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4248,9 +4252,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4260,9 +4268,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4272,9 +4284,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     h.script(
       `
                             select SoloNonCompSinglePropA {
@@ -4283,7 +4299,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -4293,7 +4309,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -4304,9 +4320,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4316,9 +4336,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4328,9 +4352,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4340,9 +4368,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4352,9 +4384,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4364,9 +4400,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4376,9 +4416,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4388,9 +4432,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     h.script(
       `
                             select SoloNonCompMultiPropA {
@@ -4399,7 +4447,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -4409,7 +4457,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -4420,9 +4468,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4432,9 +4484,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4444,9 +4500,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4456,9 +4516,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4468,9 +4532,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4480,9 +4548,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     h.script(
       `
                             select SoloNonCompMultiPropA {
@@ -4491,7 +4563,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -4501,7 +4573,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -4512,9 +4584,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4524,9 +4600,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4536,9 +4616,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4548,9 +4632,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4560,9 +4648,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4572,9 +4664,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4584,9 +4680,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4596,9 +4696,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4608,9 +4712,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4620,9 +4728,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4632,9 +4744,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4644,9 +4760,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4656,9 +4776,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4668,9 +4792,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4680,9 +4808,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4692,9 +4824,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4704,9 +4840,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4716,9 +4856,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4728,9 +4872,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4740,9 +4888,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4752,9 +4904,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4764,9 +4920,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4776,9 +4936,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4788,9 +4952,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4800,9 +4968,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4812,9 +4984,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4824,9 +5000,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4836,9 +5016,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4848,9 +5032,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4860,9 +5048,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4872,9 +5064,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4884,9 +5080,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4896,9 +5096,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4908,9 +5112,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4920,9 +5128,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4932,9 +5144,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     h.script(
       `
                             select DerivedNonCompSinglePropA {
@@ -4943,7 +5159,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -4953,7 +5169,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -4964,9 +5180,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4976,9 +5196,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -4988,9 +5212,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5000,9 +5228,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5012,9 +5244,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5024,9 +5260,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     h.script(
       `
                             select DerivedNonCompSinglePropA {
@@ -5035,7 +5275,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -5045,7 +5285,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -5056,9 +5296,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5068,9 +5312,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5080,9 +5328,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5092,9 +5344,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5104,9 +5360,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5116,9 +5376,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5128,9 +5392,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5140,9 +5408,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     h.script(
       `
                             select DerivedNonCompMultiPropA {
@@ -5151,7 +5423,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -5161,7 +5433,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -5172,9 +5444,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5184,9 +5460,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5196,9 +5476,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5208,9 +5492,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5220,9 +5508,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5232,9 +5524,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a .* to mix with other versions of .* which have a different cardinality",
+      ),
+    );
     h.script(
       `
                             select DerivedNonCompMultiPropA {
@@ -5243,7 +5539,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -5253,7 +5549,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -5264,9 +5560,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5276,9 +5576,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5288,9 +5592,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5300,9 +5608,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5312,9 +5624,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5324,9 +5640,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5336,9 +5656,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5348,9 +5672,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5360,9 +5688,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5372,9 +5704,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5384,9 +5720,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5396,9 +5736,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5408,9 +5752,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5420,9 +5768,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5432,9 +5784,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5444,9 +5800,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     h.script(
       `
                             select DerivedCompSinglePropA {
@@ -5455,7 +5815,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -5465,7 +5825,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
     expect(() => {
       h.script(
@@ -5476,9 +5836,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5488,9 +5852,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5500,9 +5868,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5512,9 +5884,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5524,9 +5900,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5536,9 +5916,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5548,9 +5932,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5560,9 +5948,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5572,9 +5964,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5584,9 +5980,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5596,9 +5996,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5608,9 +6012,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5620,9 +6028,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5632,9 +6044,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5644,9 +6060,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .numbers
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     expect(() => {
       h.script(
         `
@@ -5656,9 +6076,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                         .siblings
                                     )
                                 };
-                            `
+                            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type intersection that causes a computed .* to mix with other versions of the same .*",
+      ),
+    );
     h.script(
       `
                             select DerivedCompMultiPropA {
@@ -5667,7 +6091,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .numbers
                                 )
                             };
-                        `
+                        `,
     );
     h.script(
       `
@@ -5677,7 +6101,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
                                     .siblings
                                 )
                             };
-                        `
+                        `,
     );
   });
 
@@ -5686,7 +6110,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
       `
             INSERT SoloOriginA { dest := (INSERT Destination{ name := "A" }) };
             INSERT SoloOriginB { dest := (INSERT Destination{ name := "B" }) };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5696,10 +6120,10 @@ describe("TestEdgeQLAdvancedTypes", () => {
             }
             `,
       [
-            {
-              "x": null,
-            },
-          ]
+        {
+          x: null,
+        },
+      ],
     );
   });
 
@@ -5711,7 +6135,7 @@ describe("TestEdgeQLAdvancedTypes", () => {
             INSERT DerivedOriginC {
                 dest := (INSERT Destination{ name := "C" })
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -5722,13 +6146,13 @@ describe("TestEdgeQLAdvancedTypes", () => {
             ORDER BY .x
             `,
       [
-            {
-              "x": null,
-            },
-            {
-              "x": "C",
-            },
-          ]
+        {
+          x: null,
+        },
+        {
+          x: "C",
+        },
+      ],
     );
   });
 });

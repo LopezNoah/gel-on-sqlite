@@ -51,7 +51,12 @@ export const evalTypeNarrowing = (
     case "type_intersection":
       // `value[IS T]` is the same check as `value IS T` over the operand.
       return evalTypeNarrowing(
-        { kind: "is_type", expr: expr.expr, typeName: expr.sourceType, typeExpr: expr.sourceTypeExpr },
+        {
+          kind: "is_type",
+          expr: expr.expr,
+          typeName: expr.sourceType,
+          typeExpr: expr.sourceTypeExpr,
+        },
         env,
         deps,
       );
@@ -60,7 +65,8 @@ export const evalTypeNarrowing = (
       const value = evalExpr(expr.expr, env);
       const typeDef = schema.getType(qualifyRuntimeTypeName(expr.typeName));
       const enumValues = typeDef?.fields.flatMap((field) => field.enumValues ?? []) ?? [];
-      const checkOne = (item: unknown) => enumValues.length > 0 && typeof item === "string" && enumValues.includes(item);
+      const checkOne = (item: unknown) =>
+        enumValues.length > 0 && typeof item === "string" && enumValues.includes(item);
       if (enumValues.length === 0) {
         const qualified = qualifyRuntimeTypeName(expr.typeName);
         const items = Array.isArray(value) ? value : [value];
@@ -74,11 +80,16 @@ export const evalTypeNarrowing = (
           const isStr = typeof item === "string";
           const isBool = typeof item === "boolean";
           switch (last) {
-            case "anyscalar": return true;
-            case "anytype": return true;
-            case "anyreal": return typeof item === "number";
-            case "anyint": return isInt;
-            case "anyfloat": return isFloat;
+            case "anyscalar":
+              return true;
+            case "anytype":
+              return true;
+            case "anyreal":
+              return typeof item === "number";
+            case "anyint":
+              return isInt;
+            case "anyfloat":
+              return isFloat;
             case "int64":
               return isInt;
             case "int16":
@@ -106,15 +117,21 @@ export const evalTypeNarrowing = (
           }
         };
         // If all items are primitives, this is a scalar IS check — return boolean(s).
-        if (items.length > 0 && items.every((item) => item !== null && item !== undefined && typeof item !== "object")) {
+        if (
+          items.length > 0 &&
+          items.every((item) => item !== null && item !== undefined && typeof item !== "object")
+        ) {
           const results = items.map((item) => scalarTypeCheck(item) ?? false);
           return Array.isArray(value) ? results : results[0];
         }
         return items.filter((item) => {
           if (!item || typeof item !== "object" || Array.isArray(item)) return false;
           const sourceType = (item as Record<string, unknown>).__source_type;
-          return typeof sourceType === "string"
-            && (sourceType === qualified || schema.concreteTypeNamesUnder(qualified).includes(sourceType));
+          return (
+            typeof sourceType === "string" &&
+            (sourceType === qualified ||
+              schema.concreteTypeNamesUnder(qualified).includes(sourceType))
+          );
         });
       }
       return Array.isArray(value) ? value.map(checkOne) : checkOne(value);

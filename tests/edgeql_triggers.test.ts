@@ -740,5 +740,4 @@ describe("TestTriggers", () => {
             };`;
     void _q2;
   });
-
 });

@@ -116,11 +116,15 @@ class BaseTriggerCommand {
     return (this.localAttributes[name] ?? this.scls.data[name]) as TriggerData[K] | undefined;
   }
 
-  protected getOrigAttributeValue<K extends keyof TriggerData>(name: K): TriggerData[K] | undefined {
+  protected getOrigAttributeValue<K extends keyof TriggerData>(
+    name: K,
+  ): TriggerData[K] | undefined {
     return this.scls.data[name];
   }
 
-  protected getLocalAttributeValue<K extends keyof TriggerData>(name: K): TriggerData[K] | undefined {
+  protected getLocalAttributeValue<K extends keyof TriggerData>(
+    name: K,
+  ): TriggerData[K] | undefined {
     return this.localAttributes[name] as TriggerData[K] | undefined;
   }
 
@@ -137,7 +141,10 @@ class BaseTriggerCommand {
 }
 
 export class TriggerCommand extends BaseTriggerCommand {
-  canonicalizeAttributes(schema: TriggerSchema, context: TriggerCommandContextState): TriggerSchema {
+  canonicalizeAttributes(
+    schema: TriggerSchema,
+    context: TriggerCommandContextState,
+  ): TriggerSchema {
     const source = this.getReferrerContextOrDie().op.scls;
     const trigName = this.getVerbosename(source.getVerbosename(schema));
 
@@ -148,18 +155,15 @@ export class TriggerCommand extends BaseTriggerCommand {
       }
 
       const vname = field === "condition" ? "when" : "using";
-      const compiled = this.compileExprField(
-        schema,
-        context,
-        { name: field },
-        expr,
-      );
+      const compiled = this.compileExprField(schema, context, { name: field }, expr);
 
       if (field === "condition") {
         const target = schema.getType("std::bool");
         const exprType = (compiled.irast as TriggerIRLike).stype;
         if (!target) {
-          throw new errors.SchemaDefinitionError("missing std::bool in schema while validating trigger condition");
+          throw new errors.SchemaDefinitionError(
+            "missing std::bool in schema while validating trigger condition",
+          );
         }
         if (!exprType?.issubclass(schema, target)) {
           throw new errors.SchemaDefinitionError(
@@ -212,9 +216,7 @@ export class TriggerCommand extends BaseTriggerCommand {
         };
       }
 
-      const singletons = scope === TriggerScope.Each
-        ? new Set(Object.values(anchors))
-        : new Set();
+      const singletons = scope === TriggerScope.Each ? new Set(Object.values(anchors)) : new Set();
 
       try {
         return value.compiled({
@@ -281,7 +283,10 @@ export class CreateTrigger extends TriggerCommand {
   static readonly referencedAstnode = "CreateTrigger" as const;
 
   getAstAttrForField(field: string, astnode: string): string | undefined {
-    if (["timing", "condition", "kinds", "scope", "expr"].includes(field) && astnode === "CreateTrigger") {
+    if (
+      ["timing", "condition", "kinds", "scope", "expr"].includes(field) &&
+      astnode === "CreateTrigger"
+    ) {
       return field;
     }
     return undefined;
@@ -294,27 +299,33 @@ export class CreateTrigger extends TriggerCommand {
     cmd: CreateTrigger,
   ): CreateTrigger {
     if (astnode.expr) {
-      cmd.setAttributeValue("expr", Expression.fromAst(
-        astnode.expr,
-        {
-          ...schema,
-          hasObject: () => true,
-        },
-        context.modaliases ?? {},
-        context.localnames ?? new Set(),
-      ));
+      cmd.setAttributeValue(
+        "expr",
+        Expression.fromAst(
+          astnode.expr,
+          {
+            ...schema,
+            hasObject: () => true,
+          },
+          context.modaliases ?? {},
+          context.localnames ?? new Set(),
+        ),
+      );
     }
 
     if (astnode.condition) {
-      cmd.setAttributeValue("condition", Expression.fromAst(
-        astnode.condition,
-        {
-          ...schema,
-          hasObject: () => true,
-        },
-        context.modaliases ?? {},
-        context.localnames ?? new Set(),
-      ));
+      cmd.setAttributeValue(
+        "condition",
+        Expression.fromAst(
+          astnode.condition,
+          {
+            ...schema,
+            hasObject: () => true,
+          },
+          context.modaliases ?? {},
+          context.localnames ?? new Set(),
+        ),
+      );
     }
 
     cmd.setAttributeValue("timing", astnode.timing);

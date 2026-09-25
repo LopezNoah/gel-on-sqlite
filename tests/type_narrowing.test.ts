@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { loadSchema } from "../src/schema/load.js";
-import { evalTypeNarrowing, type NarrowingEnv, type TypeNarrowingDeps, type TypeNarrowingExpr } from "../src/runtime/type_narrowing.js";
+import {
+  evalTypeNarrowing,
+  type NarrowingEnv,
+  type TypeNarrowingDeps,
+  type TypeNarrowingExpr,
+} from "../src/runtime/type_narrowing.js";
 import type { FreeObjectExpr } from "../src/edgeql/ast.js";
 
 // Runtime `[IS T]` narrowing used to be four cases buried in the 39-case
@@ -11,12 +16,15 @@ import type { FreeObjectExpr } from "../src/edgeql/ast.js";
 // deferred). The narrowing keys off `concreteTypeNamesUnder`, the same
 // concrete-type closure the SQL path uses.
 
-const schema = loadSchema(`module default {
+const schema = loadSchema(
+  `module default {
   abstract type Animal { required name: str; }
   type Dog extending Animal {}
   type Cat extending Animal {}
   type Plant { required name: str; }
-}`, { legacySyntaxCompat: true });
+}`,
+  { legacySyntaxCompat: true },
+);
 
 // evalExpr is stubbed to return a fixed operand: the narrowing logic under test
 // never depends on *how* the operand is produced, only on its `__source_type`.
@@ -28,7 +36,8 @@ const depsFor = (operand: unknown): TypeNarrowingDeps => ({
 
 const placeholder = { kind: "literal", value: 0 } as unknown as FreeObjectExpr;
 const dogRow = { __source_type: "default::Dog", name: "Rex" };
-const envWith = (current: unknown): NarrowingEnv => new Map<string, unknown>([["__current__", current]]);
+const envWith = (current: unknown): NarrowingEnv =>
+  new Map<string, unknown>([["__current__", current]]);
 
 describe("evalTypeNarrowing — direct seam", () => {
   it("is_type keeps a row whose __source_type is under the (abstract) target", () => {
@@ -49,8 +58,16 @@ describe("evalTypeNarrowing — direct seam", () => {
   });
 
   it("type_intersection is the same check as is_type over the operand", () => {
-    const hit = { kind: "type_intersection", sourceType: "Animal", expr: placeholder } as TypeNarrowingExpr;
-    const miss = { kind: "type_intersection", sourceType: "Plant", expr: placeholder } as TypeNarrowingExpr;
+    const hit = {
+      kind: "type_intersection",
+      sourceType: "Animal",
+      expr: placeholder,
+    } as TypeNarrowingExpr;
+    const miss = {
+      kind: "type_intersection",
+      sourceType: "Plant",
+      expr: placeholder,
+    } as TypeNarrowingExpr;
     expect(evalTypeNarrowing(hit, new Map(), depsFor(dogRow))).toEqual([dogRow]);
     expect(evalTypeNarrowing(miss, new Map(), depsFor(dogRow))).toEqual([]);
   });
@@ -62,8 +79,16 @@ describe("evalTypeNarrowing — direct seam", () => {
   });
 
   it("polymorphic_field_ref returns the field only when the row matches the source type", () => {
-    const underBase = { kind: "polymorphic_field_ref", sourceType: "Animal", field: "name" } as TypeNarrowingExpr;
-    const underOther = { kind: "polymorphic_field_ref", sourceType: "Plant", field: "name" } as TypeNarrowingExpr;
+    const underBase = {
+      kind: "polymorphic_field_ref",
+      sourceType: "Animal",
+      field: "name",
+    } as TypeNarrowingExpr;
+    const underOther = {
+      kind: "polymorphic_field_ref",
+      sourceType: "Plant",
+      field: "name",
+    } as TypeNarrowingExpr;
     expect(evalTypeNarrowing(underBase, envWith(dogRow), depsFor(undefined))).toBe("Rex");
     expect(evalTypeNarrowing(underOther, envWith(dogRow), depsFor(undefined))).toBeNull();
   });

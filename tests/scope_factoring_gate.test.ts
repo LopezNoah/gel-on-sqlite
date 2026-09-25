@@ -36,11 +36,7 @@ describe("scope-tree factoring drives count((tuple))", () => {
     );
     assertQueryResult(h, "SELECT count(User.deck.cost);", [9]);
     assertQueryResult(h, "SELECT sum(User.deck.cost);", [22]);
-    assertQueryResult(
-      h,
-      "SELECT DISTINCT User.deck.cost;",
-      unorderedSet([1, 2, 3, 4, 5]),
-    );
+    assertQueryResult(h, "SELECT DISTINCT User.deck.cost;", unorderedSet([1, 2, 3, 4, 5]));
   });
 
   it("distinguishes edge rows, target identities, and equal scalar values", async () => {
@@ -80,18 +76,10 @@ describe("scope-tree factoring drives count((tuple))", () => {
   });
 
   it("deduplicates each pointer factor before tuple count", () => {
-    assertQueryResult(
-      h,
-      "SELECT count((Card.owners.name, Card.owners.id));",
-      [16],
-    );
+    assertQueryResult(h, "SELECT count((Card.owners.name, Card.owners.id));", [16]);
   });
 
   it("counts a computed aggregate leaf once per correlated pointer target", () => {
-    assertQueryResult(
-      h,
-      "SELECT count((Card.owners.name, Card.owners.deck_cost));",
-      [16],
-    );
+    assertQueryResult(h, "SELECT count((Card.owners.name, Card.owners.deck_cost));", [16]);
   });
 });

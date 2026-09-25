@@ -36,58 +36,57 @@ export interface D1DatabaseLike {
 // D1's `.bind()` is a no-op with no params, but calling it with zero arguments
 // is also legal; we skip it so a parameterless statement reuses the prepared
 // statement directly. Params are normalized for D1's stricter binding.
-const bound = (
-  d1: D1DatabaseLike,
-  sql: string,
-  params: ScalarValue[],
-): D1PreparedStatementLike => {
+const bound = (d1: D1DatabaseLike, sql: string, params: ScalarValue[]): D1PreparedStatementLike => {
   const stmt = d1.prepare(sql);
   const normalized = normalizeBindParams(params);
   return normalized.length > 0 ? stmt.bind(...normalized) : stmt;
 };
 
-export const createD1Adapter = (d1: D1DatabaseLike): AsyncRuntimeDatabaseAdapter => ({
-  target: "d1",
-  prepare: (sql: string): AsyncRuntimeStatement => ({
-    all: async (...params: ScalarValue[]) => {
-      try {
-        const result = await bound(d1, sql, params).all();
-        return result.results ?? [];
-      } catch (err) {
-        throw wrapBackendError("d1", err);
-      }
-    },
-    run: async (...params: ScalarValue[]) => {
-      try {
-        const result = await bound(d1, sql, params).run();
-        return { changes: result.meta?.changes ?? 0 };
-      } catch (err) {
-        throw wrapBackendError("d1", err);
-      }
-    },
-  }),
-  // Run several statements in a single D1 round-trip (network hop). Falls back
-  // is handled by the caller when this is absent; here we forward to D1's
-  // native batch when the binding supports it.
-  batch: d1.batch
-    ? async (statements: BatchStatement[]) => {
+export const createD1Adapter = (d1: D1DatabaseLike): AsyncRuntimeDatabaseAdapter => {
+  const batch = d1.batch?.bind(d1);
+  return {
+    target: "d1",
+    prepare: (sql: string): AsyncRuntimeStatement => ({
+      all: async (...params: ScalarValue[]) => {
         try {
-          const prepared = statements.map((s) => bound(d1, s.sql, s.params));
-          const results = await d1.batch!(prepared);
-          return results.map((r) => r.results ?? []);
+          const result = await bound(d1, sql, params).all();
+          return result.results ?? [];
         } catch (err) {
           throw wrapBackendError("d1", err);
         }
+      },
+      run: async (...params: ScalarValue[]) => {
+        try {
+          const result = await bound(d1, sql, params).run();
+          return { changes: result.meta?.changes ?? 0 };
+        } catch (err) {
+          throw wrapBackendError("d1", err);
+        }
+      },
+    }),
+    // Run several statements in a single D1 round-trip (network hop). Falls back
+    // is handled by the caller when this is absent; here we forward to D1's
+    // native batch when the binding supports it.
+    batch: batch
+      ? async (statements: BatchStatement[]) => {
+          try {
+            const prepared = statements.map((s) => bound(d1, s.sql, s.params));
+            const results = await batch(prepared);
+            return results.map((r) => r.results ?? []);
+          } catch (err) {
+            throw wrapBackendError("d1", err);
+          }
+        }
+      : undefined,
+    // D1 connections are bindings with no lifecycle to release.
+    close: async () => {},
+    // D1 has no PRAGMA surface; intentionally omitted (the field is optional).
+    exec: async (sql: string) => {
+      try {
+        await d1.exec(sql);
+      } catch (err) {
+        throw wrapBackendError("d1", err);
       }
-    : undefined,
-  // D1 connections are bindings with no lifecycle to release.
-  close: async () => {},
-  // D1 has no PRAGMA surface; intentionally omitted (the field is optional).
-  exec: async (sql: string) => {
-    try {
-      await d1.exec(sql);
-    } catch (err) {
-      throw wrapBackendError("d1", err);
-    }
-  },
-});
+    },
+  };
+};

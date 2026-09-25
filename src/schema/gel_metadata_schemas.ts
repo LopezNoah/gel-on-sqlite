@@ -274,6 +274,8 @@ export type GelSchemaMetadata = z.infer<typeof GelSchemaMetadataSchema>;
 export const validateMetadata = (kind: string, metadata: unknown): void => {
   const result = GelSchemaMetadataSchema.safeParse({ kind, metadata });
   if (!result.success) {
-    throw new Error(`Invalid ${kind} metadata: ${result.error.errors.map((e) => e.message).join(", ")}`);
+    throw new Error(
+      `Invalid ${kind} metadata: ${result.error.errors.map((e) => e.message).join(", ")}`,
+    );
   }
 };

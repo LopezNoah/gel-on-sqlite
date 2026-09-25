@@ -39,7 +39,8 @@ export class GelTableDecoder {
   // ids fall back to `str` (the legacy default).
   scalarType(targetTypeId: string | undefined): ScalarType {
     if (!targetTypeId) return "str";
-    if (targetTypeId.startsWith("scalar_")) return targetTypeId.replace("scalar_", "") as ScalarType;
+    if (targetTypeId.startsWith("scalar_"))
+      return targetTypeId.replace("scalar_", "") as ScalarType;
     const row = this.idToRow.get(targetTypeId);
     if (row) return row.name as ScalarType;
     return "str";
@@ -88,7 +89,9 @@ export class GelTableDecoder {
 
 // --- Pure metadata-string parsers (no row context) -------------------------
 
-export const parseComputedPropertyExpr = (exprStr: string): Extract<ComputedDef, { kind: "property" }>["expr"] => {
+export const parseComputedPropertyExpr = (
+  exprStr: string,
+): Extract<ComputedDef, { kind: "property" }>["expr"] => {
   const aggregateMatch = exprStr.match(/^\s*sum\(\.([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\)\s*$/i);
   if (aggregateMatch) {
     return {
@@ -114,10 +117,20 @@ export const parseComputedPropertyExpr = (exprStr: string): Extract<ComputedDef,
   return { kind: "literal", value: exprStr };
 };
 
-export const parseComputedLinkExpr = (exprStr: string): { kind: "link_ref"; link: string; filter?: { field: string; op: "=" | "!=" | "like" | "ilike"; value: ScalarValue } } | { kind: "backlink"; link: string; sourceType?: string } => {
+export const parseComputedLinkExpr = (
+  exprStr: string,
+):
+  | {
+      kind: "link_ref";
+      link: string;
+      filter?: { field: string; op: "=" | "!=" | "like" | "ilike"; value: ScalarValue };
+    }
+  | { kind: "backlink"; link: string; sourceType?: string } => {
   if (exprStr.startsWith(".<")) {
     const link = exprStr.slice(2).split("[")[0];
-    const sourceType = exprStr.includes("[is ") ? exprStr.split("[is ")[1]?.split("]")[0] : undefined;
+    const sourceType = exprStr.includes("[is ")
+      ? exprStr.split("[is ")[1]?.split("]")[0]
+      : undefined;
     return { kind: "backlink", link, sourceType };
   }
   return { kind: "link_ref", link: exprStr.slice(1) };
@@ -140,7 +153,9 @@ export const parseRewriteExpr = (exprStr: string): MutationRewriteExpr => {
   }
 };
 
-export const parseScalarValueFromMetadata = (value: string | undefined | null): ScalarValue | undefined => {
+export const parseScalarValueFromMetadata = (
+  value: string | undefined | null,
+): ScalarValue | undefined => {
   if (value === undefined || value === null) {
     return undefined;
   }

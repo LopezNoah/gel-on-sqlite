@@ -101,13 +101,15 @@ export const runDbEffectAsync = async <T>(effect: DbEffect<T>, exec: AsyncDbExec
 };
 
 /** A sync executor over anything with `prepare(sql) → { all, run }`. */
-export const syncDbExec = (db: { prepare: (sql: string) => RuntimeStatement }): SyncDbExec =>
+export const syncDbExec =
+  (db: { prepare: (sql: string) => RuntimeStatement }): SyncDbExec =>
   (op) =>
     op.kind === "all" ? db.prepare(op.sql).all(...op.params) : db.prepare(op.sql).run(...op.params);
 
 /** An async executor over anything with async `prepare(sql) → { all, run }`
  *  (the D1 / DO async adapters). */
-export const asyncDbExec = (db: { prepare: (sql: string) => AsyncRuntimeStatement }): AsyncDbExec =>
+export const asyncDbExec =
+  (db: { prepare: (sql: string) => AsyncRuntimeStatement }): AsyncDbExec =>
   async (op) =>
     op.kind === "all"
       ? await db.prepare(op.sql).all(...op.params)

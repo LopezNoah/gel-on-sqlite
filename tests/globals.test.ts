@@ -26,7 +26,11 @@ const deps = (row: unknown): GlobalsDeps => ({
 });
 
 const setGlobal = (target: string, value: unknown): ConfigureStatement =>
-  ({ target, operation: "set", value: { kind: "literal", value } }) as unknown as ConfigureStatement;
+  ({
+    target,
+    operation: "set",
+    value: { kind: "literal", value },
+  }) as unknown as ConfigureStatement;
 const resetGlobal = (target: string): ConfigureStatement =>
   ({ target, operation: "reset" }) as unknown as ConfigureStatement;
 
@@ -60,7 +64,11 @@ describe("normalizeQueryVariables", () => {
   });
 
   it("maps a named object, JSON-encoding nested values and nulling undefined", () => {
-    expect(normalizeQueryVariables({ name: "x", flag: false, obj: { a: 1 }, n: null }))
-      .toEqual({ name: "x", flag: 0, obj: '{"a":1}', n: null });
+    expect(normalizeQueryVariables({ name: "x", flag: false, obj: { a: 1 }, n: null })).toEqual({
+      name: "x",
+      flag: 0,
+      obj: '{"a":1}',
+      n: null,
+    });
   });
 });

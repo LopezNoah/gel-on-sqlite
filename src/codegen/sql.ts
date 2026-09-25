@@ -41,8 +41,7 @@ import { qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 export const tableNameForType = (qualifiedName: string): string =>
   qualifiedName.replaceAll("::", "__").toLowerCase();
 
-export const quoteIdent = (ident: string): string =>
-  `"${ident.replaceAll('"', '""')}"`;
+export const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
 
 export const quoteLiteral = (value: ScalarValue): string => {
   if (value === null) return "NULL";
@@ -84,9 +83,7 @@ export const collectFields = (
   if (!typeDef) return [];
 
   const inherited = includeInherited
-    ? (typeDef.extends ?? []).flatMap((baseName) =>
-        collectFields(baseName, schema, true, seen),
-      )
+    ? (typeDef.extends ?? []).flatMap((baseName) => collectFields(baseName, schema, true, seen))
     : [];
 
   return dedupeByName([...typeDef.fields, ...inherited]);
@@ -105,9 +102,7 @@ export const collectLinks = (
   if (!typeDef) return [];
 
   const inherited = includeInherited
-    ? (typeDef.extends ?? []).flatMap((baseName) =>
-        collectLinks(baseName, schema, true, seen),
-      )
+    ? (typeDef.extends ?? []).flatMap((baseName) => collectLinks(baseName, schema, true, seen))
     : [];
 
   return dedupeByName([...(typeDef.links ?? []), ...inherited]);
@@ -129,20 +124,14 @@ export const linkTableName = (parentQualifiedName: string, link: LinkDef): strin
   `${tableNameForType(parentQualifiedName)}__${link.name.toLowerCase()}`;
 
 /** The multi-value property table name. */
-export const multiPropertyTableName = (
-  parentQualifiedName: string,
-  field: FieldDef,
-): string =>
+export const multiPropertyTableName = (parentQualifiedName: string, field: FieldDef): string =>
   `${tableNameForType(parentQualifiedName)}__${field.name.toLowerCase()}`;
 
 // ---------------------------------------------------------------------------
 // SQL expression / trigger helpers (mirroring migrations.ts)
 // ---------------------------------------------------------------------------
 
-export const rewriteExprToSQL = (
-  expr: MutationRewriteExpr,
-  phase: "insert" | "update",
-): string => {
+export const rewriteExprToSQL = (expr: MutationRewriteExpr, phase: "insert" | "update"): string => {
   switch (expr.kind) {
     case "datetime_of_statement":
       return "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
@@ -151,26 +140,20 @@ export const rewriteExprToSQL = (
     case "subject_field":
       return `NEW.${quoteIdent(expr.field)}`;
     case "old_field":
-      if (phase === "insert")
-        throw new Error("Cannot reference __old__ in insert rewrite");
+      if (phase === "insert") throw new Error("Cannot reference __old__ in insert rewrite");
       return `OLD.${quoteIdent(expr.field)}`;
     default:
       return "NULL";
   }
 };
 
-export const triggerExprToSQL = (
-  expr: TriggerValueExpr,
-  event: TriggerDef["event"],
-): string => {
+export const triggerExprToSQL = (expr: TriggerValueExpr, event: TriggerDef["event"]): string => {
   if (expr.kind === "literal") return quoteLiteral(expr.value);
   if (expr.kind === "new_field") {
-    if (event === "delete")
-      throw new Error("Cannot reference __new__ in delete trigger");
+    if (event === "delete") throw new Error("Cannot reference __new__ in delete trigger");
     return `NEW.${quoteIdent(expr.field)}`;
   }
-  if (event === "insert")
-    throw new Error("Cannot reference __old__ in insert trigger");
+  if (event === "insert") throw new Error("Cannot reference __old__ in insert trigger");
   return `OLD.${quoteIdent(expr.field)}`;
 };
 
@@ -240,7 +223,8 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
     for (const field of allFields) {
       if (field.multi) continue; // multi-property → separate table
       // Skip auto-generated inline link _id fields — we add those from links below
-      if (field.name.endsWith("_id") && allLinks.some((l) => `${l.name}_id` === field.name)) continue;
+      if (field.name.endsWith("_id") && allLinks.some((l) => `${l.name}_id` === field.name))
+        continue;
       const sqlType = scalarToSqlType(field.type);
       let colDef = `${quoteIdent(field.name)} ${sqlType}`;
       if (field.required) colDef += " NOT NULL";
@@ -268,9 +252,7 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
     }
 
     // CREATE main table
-    lines.push(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${columns.join(", ")})`,
-    );
+    lines.push(`CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${columns.join(", ")})`);
 
     // Exclusive-constraint indexes: any field tagged with `constraint exclusive`
     // becomes a UNIQUE index in SQLite. This makes EdgeQL's "violates
@@ -280,10 +262,12 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
     // is *not* enforced here; that needs cross-table coordination.)
     for (const field of allFields) {
       if (field.multi) continue;
-      if (field.name.endsWith("_id") && allLinks.some((l) => `${l.name}_id` === field.name)) continue;
-      const fieldConstraints = (field as { constraints?: Array<{ name: string }> }).constraints ?? [];
-      const isExclusive = fieldConstraints.some((c) =>
-        c.name === "std::exclusive" || c.name === "exclusive"
+      if (field.name.endsWith("_id") && allLinks.some((l) => `${l.name}_id` === field.name))
+        continue;
+      const fieldConstraints =
+        (field as { constraints?: Array<{ name: string }> }).constraints ?? [];
+      const isExclusive = fieldConstraints.some(
+        (c) => c.name === "std::exclusive" || c.name === "exclusive",
       );
       if (isExclusive) {
         lines.push(
@@ -339,9 +323,7 @@ export const renderSchemaSQL = (schema: SchemaSnapshot): string => {
         }
       }
       linkColumns.push(`PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")})`);
-      lines.push(
-        `CREATE TABLE IF NOT EXISTS ${quoteIdent(lt)} (${linkColumns.join(", ")})`,
-      );
+      lines.push(`CREATE TABLE IF NOT EXISTS ${quoteIdent(lt)} (${linkColumns.join(", ")})`);
       lines.push(
         `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${lt}__target_source`)} ON ${quoteIdent(lt)} (${quoteIdent("target")}, ${quoteIdent("source")})`,
       );

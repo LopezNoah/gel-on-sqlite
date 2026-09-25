@@ -4,7 +4,10 @@
 // of the known architectural patterns — those are the "tractable" failures.
 import fs from "node:fs";
 import path from "node:path";
-import { categorizeUnsupportedQuery, type UnsupportedCategory } from "../src/diagnostics/unsupported.js";
+import {
+  categorizeUnsupportedQuery,
+  type UnsupportedCategory,
+} from "../src/diagnostics/unsupported.js";
 
 const outputPath = process.argv[2] ?? "/tmp/after_tag2.txt";
 const text = fs.readFileSync(outputPath, "utf8");
@@ -91,7 +94,9 @@ for (const f of untouched) {
   if (arr.length < 10) arr.push(f.testName);
   samplesByFile.set(f.file, arr);
 }
-for (const [file, names] of [...samplesByFile.entries()].sort((a, b) => ((byFile.get(b[0]) ?? 0) - (byFile.get(a[0]) ?? 0))).slice(0, 8)) {
+for (const [file, names] of [...samplesByFile.entries()]
+  .sort((a, b) => (byFile.get(b[0]) ?? 0) - (byFile.get(a[0]) ?? 0))
+  .slice(0, 8)) {
   console.log(`\n  ${file} (${byFile.get(file)}):`);
   for (const n of names) console.log(`    ${n}`);
 }

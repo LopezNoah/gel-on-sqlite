@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
-import {
-  assertQueryResult,
-  unorderedBag,
-  unorderedSet
-} from "./python_query_test_helpers.js";
+import { assertQueryResult, unorderedBag, unorderedSet } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLFor", () => {
   let h: QueryHarness;
@@ -12,7 +8,7 @@ describe("TestEdgeQLFor", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "cards",
-      setup: "cards_setup"
+      setup: "cards_setup",
     });
   });
 
@@ -25,88 +21,88 @@ describe("TestEdgeQLFor", () => {
                 UNION (C.name, Card.name);
             `,
       unorderedBag([
-            ["Bog monster", "Bog monster"],
-            ["Bog monster", "Djinn"],
-            ["Bog monster", "Dragon"],
-            ["Bog monster", "Dwarf"],
-            ["Bog monster", "Giant eagle"],
-            ["Bog monster", "Giant turtle"],
-            ["Bog monster", "Golem"],
-            ["Bog monster", "Imp"],
-            ["Bog monster", "Sprite"],
-            ["Djinn", "Bog monster"],
-            ["Djinn", "Djinn"],
-            ["Djinn", "Dragon"],
-            ["Djinn", "Dwarf"],
-            ["Djinn", "Giant eagle"],
-            ["Djinn", "Giant turtle"],
-            ["Djinn", "Golem"],
-            ["Djinn", "Imp"],
-            ["Djinn", "Sprite"],
-            ["Dragon", "Bog monster"],
-            ["Dragon", "Djinn"],
-            ["Dragon", "Dragon"],
-            ["Dragon", "Dwarf"],
-            ["Dragon", "Giant eagle"],
-            ["Dragon", "Giant turtle"],
-            ["Dragon", "Golem"],
-            ["Dragon", "Imp"],
-            ["Dragon", "Sprite"],
-            ["Dwarf", "Bog monster"],
-            ["Dwarf", "Djinn"],
-            ["Dwarf", "Dragon"],
-            ["Dwarf", "Dwarf"],
-            ["Dwarf", "Giant eagle"],
-            ["Dwarf", "Giant turtle"],
-            ["Dwarf", "Golem"],
-            ["Dwarf", "Imp"],
-            ["Dwarf", "Sprite"],
-            ["Giant eagle", "Bog monster"],
-            ["Giant eagle", "Djinn"],
-            ["Giant eagle", "Dragon"],
-            ["Giant eagle", "Dwarf"],
-            ["Giant eagle", "Giant eagle"],
-            ["Giant eagle", "Giant turtle"],
-            ["Giant eagle", "Golem"],
-            ["Giant eagle", "Imp"],
-            ["Giant eagle", "Sprite"],
-            ["Giant turtle", "Bog monster"],
-            ["Giant turtle", "Djinn"],
-            ["Giant turtle", "Dragon"],
-            ["Giant turtle", "Dwarf"],
-            ["Giant turtle", "Giant eagle"],
-            ["Giant turtle", "Giant turtle"],
-            ["Giant turtle", "Golem"],
-            ["Giant turtle", "Imp"],
-            ["Giant turtle", "Sprite"],
-            ["Golem", "Bog monster"],
-            ["Golem", "Djinn"],
-            ["Golem", "Dragon"],
-            ["Golem", "Dwarf"],
-            ["Golem", "Giant eagle"],
-            ["Golem", "Giant turtle"],
-            ["Golem", "Golem"],
-            ["Golem", "Imp"],
-            ["Golem", "Sprite"],
-            ["Imp", "Bog monster"],
-            ["Imp", "Djinn"],
-            ["Imp", "Dragon"],
-            ["Imp", "Dwarf"],
-            ["Imp", "Giant eagle"],
-            ["Imp", "Giant turtle"],
-            ["Imp", "Golem"],
-            ["Imp", "Imp"],
-            ["Imp", "Sprite"],
-            ["Sprite", "Bog monster"],
-            ["Sprite", "Djinn"],
-            ["Sprite", "Dragon"],
-            ["Sprite", "Dwarf"],
-            ["Sprite", "Giant eagle"],
-            ["Sprite", "Giant turtle"],
-            ["Sprite", "Golem"],
-            ["Sprite", "Imp"],
-            ["Sprite", "Sprite"],
-          ])
+        ["Bog monster", "Bog monster"],
+        ["Bog monster", "Djinn"],
+        ["Bog monster", "Dragon"],
+        ["Bog monster", "Dwarf"],
+        ["Bog monster", "Giant eagle"],
+        ["Bog monster", "Giant turtle"],
+        ["Bog monster", "Golem"],
+        ["Bog monster", "Imp"],
+        ["Bog monster", "Sprite"],
+        ["Djinn", "Bog monster"],
+        ["Djinn", "Djinn"],
+        ["Djinn", "Dragon"],
+        ["Djinn", "Dwarf"],
+        ["Djinn", "Giant eagle"],
+        ["Djinn", "Giant turtle"],
+        ["Djinn", "Golem"],
+        ["Djinn", "Imp"],
+        ["Djinn", "Sprite"],
+        ["Dragon", "Bog monster"],
+        ["Dragon", "Djinn"],
+        ["Dragon", "Dragon"],
+        ["Dragon", "Dwarf"],
+        ["Dragon", "Giant eagle"],
+        ["Dragon", "Giant turtle"],
+        ["Dragon", "Golem"],
+        ["Dragon", "Imp"],
+        ["Dragon", "Sprite"],
+        ["Dwarf", "Bog monster"],
+        ["Dwarf", "Djinn"],
+        ["Dwarf", "Dragon"],
+        ["Dwarf", "Dwarf"],
+        ["Dwarf", "Giant eagle"],
+        ["Dwarf", "Giant turtle"],
+        ["Dwarf", "Golem"],
+        ["Dwarf", "Imp"],
+        ["Dwarf", "Sprite"],
+        ["Giant eagle", "Bog monster"],
+        ["Giant eagle", "Djinn"],
+        ["Giant eagle", "Dragon"],
+        ["Giant eagle", "Dwarf"],
+        ["Giant eagle", "Giant eagle"],
+        ["Giant eagle", "Giant turtle"],
+        ["Giant eagle", "Golem"],
+        ["Giant eagle", "Imp"],
+        ["Giant eagle", "Sprite"],
+        ["Giant turtle", "Bog monster"],
+        ["Giant turtle", "Djinn"],
+        ["Giant turtle", "Dragon"],
+        ["Giant turtle", "Dwarf"],
+        ["Giant turtle", "Giant eagle"],
+        ["Giant turtle", "Giant turtle"],
+        ["Giant turtle", "Golem"],
+        ["Giant turtle", "Imp"],
+        ["Giant turtle", "Sprite"],
+        ["Golem", "Bog monster"],
+        ["Golem", "Djinn"],
+        ["Golem", "Dragon"],
+        ["Golem", "Dwarf"],
+        ["Golem", "Giant eagle"],
+        ["Golem", "Giant turtle"],
+        ["Golem", "Golem"],
+        ["Golem", "Imp"],
+        ["Golem", "Sprite"],
+        ["Imp", "Bog monster"],
+        ["Imp", "Djinn"],
+        ["Imp", "Dragon"],
+        ["Imp", "Dwarf"],
+        ["Imp", "Giant eagle"],
+        ["Imp", "Giant turtle"],
+        ["Imp", "Golem"],
+        ["Imp", "Imp"],
+        ["Imp", "Sprite"],
+        ["Sprite", "Bog monster"],
+        ["Sprite", "Djinn"],
+        ["Sprite", "Dragon"],
+        ["Sprite", "Dwarf"],
+        ["Sprite", "Giant eagle"],
+        ["Sprite", "Giant turtle"],
+        ["Sprite", "Golem"],
+        ["Sprite", "Imp"],
+        ["Sprite", "Sprite"],
+      ]),
     );
   });
 
@@ -119,16 +115,16 @@ describe("TestEdgeQLFor", () => {
                 UNION (C.name, count(Card));
             `,
       unorderedBag([
-            ["Bog monster", 9],
-            ["Djinn", 9],
-            ["Dragon", 9],
-            ["Dwarf", 9],
-            ["Giant eagle", 9],
-            ["Giant turtle", 9],
-            ["Golem", 9],
-            ["Imp", 9],
-            ["Sprite", 9],
-          ])
+        ["Bog monster", 9],
+        ["Djinn", 9],
+        ["Dragon", 9],
+        ["Dwarf", 9],
+        ["Giant eagle", 9],
+        ["Giant turtle", 9],
+        ["Golem", 9],
+        ["Imp", 9],
+        ["Sprite", 9],
+      ]),
     );
   });
 
@@ -141,16 +137,16 @@ describe("TestEdgeQLFor", () => {
                 UNION (Card.name, count(Card));
             `,
       unorderedBag([
-            ["Bog monster", 1],
-            ["Djinn", 1],
-            ["Dragon", 1],
-            ["Dwarf", 1],
-            ["Giant eagle", 1],
-            ["Giant turtle", 1],
-            ["Golem", 1],
-            ["Imp", 1],
-            ["Sprite", 1],
-          ])
+        ["Bog monster", 1],
+        ["Djinn", 1],
+        ["Dragon", 1],
+        ["Dwarf", 1],
+        ["Giant eagle", 1],
+        ["Giant turtle", 1],
+        ["Golem", 1],
+        ["Imp", 1],
+        ["Sprite", 1],
+      ]),
     );
   });
 
@@ -163,16 +159,16 @@ describe("TestEdgeQLFor", () => {
                 UNION (count(C), count(Card));
             `,
       [
-            [1, 9],
-            [1, 9],
-            [1, 9],
-            [1, 9],
-            [1, 9],
-            [1, 9],
-            [1, 9],
-            [1, 9],
-            [1, 9],
-          ]
+        [1, 9],
+        [1, 9],
+        [1, 9],
+        [1, 9],
+        [1, 9],
+        [1, 9],
+        [1, 9],
+        [1, 9],
+        [1, 9],
+      ],
     );
   });
 
@@ -184,20 +180,20 @@ describe("TestEdgeQLFor", () => {
                 UNION X;
             `,
       unorderedSet([
-            "Alice",
-            "Bob",
-            "Bog monster",
-            "Carol",
-            "Dave",
-            "Djinn",
-            "Dragon",
-            "Dwarf",
-            "Giant eagle",
-            "Giant turtle",
-            "Golem",
-            "Imp",
-            "Sprite",
-          ])
+        "Alice",
+        "Bob",
+        "Bog monster",
+        "Carol",
+        "Dave",
+        "Djinn",
+        "Dragon",
+        "Dwarf",
+        "Giant eagle",
+        "Giant turtle",
+        "Golem",
+        "Imp",
+        "Sprite",
+      ]),
     );
   });
 
@@ -210,20 +206,20 @@ describe("TestEdgeQLFor", () => {
                 UNION (X, count(Card), count(User));
             `,
       unorderedBag([
-            ["Alice", 9, 4],
-            ["Bob", 9, 4],
-            ["Bog monster", 9, 4],
-            ["Carol", 9, 4],
-            ["Dave", 9, 4],
-            ["Djinn", 9, 4],
-            ["Dragon", 9, 4],
-            ["Dwarf", 9, 4],
-            ["Giant eagle", 9, 4],
-            ["Giant turtle", 9, 4],
-            ["Golem", 9, 4],
-            ["Imp", 9, 4],
-            ["Sprite", 9, 4],
-          ])
+        ["Alice", 9, 4],
+        ["Bob", 9, 4],
+        ["Bog monster", 9, 4],
+        ["Carol", 9, 4],
+        ["Dave", 9, 4],
+        ["Djinn", 9, 4],
+        ["Dragon", 9, 4],
+        ["Dwarf", 9, 4],
+        ["Giant eagle", 9, 4],
+        ["Giant turtle", 9, 4],
+        ["Golem", 9, 4],
+        ["Imp", 9, 4],
+        ["Sprite", 9, 4],
+      ]),
     );
   });
 
@@ -236,20 +232,20 @@ describe("TestEdgeQLFor", () => {
                 UNION (X, count(Card FILTER TRUE), count(User FILTER TRUE));
             `,
       unorderedBag([
-            ["Alice", 9, 4],
-            ["Bob", 9, 4],
-            ["Bog monster", 9, 4],
-            ["Carol", 9, 4],
-            ["Dave", 9, 4],
-            ["Djinn", 9, 4],
-            ["Dragon", 9, 4],
-            ["Dwarf", 9, 4],
-            ["Giant eagle", 9, 4],
-            ["Giant turtle", 9, 4],
-            ["Golem", 9, 4],
-            ["Imp", 9, 4],
-            ["Sprite", 9, 4],
-          ])
+        ["Alice", 9, 4],
+        ["Bob", 9, 4],
+        ["Bog monster", 9, 4],
+        ["Carol", 9, 4],
+        ["Dave", 9, 4],
+        ["Djinn", 9, 4],
+        ["Dragon", 9, 4],
+        ["Dwarf", 9, 4],
+        ["Giant eagle", 9, 4],
+        ["Giant turtle", 9, 4],
+        ["Golem", 9, 4],
+        ["Imp", 9, 4],
+        ["Sprite", 9, 4],
+      ]),
     );
   });
 
@@ -261,21 +257,7 @@ describe("TestEdgeQLFor", () => {
                 # this should be just [3] for each name (9 + 4 of names)
                 UNION count(User.friends);
             `,
-      [
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-          ]
+      [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
     );
   });
 
@@ -291,7 +273,7 @@ describe("TestEdgeQLFor", () => {
                 OFFSET 2
                 LIMIT 1
             `,
-      unorderedSet(["Carol"])
+      unorderedSet(["Carol"]),
     );
   });
 
@@ -304,7 +286,7 @@ describe("TestEdgeQLFor", () => {
                     1
                 ));
             `,
-      [10000]
+      [10000],
     );
   });
 
@@ -320,16 +302,16 @@ describe("TestEdgeQLFor", () => {
                 FILTER Card.element = 'Air';
             `,
       unorderedSet([
-            "Bog monster",
-            "Djinn",
-            "Dragon",
-            "Dwarf",
-            "Giant eagle",
-            "Giant turtle",
-            "Golem",
-            "Imp",
-            "Sprite",
-          ])
+        "Bog monster",
+        "Djinn",
+        "Dragon",
+        "Dwarf",
+        "Giant eagle",
+        "Giant turtle",
+        "Golem",
+        "Imp",
+        "Sprite",
+      ]),
     );
   });
 
@@ -346,20 +328,20 @@ describe("TestEdgeQLFor", () => {
                 FILTER Card.element = 'Air';
             `,
       unorderedSet([
-            "Alice",
-            "Bob",
-            "Bog monster",
-            "Carol",
-            "Dave",
-            "Djinn",
-            "Dragon",
-            "Dwarf",
-            "Giant eagle",
-            "Giant turtle",
-            "Golem",
-            "Imp",
-            "Sprite",
-          ])
+        "Alice",
+        "Bob",
+        "Bog monster",
+        "Carol",
+        "Dave",
+        "Djinn",
+        "Dragon",
+        "Dwarf",
+        "Giant eagle",
+        "Giant turtle",
+        "Golem",
+        "Imp",
+        "Sprite",
+      ]),
     );
   });
 
@@ -382,19 +364,19 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "name": "Bog monster",
-                  "@letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "@letter": "I",
-                },
-              ]),
+              name: "Bog monster",
+              "@letter": "B",
             },
-          ]
+            {
+              name: "Imp",
+              "@letter": "I",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -417,7 +399,7 @@ describe("TestEdgeQLFor", () => {
                     }),
                 }
             }
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -443,27 +425,27 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: [
             {
-              "select_deck": [
-                {
-                  "name": "Basilisk",
-                  "letter": "B20",
-                },
-                {
-                  "name": "Bog monster",
-                  "letter": "B2",
-                },
-                {
-                  "name": "Ice Elemental",
-                  "letter": "I10",
-                },
-                {
-                  "name": "Imp",
-                  "letter": "I1",
-                },
-              ],
+              name: "Basilisk",
+              letter: "B20",
             },
-          ]
+            {
+              name: "Bog monster",
+              letter: "B2",
+            },
+            {
+              name: "Ice Elemental",
+              letter: "I10",
+            },
+            {
+              name: "Imp",
+              letter: "I1",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -487,23 +469,10 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
-            {
-              "select_deck": [
-                [
-                  {},
-                ],
-                [
-                  {},
-                ],
-                [
-                  {},
-                ],
-                [
-                  {},
-                ],
-              ],
-            },
-          ]
+        {
+          select_deck: [[{}], [{}], [{}], [{}]],
+        },
+      ],
     );
   });
 
@@ -525,19 +494,19 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice'
             `,
       [
+        {
+          select_deck: [
             {
-              "select_deck": [
-                {
-                  "name": "Imp",
-                  "count": 1,
-                },
-                {
-                  "name": "Dragon",
-                  "count": 2,
-                },
-              ],
+              name: "Imp",
+              count: 1,
             },
-          ]
+            {
+              name: "Dragon",
+              count: 2,
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -560,7 +529,7 @@ describe("TestEdgeQLFor", () => {
                     }),
                 }
             }
-            `
+            `,
     );
     assertQueryResult(
       h,
@@ -586,27 +555,27 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: [
             {
-              "select_deck": [
-                {
-                  "name": "Basilisk",
-                  "letter": "B20",
-                },
-                {
-                  "name": "Bog monster",
-                  "letter": "B2",
-                },
-                {
-                  "name": "Ice Elemental",
-                  "letter": "I10",
-                },
-                {
-                  "name": "Imp",
-                  "letter": "I1",
-                },
-              ],
+              name: "Basilisk",
+              letter: "B20",
             },
-          ]
+            {
+              name: "Bog monster",
+              letter: "B2",
+            },
+            {
+              name: "Ice Elemental",
+              letter: "I10",
+            },
+            {
+              name: "Imp",
+              letter: "I1",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -634,35 +603,35 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
-            {
-              "select_deck": [
-                [
-                  {
-                    "name": "Bog monster",
-                    "letter": "B1",
-                  },
-                ],
-                [
-                  {
-                    "name": "Bog monster",
-                    "letter": "B2",
-                  },
-                ],
-                [
-                  {
-                    "name": "Imp",
-                    "letter": "I1",
-                  },
-                ],
-                [
-                  {
-                    "name": "Imp",
-                    "letter": "I2",
-                  },
-                ],
-              ],
-            },
-          ]
+        {
+          select_deck: [
+            [
+              {
+                name: "Bog monster",
+                letter: "B1",
+              },
+            ],
+            [
+              {
+                name: "Bog monster",
+                letter: "B2",
+              },
+            ],
+            [
+              {
+                name: "Imp",
+                letter: "I1",
+              },
+            ],
+            [
+              {
+                name: "Imp",
+                letter: "I2",
+              },
+            ],
+          ],
+        },
+      ],
     );
   });
 
@@ -691,19 +660,19 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: [
             {
-              "select_deck": [
-                {
-                  "name": "Bog monster",
-                  "@letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "@letter": "I",
-                },
-              ],
+              name: "Bog monster",
+              "@letter": "B",
             },
-          ]
+            {
+              name: "Imp",
+              "@letter": "I",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -735,19 +704,19 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: [
             {
-              "select_deck": [
-                {
-                  "name": "Bog monster",
-                  "@letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "@letter": "I",
-                },
-              ],
+              name: "Bog monster",
+              "@letter": "B",
             },
-          ]
+            {
+              name: "Imp",
+              "@letter": "I",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -765,10 +734,10 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
-            {
-              "select_deck": unorderedBag(["Bog monster", "Dragon", "Giant turtle", "Imp"]),
-            },
-          ]
+        {
+          select_deck: unorderedBag(["Bog monster", "Dragon", "Giant turtle", "Imp"]),
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -783,10 +752,10 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
-            {
-              "select_deck": unorderedBag(["Bog monster", "Dragon", "Giant turtle", "Imp"]),
-            },
-          ]
+        {
+          select_deck: unorderedBag(["Bog monster", "Dragon", "Giant turtle", "Imp"]),
+        },
+      ],
     );
   });
 
@@ -809,19 +778,19 @@ describe("TestEdgeQLFor", () => {
             } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "letter": unorderedSet(["B!!", "B!?"]),
-                  "name": "Bog monster",
-                },
-                {
-                  "letter": unorderedSet(["I!!", "I!?"]),
-                  "name": "Imp",
-                },
-              ]),
+              letter: unorderedSet(["B!!", "B!?"]),
+              name: "Bog monster",
             },
-          ]
+            {
+              letter: unorderedSet(["I!!", "I!?"]),
+              name: "Imp",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -845,19 +814,19 @@ describe("TestEdgeQLFor", () => {
             } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "letter": ["B!!", "B!?"],
-                  "name": "Bog monster",
-                },
-                {
-                  "letter": ["I!!", "I!?"],
-                  "name": "Imp",
-                },
-              ]),
+              letter: ["B!!", "B!?"],
+              name: "Bog monster",
             },
-          ]
+            {
+              letter: ["I!!", "I!?"],
+              name: "Imp",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -882,43 +851,43 @@ describe("TestEdgeQLFor", () => {
             } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "name": "Bog monster",
-                  "letter": unorderedSet(["B!!", "B!?"]),
-                  "correlated": unorderedSet([
-                    ["!", "!"],
-                    ["!", "?"],
-                    ["?", "!"],
-                    ["?", "?"],
-                  ]),
-                  "uncorrelated": unorderedSet([
-                    ["!", "!"],
-                    ["!", "?"],
-                    ["?", "!"],
-                    ["?", "?"],
-                  ]),
-                },
-                {
-                  "name": "Imp",
-                  "letter": unorderedSet(["I!!", "I!?"]),
-                  "correlated": unorderedSet([
-                    ["!", "!"],
-                    ["!", "?"],
-                    ["?", "!"],
-                    ["?", "?"],
-                  ]),
-                  "uncorrelated": unorderedSet([
-                    ["!", "!"],
-                    ["!", "?"],
-                    ["?", "!"],
-                    ["?", "?"],
-                  ]),
-                },
+              name: "Bog monster",
+              letter: unorderedSet(["B!!", "B!?"]),
+              correlated: unorderedSet([
+                ["!", "!"],
+                ["!", "?"],
+                ["?", "!"],
+                ["?", "?"],
+              ]),
+              uncorrelated: unorderedSet([
+                ["!", "!"],
+                ["!", "?"],
+                ["?", "!"],
+                ["?", "?"],
               ]),
             },
-          ]
+            {
+              name: "Imp",
+              letter: unorderedSet(["I!!", "I!?"]),
+              correlated: unorderedSet([
+                ["!", "!"],
+                ["!", "?"],
+                ["?", "!"],
+                ["?", "?"],
+              ]),
+              uncorrelated: unorderedSet([
+                ["!", "!"],
+                ["!", "?"],
+                ["?", "!"],
+                ["?", "?"],
+              ]),
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -945,23 +914,23 @@ describe("TestEdgeQLFor", () => {
                 SELECT U { name, select_deck: { name, @letter } };
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "name": "Bog monster",
-                  "@letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "@letter": "I",
-                },
-              ]),
+              name: "Bog monster",
+              "@letter": "B",
             },
-          ]
+            {
+              name: "Imp",
+              "@letter": "I",
+            },
+          ]),
+        },
+      ],
     );
   });
 
-  it("test_edgeql_for_in_computable_10 [xerror: This outputs [\"I\", \"B\"] as letter for both objects.]", () => {
+  it('test_edgeql_for_in_computable_10 [xerror: This outputs ["I", "B"] as letter for both objects.]', () => {
     assertQueryResult(
       h,
       `
@@ -983,19 +952,19 @@ describe("TestEdgeQLFor", () => {
             } FILTER .name = 'Alice') { select_deck: {name, letter} };
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "name": "Bog monster",
-                  "letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "letter": "I",
-                },
-              ]),
+              name: "Bog monster",
+              letter: "B",
             },
-          ]
+            {
+              name: "Imp",
+              letter: "I",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -1017,14 +986,14 @@ describe("TestEdgeQLFor", () => {
                 .name = 'Alice'
             `,
       [
+        {
+          select_deck: [
             {
-              "select_deck": [
-                {
-                  "name": "Imp",
-                },
-              ],
+              name: "Imp",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1046,23 +1015,23 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
-            {
-              "select_deck": unorderedBag([
-                [
-                  {
-                    "name": "Bog monster",
-                    "letter": "B",
-                  },
-                ],
-                [
-                  {
-                    "name": "Imp",
-                    "letter": "I",
-                  },
-                ],
-              ]),
-            },
-          ]
+        {
+          select_deck: unorderedBag([
+            [
+              {
+                name: "Bog monster",
+                letter: "B",
+              },
+            ],
+            [
+              {
+                name: "Imp",
+                letter: "I",
+              },
+            ],
+          ]),
+        },
+      ],
     );
   });
 
@@ -1084,15 +1053,15 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: [
             {
-              "select_deck": [
-                {
-                  "name": "Imp",
-                  "letter": "I",
-                },
-              ],
+              name: "Imp",
+              letter: "I",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1114,19 +1083,19 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "name": "Bog monster",
-                  "letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "letter": "I",
-                },
-              ]),
+              name: "Bog monster",
+              letter: "B",
             },
-          ]
+            {
+              name: "Imp",
+              letter: "I",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -1148,19 +1117,19 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "name": "Bog monster",
-                  "letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "letter": "I",
-                },
-              ]),
+              name: "Bog monster",
+              letter: "B",
             },
-          ]
+            {
+              name: "Imp",
+              letter: "I",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -1182,19 +1151,19 @@ describe("TestEdgeQLFor", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          select_deck: unorderedBag([
             {
-              "select_deck": unorderedBag([
-                {
-                  "name": "Bog monster",
-                  "letter": "B",
-                },
-                {
-                  "name": "Imp",
-                  "letter": "I",
-                },
-              ]),
+              name: "Bog monster",
+              letter: "B",
             },
-          ]
+            {
+              name: "Imp",
+              letter: "I",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -1211,11 +1180,11 @@ describe("TestEdgeQLFor", () => {
                 )]);
             `,
       [
-            {
-              "letter": "I",
-              "name": "Imp",
-            },
-          ]
+        {
+          letter: "I",
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -1232,11 +1201,11 @@ describe("TestEdgeQLFor", () => {
                 )).1;
             `,
       [
-            {
-              "letter": "I",
-              "name": "Imp",
-            },
-          ]
+        {
+          letter: "I",
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -1253,11 +1222,11 @@ describe("TestEdgeQLFor", () => {
                 ));
             `,
       [
-            {
-              "letter": "I",
-              "name": "Imp",
-            },
-          ]
+        {
+          letter: "I",
+          name: "Imp",
+        },
+      ],
     );
   });
 
@@ -1269,7 +1238,7 @@ describe("TestEdgeQLFor", () => {
                     SELECT User { m := x }))),
                 SELECT count(X.m);
             `,
-      [8]
+      [8],
     );
   });
 
@@ -1282,7 +1251,7 @@ describe("TestEdgeQLFor", () => {
                     SELECT (X, (FOR x in {X} UNION (SELECT x)))
                 ));
             `,
-      [4]
+      [4],
     );
     assertQueryResult(
       h,
@@ -1292,7 +1261,7 @@ describe("TestEdgeQLFor", () => {
                     SELECT ((FOR x in {X} UNION (SELECT x)), X)
                 ));
             `,
-      [4]
+      [4],
     );
   });
 
@@ -1304,7 +1273,7 @@ describe("TestEdgeQLFor", () => {
                               (FOR x in {Card} UNION (SELECT x.name)),
                 ));
             `,
-      [81]
+      [81],
     );
   });
 
@@ -1316,7 +1285,7 @@ describe("TestEdgeQLFor", () => {
                                Card.name,
                 ));
             `,
-      [81]
+      [81],
     );
   });
 
@@ -1325,7 +1294,7 @@ describe("TestEdgeQLFor", () => {
       h.script(
         `
                 SELECT (FOR x in {} UNION ());
-            `
+            `,
       );
     }).toThrow(new RegExp("FOR statement has iterator of indeterminate type"));
   });
@@ -1335,7 +1304,7 @@ describe("TestEdgeQLFor", () => {
       h.script(
         `
                 WITH s := {} SELECT (FOR x in {s} UNION ());
-            `
+            `,
       );
     }).toThrow(new RegExp("FOR statement has iterator of indeterminate type"));
   });
@@ -1353,17 +1322,17 @@ describe("TestEdgeQLFor", () => {
             order by .key.element;
             `,
       [
-            {
-              "key": {
-                "element": "Earth",
-              },
-            },
-            {
-              "key": {
-                "element": "Water",
-              },
-            },
-          ]
+        {
+          key: {
+            element: "Earth",
+          },
+        },
+        {
+          key: {
+            element: "Water",
+          },
+        },
+      ],
     );
   });
 
@@ -1383,17 +1352,17 @@ describe("TestEdgeQLFor", () => {
             order by .key.element;
             `,
       [
-            {
-              "key": {
-                "element": "Earth",
-              },
-            },
-            {
-              "key": {
-                "element": "Water",
-              },
-            },
-          ]
+        {
+          key: {
+            element: "Earth",
+          },
+        },
+        {
+          key: {
+            element: "Water",
+          },
+        },
+      ],
     );
   });
 
@@ -1414,33 +1383,33 @@ describe("TestEdgeQLFor", () => {
             order by .key.element;
             `,
       [
+        {
+          key: {
+            element: "Earth",
+          },
+          elements: unorderedBag([
             {
-              "key": {
-                "element": "Earth",
-              },
-              "elements": unorderedBag([
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Golem",
-                },
-              ]),
+              name: "Dwarf",
             },
             {
-              "key": {
-                "element": "Water",
-              },
-              "elements": unorderedBag([
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
+              name: "Golem",
             },
-          ]
+          ]),
+        },
+        {
+          key: {
+            element: "Water",
+          },
+          elements: unorderedBag([
+            {
+              name: "Bog monster",
+            },
+            {
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -1453,13 +1422,13 @@ describe("TestEdgeQLFor", () => {
             order by .key;
             `,
       [
-            {
-              "key": "Earth",
-            },
-            {
-              "key": "Water",
-            },
-          ]
+        {
+          key: "Earth",
+        },
+        {
+          key: "Water",
+        },
+      ],
     );
   });
 
@@ -1471,7 +1440,7 @@ describe("TestEdgeQLFor", () => {
                   ((select (1,) filter false) ?? (2,)).0
                 );
             `,
-      [2, 2, 2, 2]
+      [2, 2, 2, 2],
     );
     assertQueryResult(
       h,
@@ -1480,7 +1449,7 @@ describe("TestEdgeQLFor", () => {
                   ((select (1,) filter user.name = 'Alice') ?? (2,)).0
                 );
             `,
-      unorderedBag([1, 2, 2, 2])
+      unorderedBag([1, 2, 2, 2]),
     );
   });
 
@@ -1492,7 +1461,7 @@ describe("TestEdgeQLFor", () => {
                     ((select User filter .name = 'George'),)
                 union x.0.deck_cost ?? 0;
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
@@ -1501,7 +1470,7 @@ describe("TestEdgeQLFor", () => {
                     ((select User filter .name = 'George'),)
                 union x.0
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -1510,7 +1479,7 @@ describe("TestEdgeQLFor", () => {
                     ((select User filter .name = 'George'),)
                 union x
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -1519,7 +1488,7 @@ describe("TestEdgeQLFor", () => {
                     ((select User filter .name = 'Alice'),)
                 union x.0.deck_cost ?? 0;
             `,
-      [11]
+      [11],
     );
     assertQueryResult(
       h,
@@ -1528,9 +1497,7 @@ describe("TestEdgeQLFor", () => {
                     ((select User filter .name = 'George'),)
                 union (insert Award { name := "Participation" })
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -1538,9 +1505,7 @@ describe("TestEdgeQLFor", () => {
                 for optional x in (<bool>{})
                 union (insert Award { name := "Participation!" })
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
@@ -1551,7 +1516,7 @@ describe("TestEdgeQLFor", () => {
                   )
                 );
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -1562,7 +1527,7 @@ describe("TestEdgeQLFor", () => {
                   )
                 );
             `,
-      ["Alice"]
+      ["Alice"],
     );
     assertQueryResult(
       h,
@@ -1573,7 +1538,7 @@ describe("TestEdgeQLFor", () => {
                   )
                 );
             `,
-      ["Alice!"]
+      ["Alice!"],
     );
   });
 
@@ -1585,7 +1550,7 @@ describe("TestEdgeQLFor", () => {
                     (select User filter .name = 'George')
                 union x.deck_cost ?? 0;
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
@@ -1594,7 +1559,7 @@ describe("TestEdgeQLFor", () => {
                     (select User filter .name = 'Alice')
                 union x.deck_cost ?? 0;
             `,
-      [11]
+      [11],
     );
     assertQueryResult(
       h,
@@ -1603,9 +1568,7 @@ describe("TestEdgeQLFor", () => {
                     (select User filter .name = 'George')
                 union (insert Award { name := "Participation" })
             `,
-      [
-            {},
-          ]
+      [{}],
     );
   });
 
@@ -1617,7 +1580,7 @@ describe("TestEdgeQLFor", () => {
         for optional x in (delete Card filter .name = 'Yolanda Swaggins')
         select x.cost ?? 420;
         `,
-      [420]
+      [420],
     );
   });
 
@@ -1634,18 +1597,18 @@ describe("TestEdgeQLFor", () => {
             filter .name = 'Carol';
             `,
       [
-            {
-              "cards": [
-                ["Bog monster", 3],
-                ["Djinn", 1],
-                ["Dwarf", 4],
-                ["Giant eagle", 3],
-                ["Giant turtle", 2],
-                ["Golem", 2],
-                ["Sprite", 4],
-              ],
-            },
-          ]
+        {
+          cards: [
+            ["Bog monster", 3],
+            ["Djinn", 1],
+            ["Dwarf", 4],
+            ["Giant eagle", 3],
+            ["Giant turtle", 2],
+            ["Golem", 2],
+            ["Sprite", 4],
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1660,12 +1623,10 @@ describe("TestEdgeQLFor", () => {
             filter .name = 'Carol';
             `,
       [
-            {
-              "cards": [
-                ["Djinn", 1],
-              ],
-            },
-          ]
+        {
+          cards: [["Djinn", 1]],
+        },
+      ],
     );
   });
 
@@ -1682,13 +1643,13 @@ describe("TestEdgeQLFor", () => {
             filter .name = 'Dragon'
             `,
       [
-            {
-              "users": [
-                ["Alice", 2],
-                ["Dave", 1],
-              ],
-            },
-          ]
+        {
+          users: [
+            ["Alice", 2],
+            ["Dave", 1],
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1702,13 +1663,13 @@ describe("TestEdgeQLFor", () => {
             filter .name = 'Dragon'
             `,
       [
-            {
-              "users": [
-                ["Alice", 2],
-                ["Dave", 1],
-              ],
-            },
-          ]
+        {
+          users: [
+            ["Alice", 2],
+            ["Dave", 1],
+          ],
+        },
+      ],
     );
   });
 
@@ -1717,7 +1678,7 @@ describe("TestEdgeQLFor", () => {
       h.query(
         `
                 FOR d IN User.deck SELECT (d.name, d@count);
-            `
+            `,
       );
     }).toThrow(new RegExp(""));
   });
@@ -1728,7 +1689,7 @@ describe("TestEdgeQLFor", () => {
       `
             for u in User for m in u.avatar select m@text;
             `,
-      unorderedSet(["Best", "Wow"])
+      unorderedSet(["Best", "Wow"]),
     );
   });
 });

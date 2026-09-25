@@ -45,8 +45,5 @@ export const distinctValues = (values: unknown[]): unknown[] => {
 
 /** Apply LIMIT/OFFSET to an already-ordered set. `offset` defaults to 0; an
  *  `undefined` limit means "through the end". Returns a new array. */
-export const applyLimitOffset = <T>(
-  rows: T[],
-  limit: number | undefined,
-  offset = 0,
-): T[] => (limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + limit));
+export const applyLimitOffset = <T>(rows: T[], limit: number | undefined, offset = 0): T[] =>
+  limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + limit);

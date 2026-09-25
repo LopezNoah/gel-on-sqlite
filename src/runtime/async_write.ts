@@ -16,7 +16,12 @@ import type { AsyncRuntimeDatabaseAdapter } from "./adapter.js";
 import { AsyncUnsupportedError, type AsyncQueryContext } from "./async_query.js";
 import { asyncDbExec, runDbEffectAsync } from "./db_effect.js";
 import type { InsertStatement } from "../edgeql/ast.js";
-import { deleteWriteEffect, insertScalarWriteEffect, typeDefForTable, updateWriteEffect } from "./engine.js";
+import {
+  deleteWriteEffect,
+  insertScalarWriteEffect,
+  typeDefForTable,
+  updateWriteEffect,
+} from "./engine.js";
 
 export interface AsyncWriteResult {
   kind: "delete" | "update" | "insert";
@@ -98,13 +103,18 @@ export const executeUpdateAsync = async (
   // nest INSERTs, which aren't decolored yet) — reject them so the no-op
   // callbacks below stay correct. Scalar-only updates are fully supported.
   if ((ir.linkAssignments?.length ?? 0) > 0) {
-    throw new AsyncUnsupportedError("link assignments in UPDATE are not yet supported on the async write path");
+    throw new AsyncUnsupportedError(
+      "link assignments in UPDATE are not yet supported on the async write path",
+    );
   }
   const assignsMultiProp = subjectType.fields.some(
-    (f) => (f as { multi?: boolean }).multi && Object.prototype.hasOwnProperty.call(ir.values, f.name),
+    (f) =>
+      (f as { multi?: boolean }).multi && Object.prototype.hasOwnProperty.call(ir.values, f.name),
   );
   if (assignsMultiProp) {
-    throw new AsyncUnsupportedError("multi-property assignments in UPDATE are not yet supported on the async write path");
+    throw new AsyncUnsupportedError(
+      "multi-property assignments in UPDATE are not yet supported on the async write path",
+    );
   }
 
   await runDbEffectAsync(
@@ -143,19 +153,31 @@ export const executeInsertAsync = async (
     throw new AsyncUnsupportedError(`async write path: unknown insert target '${ir.table}'`);
   }
   if ((subjectType.accessPolicies?.length ?? 0) > 0) {
-    throw new AsyncUnsupportedError(`access policies on '${ir.table}' are not yet enforced on the async write path`);
+    throw new AsyncUnsupportedError(
+      `access policies on '${ir.table}' are not yet enforced on the async write path`,
+    );
   }
   if (insertAst.conflict) {
-    throw new AsyncUnsupportedError("INSERT ... UNLESS CONFLICT is not yet supported on the async write path");
+    throw new AsyncUnsupportedError(
+      "INSERT ... UNLESS CONFLICT is not yet supported on the async write path",
+    );
   }
   // Reject any link or multi-property assignment — those run db-direct in the
   // sync branch (links can nest INSERTs); the scalar effect handles neither.
   const assignedKeys = Object.keys(insertAst.values ?? {});
   if ((subjectType.links ?? []).some((link) => assignedKeys.includes(link.name))) {
-    throw new AsyncUnsupportedError("link assignments in INSERT are not yet supported on the async write path");
+    throw new AsyncUnsupportedError(
+      "link assignments in INSERT are not yet supported on the async write path",
+    );
   }
-  if (subjectType.fields.some((f) => (f as { multi?: boolean }).multi && assignedKeys.includes(f.name))) {
-    throw new AsyncUnsupportedError("multi-property assignments in INSERT are not yet supported on the async write path");
+  if (
+    subjectType.fields.some(
+      (f) => (f as { multi?: boolean }).multi && assignedKeys.includes(f.name),
+    )
+  ) {
+    throw new AsyncUnsupportedError(
+      "multi-property assignments in INSERT are not yet supported on the async write path",
+    );
   }
 
   // insertScalarWriteEffect throws AsyncUnsupportedError from inside if a default

@@ -12,11 +12,14 @@ import type { Statement } from "../src/edgeql/ast.js";
 // with an explicit `SelectExprEvaluatorDeps` seam, so it can be driven directly
 // — these tests cross that one interface. See docs/adr/0044.
 
-const schema = loadSchema(`module default {
+const schema = loadSchema(
+  `module default {
   type User {
     required name: str;
   }
-}`, { legacySyntaxCompat: true });
+}`,
+  { legacySyntaxCompat: true },
+);
 
 const ctx: SecurityContext = {};
 

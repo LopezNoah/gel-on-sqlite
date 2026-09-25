@@ -54,9 +54,7 @@ const rewrites: Rewrite[] = [];
 
 function isItCall(node: ts.Node): node is ts.CallExpression {
   return (
-    ts.isCallExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === "it"
+    ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "it"
   );
 }
 

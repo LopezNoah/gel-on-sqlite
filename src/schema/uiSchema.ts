@@ -9,15 +9,24 @@ import type {
 import type { FreeObjectExpr, SelectExprStatement, Statement } from "../edgeql/ast.js";
 import { parseEdgeQL } from "../edgeql/parser.js";
 import { tryResult } from "../errors.js";
-import type { ComputedLinkPropertyExpr, DeclarativeSchema, FunctionDeclaration, LinkMember, LinkProperty, PropertyMember, TypeMember } from "./declarative.js";
+import type {
+  ComputedLinkPropertyExpr,
+  DeclarativeSchema,
+  FunctionDeclaration,
+  LinkMember,
+  LinkProperty,
+  PropertyMember,
+  TypeMember,
+} from "./declarative.js";
 import { AnnotationRegistry, AnnotationResolver, AnnotationSet } from "./annos.js";
 import { SchemaSnapshot, qualifiedTypeName } from "./schema.js";
 import { scalarTypeDeclarationToTypeDef } from "./scalar.js";
 import { schemaIntrospectionTypeDefs } from "./schema_introspection.js";
 import { TypeMemberResolver, cloneConstraints } from "./type_member_resolver.js";
 
-const isStoredLinkProperty = (property: LinkMember["properties"][number]): property is LinkProperty =>
-  property.computed !== true;
+const isStoredLinkProperty = (
+  property: LinkMember["properties"][number],
+): property is LinkProperty => property.computed !== true;
 
 export const schemaSnapshotFromDeclarative = (schema: DeclarativeSchema): SchemaSnapshot => {
   const typeDefs = typeDefsFromDeclarative(schema);
@@ -79,14 +88,18 @@ export const functionDefsFromDeclarative = (schema: DeclarativeSchema): Function
     returnOptional: fn.returnOptional,
     returnSetOf: fn.returnSetOf,
     volatility: fn.volatility,
-    annotations: fn.annotations.length ? fn.annotations.map((annotation) => ({ ...annotation })) : undefined,
+    annotations: fn.annotations.length
+      ? fn.annotations.map((annotation) => ({ ...annotation }))
+      : undefined,
     body: parseFunctionBody(fn),
   }));
 };
 
 export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] => {
   const annotationRegistry = new AnnotationRegistry(schema.abstractAnnotations ?? []);
-  const typeByName = new Map(schema.types.map((typeDecl) => [qualifiedTypeName(typeDecl), typeDecl]));
+  const typeByName = new Map(
+    schema.types.map((typeDecl) => [qualifiedTypeName(typeDecl), typeDecl]),
+  );
 
   const annotationResolver = new AnnotationResolver<DeclarativeSchema["types"][number]>(
     annotationRegistry,
@@ -119,15 +132,16 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       if (member.kind === "property") {
         const resolvedConstraints =
           member.constraints.length > 0
-            ? member.constraints
-                .map((constraint) => ({
-                  name: constraint.name,
-                  annotations: mergeConstraintAnnotations(constraint.name, constraint.annotations),
-                  delegated: constraint.delegated,
-                  params: constraint.params ? constraint.params.map((param) => ({ ...param })) : undefined,
-                  onExpr: constraint.onExpr,
-                  exceptExpr: constraint.exceptExpr,
-                }))
+            ? member.constraints.map((constraint) => ({
+                name: constraint.name,
+                annotations: mergeConstraintAnnotations(constraint.name, constraint.annotations),
+                delegated: constraint.delegated,
+                params: constraint.params
+                  ? constraint.params.map((param) => ({ ...param }))
+                  : undefined,
+                onExpr: constraint.onExpr,
+                exceptExpr: constraint.exceptExpr,
+              }))
             : [];
 
         fields.push({
@@ -135,7 +149,14 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
           type: member.scalar,
           required: member.required,
           hasDefault: member.hasDefault,
-          defaultExpr: member.defaultExpr ? { ...member.defaultExpr, ...(member.defaultExpr.kind === "function_call" ? { args: [...member.defaultExpr.args] } : {}) } : undefined,
+          defaultExpr: member.defaultExpr
+            ? {
+                ...member.defaultExpr,
+                ...(member.defaultExpr.kind === "function_call"
+                  ? { args: [...member.defaultExpr.args] }
+                  : {}),
+              }
+            : undefined,
           defaultExprText: member.defaultExprText,
           readonly: member.readonly,
           multi: member.multi,
@@ -248,7 +269,9 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
               },
             });
           } else {
-            throw new Error(`Computed '${member.name}' has invalid property expression kind '${(member.expr as { kind: string }).kind}'`);
+            throw new Error(
+              `Computed '${member.name}' has invalid property expression kind '${(member.expr as { kind: string }).kind}'`,
+            );
           }
         } else {
           if (member.expr.kind === "backlink") {
@@ -293,7 +316,9 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
               },
             });
           } else {
-            throw new Error(`Computed '${member.name}' has invalid link expression kind '${member.expr.kind}'`);
+            throw new Error(
+              `Computed '${member.name}' has invalid link expression kind '${member.expr.kind}'`,
+            );
           }
         }
         continue;
@@ -331,11 +356,20 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
             }))
           : undefined,
         hasDefault: member.hasDefault,
-        defaultTargetValues: member.defaultTargetValues ? [...member.defaultTargetValues] : undefined,
-        defaultTargetFilter: member.defaultTargetFilter ? { column: member.defaultTargetFilter.column, values: [...member.defaultTargetFilter.values] } : undefined,
+        defaultTargetValues: member.defaultTargetValues
+          ? [...member.defaultTargetValues]
+          : undefined,
+        defaultTargetFilter: member.defaultTargetFilter
+          ? {
+              column: member.defaultTargetFilter.column,
+              values: [...member.defaultTargetFilter.values],
+            }
+          : undefined,
         defaultExprText: member.defaultExprText,
         annotations: (member.annotations ?? []).length ? [...member.annotations] : undefined,
-        constraints: (member.constraints ?? []).length ? [...(member.constraints ?? [])] : undefined,
+        constraints: (member.constraints ?? []).length
+          ? [...(member.constraints ?? [])]
+          : undefined,
         splatStrategy: member.splatStrategy,
       });
 
@@ -356,7 +390,9 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       abstract: typeDecl.abstract,
       extends: (typeDecl.extends ?? []).length ? [...typeDecl.extends] : undefined,
       annotations: resolvedTypeAnnotations.length ? resolvedTypeAnnotations : undefined,
-      indexes: (typeDecl.indexes ?? []).length ? (typeDecl.indexes ?? []).map((index) => ({ ...index })) : undefined,
+      indexes: (typeDecl.indexes ?? []).length
+        ? (typeDecl.indexes ?? []).map((index) => ({ ...index }))
+        : undefined,
       fields,
       links: links.length ? links : undefined,
       computeds: computeds.length ? computeds : undefined,
@@ -364,13 +400,20 @@ export const typeDefsFromDeclarative = (schema: DeclarativeSchema): TypeDef[] =>
       triggers: typeDecl.triggers.length ? [...typeDecl.triggers] : undefined,
       accessPolicies: typeDecl.accessPolicies.length ? [...typeDecl.accessPolicies] : undefined,
       typeConstraints: (typeDecl.typeConstraints ?? []).length
-        ? (typeDecl.typeConstraints ?? []).map((c) => ({ ...c, fieldRefs: [...c.fieldRefs], delegated: c.delegated }))
+        ? (typeDecl.typeConstraints ?? []).map((c) => ({
+            ...c,
+            fieldRefs: [...c.fieldRefs],
+            delegated: c.delegated,
+          }))
         : undefined,
     };
   });
 };
 
-export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: FunctionDef[] = []): DeclarativeSchema => {
+export const declarativeSchemaFromTypeDefs = (
+  types: TypeDef[],
+  functions: FunctionDef[] = [],
+): DeclarativeSchema => {
   const modules = new Set<string>();
   const grouped = new Map<string, TypeDef[]>();
   const functionGroups = new Map<string, FunctionDef[]>();
@@ -469,7 +512,9 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 continue;
               }
 
-              const rewrite = typeDef.mutationRewrites?.find((candidate) => candidate.field === field.name);
+              const rewrite = typeDef.mutationRewrites?.find(
+                (candidate) => candidate.field === field.name,
+              );
 
               const fieldConstraints = field.constraints ? cloneConstraints(field.constraints) : [];
 
@@ -481,7 +526,11 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                 hasDefault: Boolean(field.hasDefault),
                 defaultExpr: field.defaultExpr
                   ? field.defaultExpr.kind === "function_call"
-                    ? { kind: "function_call", name: field.defaultExpr.name, args: [...field.defaultExpr.args] }
+                    ? {
+                        kind: "function_call",
+                        name: field.defaultExpr.name,
+                        args: [...field.defaultExpr.args],
+                      }
                     : { kind: "literal", value: field.defaultExpr.value }
                   : undefined,
                 readonly: Boolean(field.readonly),
@@ -526,10 +575,10 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
                       : computed.expr.kind === "select_type"
                         ? { ...computed.expr }
                         : {
-                          kind: "link_ref",
-                          link: computed.expr.link,
-                          filter: computed.expr.filter ? { ...computed.expr.filter } : undefined,
-                        },
+                            kind: "link_ref",
+                            link: computed.expr.link,
+                            filter: computed.expr.filter ? { ...computed.expr.filter } : undefined,
+                          },
               };
               members.push(computedMember);
             }
@@ -554,7 +603,10 @@ export const declarativeSchemaFromTypeDefs = (types: TypeDef[], functions: Funct
 export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
   const lines: string[] = [];
   const typesByModule = new Map<string, DeclarativeSchema["types"]>();
-  const annotationsByModule = new Map<string, NonNullable<DeclarativeSchema["abstractAnnotations"]>>();
+  const annotationsByModule = new Map<
+    string,
+    NonNullable<DeclarativeSchema["abstractAnnotations"]>
+  >();
   const functionsByModule = new Map<string, NonNullable<DeclarativeSchema["functions"]>>();
   for (const typeDecl of schema.types) {
     const list = typesByModule.get(typeDecl.module) ?? [];
@@ -575,14 +627,25 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
   }
 
   const moduleNames = [
-    ...new Set([...schema.modules.map((m) => m.name), ...typesByModule.keys(), ...annotationsByModule.keys(), ...functionsByModule.keys()]),
+    ...new Set([
+      ...schema.modules.map((m) => m.name),
+      ...typesByModule.keys(),
+      ...annotationsByModule.keys(),
+      ...functionsByModule.keys(),
+    ]),
   ].sort();
 
   for (const moduleName of moduleNames) {
     lines.push(`module ${moduleName} {`);
-    const moduleTypes = [...(typesByModule.get(moduleName) ?? [])].sort((a, b) => a.name.localeCompare(b.name));
-    const moduleAnnotations = [...(annotationsByModule.get(moduleName) ?? [])].sort((a, b) => a.name.localeCompare(b.name));
-    const moduleFunctions = [...(functionsByModule.get(moduleName) ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+    const moduleTypes = [...(typesByModule.get(moduleName) ?? [])].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    const moduleAnnotations = [...(annotationsByModule.get(moduleName) ?? [])].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    const moduleFunctions = [...(functionsByModule.get(moduleName) ?? [])].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
 
     const modulePermissions = (schema.permissions ?? [])
       .filter((permission) => permission.module === moduleName)
@@ -600,12 +663,17 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
 
       lines.push(`  ${prefix} ${shortTypeName(abstractAnnotation.name, moduleName)} {`);
       for (const annotation of abstractAnnotation.annotations) {
-        lines.push(`    annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
+        lines.push(
+          `    annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`,
+        );
       }
       lines.push("  };");
     }
 
-    if ((modulePermissions.length > 0 || moduleAnnotations.length > 0) && (moduleTypes.length > 0 || moduleFunctions.length > 0)) {
+    if (
+      (modulePermissions.length > 0 || moduleAnnotations.length > 0) &&
+      (moduleTypes.length > 0 || moduleFunctions.length > 0)
+    ) {
       lines.push("");
     }
 
@@ -614,7 +682,8 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
         .map((param) => {
           const kind = `${param.namedOnly ? "named only " : ""}${param.variadic ? "variadic " : ""}`;
           const typeQual = `${param.optional ? "optional " : ""}${param.setOf ? "set of " : ""}`;
-          const defaultValue = param.default === undefined ? "" : ` = ${renderScalarLiteral(param.default)}`;
+          const defaultValue =
+            param.default === undefined ? "" : ` = ${renderScalarLiteral(param.default)}`;
           return `${kind}${param.name}: ${typeQual}${shortTypeName(param.type, moduleName)}${defaultValue}`;
         })
         .join(", ");
@@ -630,24 +699,34 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
 
     for (const typeDecl of moduleTypes) {
       const typeHead = `${typeDecl.abstract ? "abstract " : ""}type ${typeDecl.name}`;
-      const extendsClause = (typeDecl.extends ?? []).length ? ` extending ${typeDecl.extends.join(", ")}` : "";
+      const extendsClause = (typeDecl.extends ?? []).length
+        ? ` extending ${typeDecl.extends.join(", ")}`
+        : "";
       lines.push(`  ${typeHead}${extendsClause} {`);
 
       for (const annotation of typeDecl.annotations ?? []) {
-        lines.push(`    annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
+        lines.push(
+          `    annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`,
+        );
       }
 
       for (const member of typeDecl.members) {
         const prefix = `${member.overloaded ? "overloaded " : ""}${member.required ? "required " : ""}${member.multi ? "multi " : ""}`;
         if (member.kind === "property") {
-          if (!member.rewrite?.onInsert && !member.rewrite?.onUpdate && (member.annotations ?? []).length === 0) {
+          if (
+            !member.rewrite?.onInsert &&
+            !member.rewrite?.onUpdate &&
+            (member.annotations ?? []).length === 0
+          ) {
             lines.push(`    ${prefix}${member.name}: ${member.scalar};`);
             continue;
           }
 
           lines.push(`    ${prefix}${member.name}: ${member.scalar} {`);
           for (const annotation of member.annotations ?? []) {
-            lines.push(`      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
+            lines.push(
+              `      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`,
+            );
           }
           const rewriteOnInsert = member.rewrite?.onInsert;
           const rewriteOnUpdate = member.rewrite?.onUpdate;
@@ -656,13 +735,21 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
             if (expr === renderMutationRewriteExpr(rewriteOnUpdate)) {
               lines.push(`      rewrite insert, update using (${expr});`);
             } else {
-              lines.push(`      rewrite insert using (${renderMutationRewriteExpr(rewriteOnInsert)});`);
-              lines.push(`      rewrite update using (${renderMutationRewriteExpr(rewriteOnUpdate)});`);
+              lines.push(
+                `      rewrite insert using (${renderMutationRewriteExpr(rewriteOnInsert)});`,
+              );
+              lines.push(
+                `      rewrite update using (${renderMutationRewriteExpr(rewriteOnUpdate)});`,
+              );
             }
           } else if (rewriteOnInsert) {
-            lines.push(`      rewrite insert using (${renderMutationRewriteExpr(rewriteOnInsert)});`);
+            lines.push(
+              `      rewrite insert using (${renderMutationRewriteExpr(rewriteOnInsert)});`,
+            );
           } else if (rewriteOnUpdate) {
-            lines.push(`      rewrite update using (${renderMutationRewriteExpr(rewriteOnUpdate)});`);
+            lines.push(
+              `      rewrite update using (${renderMutationRewriteExpr(rewriteOnUpdate)});`,
+            );
           }
           lines.push("    };");
           continue;
@@ -677,7 +764,9 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
 
           lines.push(`    ${prefix}${member.name} := ${computedExpr} {`);
           for (const annotation of member.annotations ?? []) {
-            lines.push(`      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
+            lines.push(
+              `      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`,
+            );
           }
           lines.push("    };");
           continue;
@@ -690,22 +779,32 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
 
         lines.push(`    ${prefix}${member.name}: ${shortTypeName(member.target, moduleName)} {`);
         for (const annotation of member.annotations ?? []) {
-          lines.push(`      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
+          lines.push(
+            `      annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`,
+          );
         }
         for (const linkProperty of member.properties) {
           if (linkProperty.computed === true) {
-            lines.push(`      ${linkProperty.name} := ${renderComputedLinkPropertyExpr(linkProperty.computedExpr)};`);
+            lines.push(
+              `      ${linkProperty.name} := ${renderComputedLinkPropertyExpr(linkProperty.computedExpr)};`,
+            );
             continue;
           }
 
           if ((linkProperty.annotations ?? []).length === 0) {
-            lines.push(`      ${linkProperty.required ? "required " : ""}${linkProperty.name}: ${linkProperty.scalar};`);
+            lines.push(
+              `      ${linkProperty.required ? "required " : ""}${linkProperty.name}: ${linkProperty.scalar};`,
+            );
             continue;
           }
 
-          lines.push(`      ${linkProperty.required ? "required " : ""}${linkProperty.name}: ${linkProperty.scalar} {`);
+          lines.push(
+            `      ${linkProperty.required ? "required " : ""}${linkProperty.name}: ${linkProperty.scalar} {`,
+          );
           for (const annotation of linkProperty.annotations ?? []) {
-            lines.push(`        annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`);
+            lines.push(
+              `        annotation ${shortTypeName(annotation.name, moduleName)} := ${quoteString(annotation.value)};`,
+            );
           }
           lines.push("      };");
         }
@@ -736,7 +835,8 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
         const operationList = renderPolicyOperations(policy.operations);
         // Prefer the original `USING (...)` source text (round-trips arbitrary
         // predicates verbatim); fall back to the structured condition.
-        const usingClause = policy.usingExprText ?? renderPolicyCondition(policy.condition, moduleName);
+        const usingClause =
+          policy.usingExprText ?? renderPolicyCondition(policy.condition, moduleName);
         lines.push(
           `    access policy ${policy.name} ${policy.effect} ${operationList} using (${usingClause});`,
         );
@@ -762,12 +862,17 @@ export const renderDeclarativeSchema = (schema: DeclarativeSchema): string => {
 };
 
 export const renderDeclarativeSchemaFromSnapshot = (schema: SchemaSnapshot): string => {
-  return renderDeclarativeSchema(declarativeSchemaFromTypeDefs(schema.listTypes(), schema.listFunctions()));
+  return renderDeclarativeSchema(
+    declarativeSchemaFromTypeDefs(schema.listTypes(), schema.listFunctions()),
+  );
 };
 
 const quoteString = (value: string): string => `'${value.replaceAll("'", "\\'")}'`;
 
-const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['expr'], moduleName: string): string => {
+const renderComputedExpr = (
+  expr: Extract<TypeMember, { kind: "computed" }>["expr"],
+  moduleName: string,
+): string => {
   if (expr.kind === "field_ref") {
     return `.${expr.field}`;
   }
@@ -782,7 +887,9 @@ const renderComputedExpr = (expr: Extract<TypeMember, { kind: "computed" }>['exp
 
   if (expr.kind === "concat") {
     return expr.parts
-      .map((part) => (part.kind === "field_ref" ? `.${part.field}` : renderScalarLiteral(part.value)))
+      .map((part) =>
+        part.kind === "field_ref" ? `.${part.field}` : renderScalarLiteral(part.value),
+      )
       .join(" ++ ");
   }
 
@@ -827,8 +934,14 @@ const renderComputedLinkPropertyExpr = (expr: ComputedLinkPropertyExpr): string 
     return renderScalarLiteral(expr.value);
   }
 
-  const left = expr.left.kind === "binary_op" ? `(${renderComputedLinkPropertyExpr(expr.left)})` : renderComputedLinkPropertyExpr(expr.left);
-  const right = expr.right.kind === "binary_op" ? `(${renderComputedLinkPropertyExpr(expr.right)})` : renderComputedLinkPropertyExpr(expr.right);
+  const left =
+    expr.left.kind === "binary_op"
+      ? `(${renderComputedLinkPropertyExpr(expr.left)})`
+      : renderComputedLinkPropertyExpr(expr.left);
+  const right =
+    expr.right.kind === "binary_op"
+      ? `(${renderComputedLinkPropertyExpr(expr.right)})`
+      : renderComputedLinkPropertyExpr(expr.right);
   return `${left} ${expr.op} ${right}`;
 };
 
@@ -861,7 +974,9 @@ const shortTypeName = (name: string, moduleName: string): string => {
   return `${targetModule}::${targetName}`;
 };
 
-const renderMutationRewriteExpr = (expr: NonNullable<PropertyMember["rewrite"]>["onInsert"]): string => {
+const renderMutationRewriteExpr = (
+  expr: NonNullable<PropertyMember["rewrite"]>["onInsert"],
+): string => {
   if (!expr) {
     return "{}";
   }
@@ -881,7 +996,11 @@ const renderMutationRewriteExpr = (expr: NonNullable<PropertyMember["rewrite"]>[
   return renderScalarLiteral(expr.value);
 };
 
-const renderTriggerValueExpr = (expr: { kind: string; field?: string; value?: unknown }): string => {
+const renderTriggerValueExpr = (expr: {
+  kind: string;
+  field?: string;
+  value?: unknown;
+}): string => {
   if (expr.kind === "new_field") {
     return `__new__.${expr.field}`;
   }
@@ -910,7 +1029,10 @@ const renderPolicyOperations = (operations: string[]): string => {
   return labels.join(", ");
 };
 
-const renderPolicyCondition = (condition: { kind: string; [key: string]: unknown }, moduleName: string): string => {
+const renderPolicyCondition = (
+  condition: { kind: string; [key: string]: unknown },
+  moduleName: string,
+): string => {
   if (condition.kind === "always") {
     return condition.value ? "true" : "false";
   }
@@ -933,7 +1055,9 @@ const renderPolicyCondition = (condition: { kind: string; [key: string]: unknown
 
   if (condition.kind === "and") {
     const clauses = Array.isArray(condition.clauses) ? condition.clauses : [];
-    return clauses.map((clause) => renderPolicyCondition(clause as { kind: string }, moduleName)).join(" and ");
+    return clauses
+      .map((clause) => renderPolicyCondition(clause as { kind: string }, moduleName))
+      .join(" and ");
   }
 
   return "false";
@@ -943,8 +1067,12 @@ const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
   const trimmed = fn.body.text.trim();
   const paramNames = new Set(fn.params.map((param) => param.name));
   const statement = parseFunctionStatement(trimmed);
-  if (statement?.kind === "select_expr" && !statement.with && statement.expr.kind === "concat"
-    && concatRoundtripsAsExprBody(statement.expr, paramNames)) {
+  if (
+    statement?.kind === "select_expr" &&
+    !statement.with &&
+    statement.expr.kind === "concat" &&
+    concatRoundtripsAsExprBody(statement.expr, paramNames)
+  ) {
     return {
       kind: "expr",
       expr: astToFunctionExpr(statement.expr, paramNames),
@@ -966,9 +1094,11 @@ const parseFunctionBody = (fn: FunctionDeclaration): FunctionDef["body"] => {
   // fallback. Route those through the query path with a `select` prefix so
   // the full evaluator handles them.
   const wrappedStatement = parseFunctionStatement(`select ${trimmed}`);
-  if (wrappedStatement?.kind === "select_expr"
-    && !wrappedStatement.with
-    && wrappedStatement.expr.kind !== "concat") {
+  if (
+    wrappedStatement?.kind === "select_expr" &&
+    !wrappedStatement.with &&
+    wrappedStatement.expr.kind !== "concat"
+  ) {
     return {
       kind: "query",
       language: fn.body.language,
@@ -1002,13 +1132,15 @@ const parseFunctionStatement = (source: string): Statement | undefined => {
 };
 
 const isQueryStatement = (statement: Statement | undefined): boolean => {
-  return statement?.kind === "select"
-    || statement?.kind === "select_expr"
-    || statement?.kind === "select_free"
-    || statement?.kind === "insert"
-    || statement?.kind === "update"
-    || statement?.kind === "delete"
-    || statement?.kind === "for";
+  return (
+    statement?.kind === "select" ||
+    statement?.kind === "select_expr" ||
+    statement?.kind === "select_free" ||
+    statement?.kind === "insert" ||
+    statement?.kind === "update" ||
+    statement?.kind === "delete" ||
+    statement?.kind === "for"
+  );
 };
 
 // True when a `concat` expression can be losslessly represented as an `expr`
@@ -1016,10 +1148,7 @@ const isQueryStatement = (statement: Statement | undefined): boolean => {
 // `param_ref`s; richer forms (casts, function calls, math, etc.) get silently
 // degraded by `astToFunctionExprPart` and must go through the `query` body
 // path so the full pipeline can lower them.
-const concatRoundtripsAsExprBody = (
-  expr: FreeObjectExpr,
-  paramNames: Set<string>,
-): boolean => {
+const concatRoundtripsAsExprBody = (expr: FreeObjectExpr, paramNames: Set<string>): boolean => {
   if (expr.kind === "concat") {
     return expr.parts.every((part) => concatRoundtripsAsExprBody(part, paramNames));
   }
@@ -1082,7 +1211,10 @@ const astToFunctionExprPart = (
 };
 
 const parseFunctionLiteral = (source: string): ScalarValue => {
-  if ((source.startsWith("'") && source.endsWith("'")) || (source.startsWith('"') && source.endsWith('"'))) {
+  if (
+    (source.startsWith("'") && source.endsWith("'")) ||
+    (source.startsWith('"') && source.endsWith('"'))
+  ) {
     return source.slice(1, -1);
   }
 

@@ -146,11 +146,7 @@ describe("explain-lite (debug) — index usage via SQLite EXPLAIN QUERY PLAN", (
   );
 
   // Modeled after test_edgeql_explain_inheritance_01.
-  debugPlanCase(
-    "inheritance_01: WITH X := Text, select X",
-    `with X := Text, select X`,
-    true,
-  );
+  debugPlanCase("inheritance_01: WITH X := Text, select X", `with X := Text, select X`, true);
 
   // Modeled after test_edgeql_explain_order_index_01 (name has a regular index).
   debugPlanCase(

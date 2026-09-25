@@ -27,7 +27,7 @@ describe("tryCompileSetLevelCoalesceSQL — set-level `??`", () => {
     // Fallback: RHS singleton, emitted only when the LHS path is empty.
     expect(out).toContain("UNION ALL");
     expect(out).toContain('SELECT -1 AS "value"');
-    expect(out).toContain('NOT EXISTS (SELECT 1 FROM');
+    expect(out).toContain("NOT EXISTS (SELECT 1 FROM");
   });
 });
 
@@ -36,12 +36,16 @@ describe("tryCompileSetLevelOptionalCompareSQL — set-level `?=` / `?!=`", () =
     const out = sql("SELECT Issue.time_estimate ?= 60");
     expect(out).toContain("(CASE WHEN lhs_q.v IS ? THEN json('true') ELSE json('false') END)");
     // Empty LHS → both sides empty → `?=` yields a single TRUE row.
-    expect(out).toContain("SELECT json('false') AS \"value\" WHERE NOT EXISTS (SELECT 1 FROM lhs_q)");
+    expect(out).toContain(
+      "SELECT json('false') AS \"value\" WHERE NOT EXISTS (SELECT 1 FROM lhs_q)",
+    );
   });
 
   it("`?!=` negates the comparison and flips the empty fallback to TRUE", () => {
     const out = sql("SELECT Issue.time_estimate ?!= 60");
     expect(out).toContain("(CASE WHEN lhs_q.v IS NOT ? THEN json('true') ELSE json('false') END)");
-    expect(out).toContain("SELECT json('true') AS \"value\" WHERE NOT EXISTS (SELECT 1 FROM lhs_q)");
+    expect(out).toContain(
+      "SELECT json('true') AS \"value\" WHERE NOT EXISTS (SELECT 1 FROM lhs_q)",
+    );
   });
 });

@@ -27,7 +27,8 @@ export interface Journal {
 const EMPTY_JOURNAL: Journal = { version: 1, entries: [] };
 
 const metaDir = (migrationsDir: string): string => path.join(migrationsDir, "meta");
-const journalPath = (migrationsDir: string): string => path.join(metaDir(migrationsDir), "_journal.json");
+const journalPath = (migrationsDir: string): string =>
+  path.join(metaDir(migrationsDir), "_journal.json");
 const snapshotPath = (migrationsDir: string, idx: number): string =>
   path.join(metaDir(migrationsDir), `${pad(idx)}.snapshot.esdl`);
 
@@ -57,7 +58,10 @@ export interface WriteMigrationInput {
 }
 
 /** Persist one migration: its `.sql`, its SDL snapshot, and a journal entry. */
-export const writeMigration = (migrationsDir: string, input: WriteMigrationInput): { id: string; sqlFile: string } => {
+export const writeMigration = (
+  migrationsDir: string,
+  input: WriteMigrationInput,
+): { id: string; sqlFile: string } => {
   fs.mkdirSync(metaDir(migrationsDir), { recursive: true });
   const id = `${pad(input.idx)}_${input.name}`;
   const sqlFile = path.join(migrationsDir, `${id}.sql`);

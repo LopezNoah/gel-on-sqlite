@@ -109,7 +109,9 @@ describe("db_effect — error propagation into the generator", () => {
 
   it("runs finally and rejects when a DB op fails (async)", async () => {
     const log: string[] = [];
-    await expect(runDbEffectAsync(failingWriteWithFinally(log), awaitedExec(freshDb()))).rejects.toThrow();
+    await expect(
+      runDbEffectAsync(failingWriteWithFinally(log), awaitedExec(freshDb())),
+    ).rejects.toThrow();
     expect(log).toEqual(["finally-ran"]);
   });
 

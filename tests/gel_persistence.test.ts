@@ -25,7 +25,9 @@ import type { SchemaSnapshot } from "../src/schema/schema.js";
 // abstract flag, link targets/cardinality, and function arity, which are the
 // dimensions the serializers are contracted to preserve.
 
-const orig = schemaFromSdl(fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"));
+const orig = schemaFromSdl(
+  fs.readFileSync(new URL("./schemas/issues.esdl", import.meta.url), "utf8"),
+);
 
 interface TypeShape {
   name: string;
@@ -57,7 +59,10 @@ const projectTypes = (s: SchemaSnapshot): TypeShape[] =>
     .sort((a, b) => a.name.localeCompare(b.name));
 
 const projectFns = (s: SchemaSnapshot): string[] =>
-  s.listFunctions().map((f) => `${f.name}/${(f.params ?? []).length}`).sort();
+  s
+    .listFunctions()
+    .map((f) => `${f.name}/${(f.params ?? []).length}`)
+    .sort();
 
 const roundTrip = (
   serialize: (db: ReturnType<typeof openSQLite>["db"], s: SchemaSnapshot) => void,

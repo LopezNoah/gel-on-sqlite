@@ -29,13 +29,18 @@ const env = {
 };
 
 const exported = spawnSync(python, [exporter], {
-  cwd: root, encoding: "utf8", env, maxBuffer: 24 * 1024 * 1024,
+  cwd: root,
+  encoding: "utf8",
+  env,
+  maxBuffer: 24 * 1024 * 1024,
 });
 if (exported.error || exported.status !== 0) {
   throw new Error(`Gel LR-table export failed: ${exported.error ?? exported.stderr}`);
 }
 const spec = JSON.parse(exported.stdout) as LRSpec;
-const actions = spec.actions.map((row) => new Map(row.map(([name, action]) => [normalizeTableToken(name), action])));
+const actions = spec.actions.map(
+  (row) => new Map(row.map(([name, action]) => [normalizeTableToken(name), action])),
+);
 const gotos = spec.goto.map((row) => new Map(row));
 
 const cases = [
@@ -50,7 +55,7 @@ const cases = [
   "SELECT array_agg('x' ORDER BY 'x');",
   "WITH MODULE schema SELECT Type {name};",
   "CREATE TYPE Foo { CREATE PROPERTY name -> str; };",
-  "SELECT \"1 + 1 = \\(1 + 1)\";",
+  'SELECT "1 + 1 = \\(1 + 1)";',
   "SELECT 1 +;",
 ];
 const gelRun = spawnSync(python, [bridge], {
@@ -72,29 +77,67 @@ function normalizeTableToken(name: string): string {
 function tokenName(token: Token): string {
   if (token.kind === "eof") return "EOI";
   if (token.kind === "identifier" || token.kind === "backtick_name") return "IDENT";
-  if (token.kind.startsWith("kw_") || token.kind === "kw_unreserved"
-      || token.kind === "kw_partial_reserved" || token.kind === "kw_future_reserved") {
+  if (
+    token.kind.startsWith("kw_") ||
+    token.kind === "kw_unreserved" ||
+    token.kind === "kw_partial_reserved" ||
+    token.kind === "kw_future_reserved"
+  ) {
     return spec.keyword_tokens[token.lower.toLowerCase()] ?? token.lower.toUpperCase();
   }
   if (token.kind === "number") {
     const value = token.lexeme.replace(/_/g, "");
     const big = value.endsWith("n");
     const nonInteger = /[.eE]/.test(big ? value.slice(0, -1) : value);
-    return big ? nonInteger ? "NFCONST" : "NICONST" : nonInteger ? "FCONST" : "ICONST";
+    return big ? (nonInteger ? "NFCONST" : "NICONST") : nonInteger ? "FCONST" : "ICONST";
   }
   const fixed: Partial<Record<Token["kind"], string>> = {
-    string: "SCONST", bytes_string: "BCONST", parameter: "PARAMETER",
-    parameter_and_type: "PARAMETERANDTYPE", substitution: "SUBSTITUTION",
-    str_interp_start: "STRINTERPSTART", str_interp_cont: "STRINTERPCONT",
-    str_interp_end: "STRINTERPEND", backward_link: ".<", optional_link: ".?>",
-    coloncolon: "::", assign: ":=", add_assign: "+=", sub_assign: "-=",
-    floor_div: "//", concat: "++", coalesce: "??", distinct_from: "?!=",
-    not_distinct_from: "?=", not_equals: "!=", lparen: "(", rparen: ")",
-    lbrace: "{", rbrace: "}", lbracket: "[", rbracket: "]", comma: ",",
-    colon: ":", semi: ";", dot: ".", plus: "+", minus: "-", star: "*",
-    double_splat: "**", slash: "/", modulo: "%", pow: "^", pipe: "|",
-    ampersand: "&", equals: "=", lt: "<", lte: "<=", gt: ">", gte: ">=",
-    at: "@", arrow: "->",
+    string: "SCONST",
+    bytes_string: "BCONST",
+    parameter: "PARAMETER",
+    parameter_and_type: "PARAMETERANDTYPE",
+    substitution: "SUBSTITUTION",
+    str_interp_start: "STRINTERPSTART",
+    str_interp_cont: "STRINTERPCONT",
+    str_interp_end: "STRINTERPEND",
+    backward_link: ".<",
+    optional_link: ".?>",
+    coloncolon: "::",
+    assign: ":=",
+    add_assign: "+=",
+    sub_assign: "-=",
+    floor_div: "//",
+    concat: "++",
+    coalesce: "??",
+    distinct_from: "?!=",
+    not_distinct_from: "?=",
+    not_equals: "!=",
+    lparen: "(",
+    rparen: ")",
+    lbrace: "{",
+    rbrace: "}",
+    lbracket: "[",
+    rbracket: "]",
+    comma: ",",
+    colon: ":",
+    semi: ";",
+    dot: ".",
+    plus: "+",
+    minus: "-",
+    star: "*",
+    double_splat: "**",
+    slash: "/",
+    modulo: "%",
+    pow: "^",
+    pipe: "|",
+    ampersand: "&",
+    equals: "=",
+    lt: "<",
+    lte: "<=",
+    gt: ">",
+    gte: ">=",
+    at: "@",
+    arrow: "->",
   };
   return fixed[token.kind] ?? token.lexeme;
 }
@@ -119,8 +162,11 @@ function tableTokens(source: string): string[] {
       i += count;
     } else {
       const token = tokens[i];
-      if (token.kind === "number" && result[result.length - 1] === "."
-          && /^\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)+$/.test(token.lexeme)) {
+      if (
+        token.kind === "number" &&
+        result[result.length - 1] === "." &&
+        /^\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)+$/.test(token.lexeme)
+      ) {
         const indices = token.lexeme.split(".");
         result.push("ICONST");
         for (const _index of indices.slice(1)) result.push(".", "ICONST");
@@ -137,7 +183,7 @@ function tableTokens(source: string): string[] {
 }
 
 function parseWithGeneratedTable(source: string): boolean {
-  let stack = [0];
+  const stack = [0];
   let input: string[];
   try {
     input = tableTokens(source);
@@ -159,7 +205,10 @@ function parseWithGeneratedTable(source: string): boolean {
         epsilon = action !== undefined;
       }
       if (!action) {
-        if (trace) console.log(`No action at input[${inputIndex}]=${token}, state=${state}, keys=${[...(actions[state]?.keys() ?? [])].join(",")}`);
+        if (trace)
+          console.log(
+            `No action at input[${inputIndex}]=${token}, state=${state}, keys=${[...(actions[state]?.keys() ?? [])].join(",")}`,
+          );
         return false;
       }
       if ("Shift" in action) {
@@ -183,10 +232,17 @@ for (const [index, source] of cases.entries()) {
   const checkedInAccepted = acceptsGelGrammarBlock(source);
   if (checkedInAccepted !== accepted) generatedArtifactMismatches++;
   if (checkedInAccepted === gel[index].accepted) matches++;
-  else console.log(`Mismatch: Gel ${gel[index].accepted ? "accepts" : "rejects"}, LR ${accepted ? "accepts" : "rejects"}: ${source}`);
+  else
+    console.log(
+      `Mismatch: Gel ${gel[index].accepted ? "accepts" : "rejects"}, LR ${accepted ? "accepts" : "rejects"}: ${source}`,
+    );
 }
-console.log(`Gel LR table: ${spec.actions.length} states, ${spec.production_names.length} productions`);
-console.log(`Checked-in generated parser matched Gel syntax acceptance for ${matches}/${cases.length} cases`);
+console.log(
+  `Gel LR table: ${spec.actions.length} states, ${spec.production_names.length} productions`,
+);
+console.log(
+  `Checked-in generated parser matched Gel syntax acceptance for ${matches}/${cases.length} cases`,
+);
 if (matches !== cases.length) process.exitCode = 1;
 
 const queryCounts = new Map<string, { seen: number; accepted: number; examples: string[] }>();
@@ -217,21 +273,30 @@ for (const { query } of corpus.queries) {
         acceptedByProductionParser++;
       } catch {
         compatibilityGaps.add(query);
-        if (stats.examples.length < 2) stats.examples.push(query.replace(/\s+/g, " ").slice(0, 150));
+        if (stats.examples.length < 2)
+          stats.examples.push(query.replace(/\s+/g, " ").slice(0, 150));
       }
     }
   }
   if (!acceptedQuery) rejectedQueries.add(query);
   queryCounts.set(kind, stats);
 }
-console.log(`Generated Gel LR syntax coverage: ${accepted}/${total} (${(accepted / total * 100).toFixed(1)}%); skipped ${corpus.skippedInterpolated} interpolated templates.`);
-console.log(`Additional forms accepted by the working-AST grammar reducer: ${acceptedBySuiteExtension}.`);
-console.log(`Further suite forms accepted by the production compatibility parser: ${acceptedByProductionParser}; combined: ${accepted + acceptedBySuiteExtension + acceptedByProductionParser}/${total}.`);
+console.log(
+  `Generated Gel LR syntax coverage: ${accepted}/${total} (${((accepted / total) * 100).toFixed(1)}%); skipped ${corpus.skippedInterpolated} interpolated templates.`,
+);
+console.log(
+  `Additional forms accepted by the working-AST grammar reducer: ${acceptedBySuiteExtension}.`,
+);
+console.log(
+  `Further suite forms accepted by the production compatibility parser: ${acceptedByProductionParser}; combined: ${accepted + acceptedBySuiteExtension + acceptedByProductionParser}/${total}.`,
+);
 for (const query of compatibilityGaps) {
   console.log(`  parser compatibility gap: ${query.replace(/\s+/g, " ").slice(0, 180)}`);
 }
 for (const [kind, stats] of [...queryCounts].sort((a, b) => b[1].seen - a[1].seen)) {
-  console.log(`  ${kind.padEnd(10)} ${stats.accepted}/${stats.seen}${stats.examples.length ? `; gaps: ${stats.examples.join(" | ")}` : ""}`);
+  console.log(
+    `  ${kind.padEnd(10)} ${stats.accepted}/${stats.seen}${stats.examples.length ? `; gaps: ${stats.examples.join(" | ")}` : ""}`,
+  );
 }
 const rejected = [...rejectedQueries];
 if (rejected.length) {
@@ -247,11 +312,17 @@ if (rejected.length) {
   }
   const gelVerdicts = JSON.parse(syntaxCheck.stdout) as Verdict[];
   const gelAccepts = gelVerdicts.filter((verdict) => verdict.accepted).length;
-console.log(`Gel accepts ${gelAccepts}/${rejected.length} syntax queries rejected by the generated LR prototype.`);
+  console.log(
+    `Gel accepts ${gelAccepts}/${rejected.length} syntax queries rejected by the generated LR prototype.`,
+  );
   for (let i = 0; i < rejected.length; i++) {
     const verdict = gelVerdicts[i];
-    console.log(`  table gap (${verdict.accepted ? "Gel accepts" : `Gel rejects: ${verdict.error}`}): ${rejected[i].replace(/\s+/g, " ").slice(0, 180)}`);
+    console.log(
+      `  table gap (${verdict.accepted ? "Gel accepts" : `Gel rejects: ${verdict.error}`}): ${rejected[i].replace(/\s+/g, " ").slice(0, 180)}`,
+    );
   }
 }
-console.log(`Checked-in LR table differs from fresh Gel table in ${generatedArtifactMismatches} cases.`);
+console.log(
+  `Checked-in LR table differs from fresh Gel table in ${generatedArtifactMismatches} cases.`,
+);
 if (generatedArtifactMismatches) process.exitCode = 1;

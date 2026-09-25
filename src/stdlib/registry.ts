@@ -50,7 +50,10 @@ export interface StdlibFunctionDef {
 
 /** The SQL-lowering adapter: produces the SQL fragment for a call, or null
  * when the arguments aren't lowerable as given. */
-export type StdlibSqlTemplate = (args: string[], argTypes?: (string | undefined)[]) => string | null;
+export type StdlibSqlTemplate = (
+  args: string[],
+  argTypes?: (string | undefined)[],
+) => string | null;
 
 /** The interpreter adapter: evaluates a call over already-evaluated args. */
 export type StdlibRuntimeImpl = (args: RuntimeFunctionArg[]) => unknown;
@@ -96,7 +99,10 @@ const toStringList = (arg: RuntimeFunctionArg): string[] => {
   return [String(arg ?? "")];
 };
 
-const unaryNumeric = (arg: RuntimeFunctionArg, fn: (value: number) => number): number | number[] => {
+const unaryNumeric = (
+  arg: RuntimeFunctionArg,
+  fn: (value: number) => number,
+): number | number[] => {
   if (typeof arg === "object" && arg !== null && "kind" in arg && arg.kind === "set") {
     return arg.values.map((value) => fn(toNumber(value)));
   }
@@ -236,7 +242,9 @@ const isValidLocalDate = (value: string): boolean => {
   const month = Number(matched[2]);
   const day = Number(matched[3]);
   const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day;
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day
+  );
 };
 
 const isValidLocalDateTime = (value: string): boolean => {
@@ -289,9 +297,9 @@ const bitWidthOf = (typeHint: string | undefined): number => {
 // scalar subquery would be folded to a single value and every row would share
 // one uuid, which breaks `count(DISTINCT …)`-style volatility.
 const uuidGenerateSql = (): string =>
-  "(lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || "
-  + "lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || "
-  + "lower(hex(randomblob(6))))";
+  "(lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || " +
+  "lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || " +
+  "lower(hex(randomblob(6))))";
 
 // ── The registry ──────────────────────────────────────────────────────────
 
@@ -299,54 +307,54 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::enc::base64_decode",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_base64_decode(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_base64_decode(${argSql[0]})` : null),
   },
   // math::
   {
     name: "math::abs",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `abs(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `abs(${argSql[0]})` : null),
     runtime: (args) => unaryNumeric(args[0], (value) => Math.abs(value)),
   },
   {
     name: "math::ceil",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `ceil(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `ceil(${argSql[0]})` : null),
     runtime: (args) => unaryNumeric(args[0], (value) => Math.ceil(value)),
   },
   {
     name: "math::floor",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `floor(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `floor(${argSql[0]})` : null),
     runtime: (args) => unaryNumeric(args[0], (value) => Math.floor(value)),
   },
   {
     name: "math::exp",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_exp(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_exp(${argSql[0]})` : null),
     runtime: (args) => unaryNumeric(args[0], (value) => Math.exp(value)),
   },
   // math::sqrt is SQL-lowered only (no runtime case in the interpreter).
   {
     name: "math::sqrt",
-    sql: (argSql) => argSql[0] ? `_gel_sqrt(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_sqrt(${argSql[0]})` : null),
   },
   {
     name: "math::ln",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_ln(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_ln(${argSql[0]})` : null),
     runtime: (args) => unaryNumeric(args[0], (value) => Math.log(value)),
   },
   {
     name: "math::lg",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_lg(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_lg(${argSql[0]})` : null),
     runtime: (args) => unaryNumeric(args[0], (value) => Math.log10(value)),
   },
   {
     name: "math::log",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_log(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `_gel_log(${argSql[0]}, ${argSql[1]})` : null),
     runtime: (args) => {
       const x = toNumber(args[0]);
       const base = toNumber(args[1]);
@@ -414,72 +422,82 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     // Trig functions use the `_gel_*` custom SQLite functions registered in
     // openSQLite() — those wrappers raise "input is out of range" for inputs
     // SQLite's built-in trig would silently return NULL / Infinity for.
-    sql: (argSql) => argSql[0] ? `_gel_acos(${argSql[0]})` : null,
-    runtime: (args) => unaryNumeric(args[0], (value) => {
-      if (value < -1 || value > 1 || !Number.isFinite(value)) {
-        throw new AppError("E_VALIDATION", "input is out of range for math::acos");
-      }
-      return Math.acos(value);
-    }),
+    sql: (argSql) => (argSql[0] ? `_gel_acos(${argSql[0]})` : null),
+    runtime: (args) =>
+      unaryNumeric(args[0], (value) => {
+        if (value < -1 || value > 1 || !Number.isFinite(value)) {
+          throw new AppError("E_VALIDATION", "input is out of range for math::acos");
+        }
+        return Math.acos(value);
+      }),
   },
   {
     name: "math::asin",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_asin(${argSql[0]})` : null,
-    runtime: (args) => unaryNumeric(args[0], (value) => {
-      if (value < -1 || value > 1 || !Number.isFinite(value)) {
-        throw new AppError("E_VALIDATION", "input is out of range for math::asin");
-      }
-      return Math.asin(value);
-    }),
+    sql: (argSql) => (argSql[0] ? `_gel_asin(${argSql[0]})` : null),
+    runtime: (args) =>
+      unaryNumeric(args[0], (value) => {
+        if (value < -1 || value > 1 || !Number.isFinite(value)) {
+          throw new AppError("E_VALIDATION", "input is out of range for math::asin");
+        }
+        return Math.asin(value);
+      }),
   },
   {
     name: "math::atan",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `atan(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `atan(${argSql[0]})` : null),
     runtime: (args) => unaryNumeric(args[0], (value) => Math.atan(value)),
   },
   {
     name: "math::atan2",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_atan2(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `_gel_atan2(${argSql[0]}, ${argSql[1]})` : null),
     runtime: (args) => Math.atan2(toNumber(args[0]), toNumber(args[1])),
   },
   {
     name: "math::cos",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_cos(${argSql[0]})` : null,
-    runtime: (args) => unaryNumeric(args[0], (value) => {
-      if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::cos");
-      return Math.cos(value);
-    }),
+    sql: (argSql) => (argSql[0] ? `_gel_cos(${argSql[0]})` : null),
+    runtime: (args) =>
+      unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value))
+          throw new AppError("E_VALIDATION", "input is out of range for math::cos");
+        return Math.cos(value);
+      }),
   },
   {
     name: "math::cot",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_cot(${argSql[0]})` : null,
-    runtime: (args) => unaryNumeric(args[0], (value) => {
-      if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::cot");
-      return 1 / Math.tan(value);
-    }),
+    sql: (argSql) => (argSql[0] ? `_gel_cot(${argSql[0]})` : null),
+    runtime: (args) =>
+      unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value))
+          throw new AppError("E_VALIDATION", "input is out of range for math::cot");
+        return 1 / Math.tan(value);
+      }),
   },
   {
     name: "math::sin",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_sin(${argSql[0]})` : null,
-    runtime: (args) => unaryNumeric(args[0], (value) => {
-      if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::sin");
-      return Math.sin(value);
-    }),
+    sql: (argSql) => (argSql[0] ? `_gel_sin(${argSql[0]})` : null),
+    runtime: (args) =>
+      unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value))
+          throw new AppError("E_VALIDATION", "input is out of range for math::sin");
+        return Math.sin(value);
+      }),
   },
   {
     name: "math::tan",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_tan(${argSql[0]})` : null,
-    runtime: (args) => unaryNumeric(args[0], (value) => {
-      if (!Number.isFinite(value)) throw new AppError("E_VALIDATION", "input is out of range for math::tan");
-      return Math.tan(value);
-    }),
+    sql: (argSql) => (argSql[0] ? `_gel_tan(${argSql[0]})` : null),
+    runtime: (args) =>
+      unaryNumeric(args[0], (value) => {
+        if (!Number.isFinite(value))
+          throw new AppError("E_VALIDATION", "input is out of range for math::tan");
+        return Math.tan(value);
+      }),
   },
 
   // std:: datetime / temporal
@@ -504,14 +522,14 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::to_datetime",
     meta: { minArgs: 1, maxArgs: 7 },
-    sql: (argSql) => argSql.length > 0 ? `_gel_to_datetime(${argSql.join(", ")})` : null,
+    sql: (argSql) => (argSql.length > 0 ? `_gel_to_datetime(${argSql.join(", ")})` : null),
     runtime: (args) => parseDateTime(args[0]),
   },
   {
     // to_str accepts an optional format string for datetime / numeric inputs.
     name: "std::to_str",
     meta: { minArgs: 1, maxArgs: 2 },
-    sql: (argSql) => argSql[0] ? `CAST(${argSql[0]} AS TEXT)` : null,
+    sql: (argSql) => (argSql[0] ? `CAST(${argSql[0]} AS TEXT)` : null),
     runtime: (args) => String(extractScalar(args[0]) ?? ""),
   },
   {
@@ -539,7 +557,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::count",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `count(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `count(${argSql[0]})` : null),
     runtime: (args) => {
       if (typeof args[0] === "object" && args[0] !== null && "kind" in args[0]) {
         return args[0].values.length;
@@ -550,7 +568,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::max",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `max(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `max(${argSql[0]})` : null),
     runtime: (args) => {
       const values = toNumberList(args[0]);
       return values.length > 0 ? Math.max(...values) : null;
@@ -559,7 +577,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::min",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `min(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `min(${argSql[0]})` : null),
     runtime: (args) => {
       const values = toNumberList(args[0]);
       return values.length > 0 ? Math.min(...values) : null;
@@ -586,12 +604,13 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::assert_exists",
     meta: { minArgs: 1, maxArgs: 2 },
-    sql: (argSql) => argSql[0] ? `_gel_assert_exists(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_assert_exists(${argSql[0]})` : null),
     runtime: (args) => {
       const raw = args[0];
-      const inner = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
-        ? raw.values
-        : raw;
+      const inner =
+        typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+          ? raw.values
+          : raw;
       const isEmpty = Array.isArray(inner) ? inner.length === 0 : inner == null;
       if (isEmpty) {
         throw new AppError("E_VALIDATION", "assert_exists violation");
@@ -614,7 +633,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       const values = isSet ? raw.values : Array.isArray(raw) ? raw : raw == null ? [] : [raw];
       if (values.length > 1) {
         const msg = args.length > 1 ? extractScalar(args[1]) : null;
-        throw new AppError("E_VALIDATION", typeof msg === "string" && msg ? msg : "assert_single violation");
+        throw new AppError(
+          "E_VALIDATION",
+          typeof msg === "string" && msg ? msg : "assert_single violation",
+        );
       }
       return isSet ? raw.values : raw;
     },
@@ -628,7 +650,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       const values = isSet ? raw.values : Array.isArray(raw) ? raw : raw == null ? [] : [raw];
       if (values.length !== new Set(values.map((v) => JSON.stringify(v))).size) {
         const msg = args.length > 1 ? extractScalar(args[1]) : null;
-        throw new AppError("E_VALIDATION", typeof msg === "string" && msg ? msg : "assert_distinct violation");
+        throw new AppError(
+          "E_VALIDATION",
+          typeof msg === "string" && msg ? msg : "assert_distinct violation",
+        );
       }
       return isSet ? raw.values : raw;
     },
@@ -653,7 +678,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       const cond = extractScalar(args[0]);
       if (cond === false || cond === 0) {
         const msg = args.length > 1 ? extractScalar(args[1]) : null;
-        throw new AppError("E_VALIDATION", typeof msg === "string" && msg ? msg : "assertion failed");
+        throw new AppError(
+          "E_VALIDATION",
+          typeof msg === "string" && msg ? msg : "assertion failed",
+        );
       }
       return cond;
     },
@@ -663,13 +691,14 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     meta: { minArgs: 1, maxArgs: 1 },
     runtime: (args) => {
       const raw = args[0];
-      const values = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
-        ? raw.values
-        : Array.isArray(raw)
-          ? raw
-          : raw == null
-            ? []
-            : [raw];
+      const values =
+        typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+          ? raw.values
+          : Array.isArray(raw)
+            ? raw
+            : raw == null
+              ? []
+              : [raw];
       return values.every((value) => value === true || value === 1);
     },
   },
@@ -678,13 +707,14 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     meta: { minArgs: 1, maxArgs: 1 },
     runtime: (args) => {
       const raw = args[0];
-      const values = typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
-        ? raw.values
-        : Array.isArray(raw)
-          ? raw
-          : raw == null
-            ? []
-            : [raw];
+      const values =
+        typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set"
+          ? raw.values
+          : Array.isArray(raw)
+            ? raw
+            : raw == null
+              ? []
+              : [raw];
       return values.some((value) => value === true || value === 1);
     },
   },
@@ -767,29 +797,43 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
         : typeof raw === "object" && raw !== null && "kind" in raw
           ? [...raw.values]
           : [];
-      if (arr.length === 0 && typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "set") {
+      if (
+        arr.length === 0 &&
+        typeof raw === "object" &&
+        raw !== null &&
+        "kind" in raw &&
+        raw.kind === "set"
+      ) {
         return [];
       }
       const indexes = toNumberList(args[1]);
       if (indexes.length > 1) {
         const values = arr.some(Array.isArray)
-          ? arr.flatMap((item) => Array.isArray(item)
-            ? indexes.map((idx) => item[idx < 0 ? item.length + idx : idx] ?? null).filter((v) => v !== null && v !== undefined)
-            : [])
-          : indexes.map((idx) => arr[idx < 0 ? arr.length + idx : idx] ?? null).filter((v) => v !== null && v !== undefined);
+          ? arr.flatMap((item) =>
+              Array.isArray(item)
+                ? indexes
+                    .map((idx) => item[idx < 0 ? item.length + idx : idx] ?? null)
+                    .filter((v) => v !== null && v !== undefined)
+                : [],
+            )
+          : indexes
+              .map((idx) => arr[idx < 0 ? arr.length + idx : idx] ?? null)
+              .filter((v) => v !== null && v !== undefined);
         return values.sort((a, b) => String(a).localeCompare(String(b)));
       }
       const idx = indexes[0] ?? 0;
       if (arr.length > 0 && Array.isArray(arr[0])) {
-        return arr.map((item) => {
-          const tuple = item as unknown as unknown[];
-          return tuple[idx < 0 ? tuple.length + idx : idx] ?? null;
-        }).filter((value) => value !== null && value !== undefined)
+        return arr
+          .map((item) => {
+            const tuple = item as unknown as unknown[];
+            return tuple[idx < 0 ? tuple.length + idx : idx] ?? null;
+          })
+          .filter((value) => value !== null && value !== undefined)
           .sort((a, b) => String(a).localeCompare(String(b)));
       }
       const normalized = idx < 0 ? arr.length + idx : idx;
       if (normalized < 0 || normalized >= arr.length) {
-        return args.length > 2 ? extractScalar(args[2]) ?? null : null;
+        return args.length > 2 ? (extractScalar(args[2]) ?? null) : null;
       }
       return arr[normalized];
     },
@@ -797,16 +841,18 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::array_fill",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql, argTypes) => argSql[0] && argSql[1]
-      ? `_gel_array_fill(${argSql[0]}, ${argSql[1]}, ${argTypes?.[0]?.startsWith("array<") && argTypes[0].includes("tuple") ? 1 : 0})`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] && argSql[1]
+        ? `_gel_array_fill(${argSql[0]}, ${argSql[1]}, ${argTypes?.[0]?.startsWith("array<") && argTypes[0].includes("tuple") ? 1 : 0})`
+        : null,
   },
   {
     name: "std::array_set",
     meta: { minArgs: 3, maxArgs: 3 },
-    sql: (argSql, argTypes) => argSql[0] && argSql[1] && argSql[2]
-      ? `_gel_array_set(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[2])})`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] && argSql[1] && argSql[2]
+        ? `_gel_array_set(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[2])})`
+        : null,
     runtime: (args) => {
       const raw = args[0];
       const arr: ScalarValue[] = Array.isArray(raw)
@@ -827,9 +873,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::array_insert",
     meta: { minArgs: 3, maxArgs: 3 },
-    sql: (argSql, argTypes) => argSql[0] && argSql[1] && argSql[2]
-      ? `_gel_array_insert(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[2])})`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] && argSql[1] && argSql[2]
+        ? `_gel_array_insert(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[2])})`
+        : null,
     runtime: (args) => {
       const raw = args[0];
       const arr: ScalarValue[] = Array.isArray(raw)
@@ -855,28 +902,33 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     meta: { minArgs: 1, maxArgs: 1 },
     runtime: (args) => {
       const value = args[0];
-      const items: unknown[] = typeof value === "object" && value !== null && "kind" in value
-        ? [...value.values]
-        : Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+      const items: unknown[] =
+        typeof value === "object" && value !== null && "kind" in value
+          ? [...value.values]
+          : Array.isArray(value)
+            ? value
+            : value === null || value === undefined
+              ? []
+              : [value];
       return items.map((item, index) => [index, item]);
     },
   },
   {
     name: "std::str_lower",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_str_lower(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_str_lower(${argSql[0]})` : null),
     runtime: (args) => String(extractScalar(args[0]) ?? "").toLowerCase(),
   },
   {
     name: "std::str_upper",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_str_upper(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_str_upper(${argSql[0]})` : null),
     runtime: (args) => String(extractScalar(args[0]) ?? "").toUpperCase(),
   },
   {
     name: "std::str_title",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_str_title(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_str_title(${argSql[0]})` : null),
   },
   {
     // str_split returns a single `array<std::str>` value (see the return-type
@@ -885,7 +937,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     // operand is multi.
     name: "std::str_split",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_str_split(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `_gel_str_split(${argSql[0]}, ${argSql[1]})` : null),
   },
   {
     name: "std::to_duration",
@@ -914,19 +966,19 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "cal::to_local_datetime",
     meta: { minArgs: 1, maxArgs: 6 },
-    sql: (argSql) => argSql.length > 0 ? `_gel_to_local_datetime(${argSql.join(", ")})` : null,
+    sql: (argSql) => (argSql.length > 0 ? `_gel_to_local_datetime(${argSql.join(", ")})` : null),
     runtime: (args) => parseLocalDateTime(extractScalar(args[0])),
   },
   {
     name: "cal::to_local_date",
     meta: { minArgs: 1, maxArgs: 3 },
-    sql: (argSql) => argSql.length > 0 ? `_gel_to_local_date(${argSql.join(", ")})` : null,
+    sql: (argSql) => (argSql.length > 0 ? `_gel_to_local_date(${argSql.join(", ")})` : null),
     runtime: (args) => parseLocalDate(extractScalar(args[0])),
   },
   {
     name: "cal::to_local_time",
     meta: { minArgs: 1, maxArgs: 3 },
-    sql: (argSql) => argSql.length > 0 ? `_gel_to_local_time(${argSql.join(", ")})` : null,
+    sql: (argSql) => (argSql.length > 0 ? `_gel_to_local_time(${argSql.join(", ")})` : null),
     runtime: (args) => parseLocalTime(extractScalar(args[0])),
   },
   {
@@ -944,9 +996,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::datetime_get",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_datetime_get(${argSql[0]}, ${argSql[1]})`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_datetime_get(${argSql[0]}, ${argSql[1]})` : null,
     runtime: (args) => {
       const date = new Date(parseDateTime(args[0]));
       const part = String(extractScalar(args[1]) ?? "").toLowerCase();
@@ -973,9 +1024,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "cal::date_get",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_date_get(${argSql[0]}, ${argSql[1]})`
-      : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `_gel_date_get(${argSql[0]}, ${argSql[1]})` : null),
     runtime: (args) => {
       const date = parseDateComponents(String(extractScalar(args[0]) ?? ""));
       const part = String(extractScalar(args[1]) ?? "").toLowerCase();
@@ -994,9 +1043,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "cal::time_get",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_time_get(${argSql[0]}, ${argSql[1]})`
-      : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `_gel_time_get(${argSql[0]}, ${argSql[1]})` : null),
     runtime: (args) => {
       const time = parseTimeComponents(String(extractScalar(args[0]) ?? ""));
       const part = String(extractScalar(args[1]) ?? "").toLowerCase();
@@ -1015,9 +1062,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::duration_get",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_duration_get(${argSql[0]}, ${argSql[1]})`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_duration_get(${argSql[0]}, ${argSql[1]})` : null,
     runtime: (args) => {
       const duration = parseDurationParts(String(extractScalar(args[0]) ?? ""));
       const part = String(extractScalar(args[1]) ?? "").toLowerCase();
@@ -1038,9 +1084,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::datetime_truncate",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_datetime_truncate(${argSql[0]}, ${argSql[1]})`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_datetime_truncate(${argSql[0]}, ${argSql[1]})` : null,
     runtime: (args) => {
       const part = String(extractScalar(args[0]) ?? "").toLowerCase();
       const date = new Date(parseDateTime(args[1]));
@@ -1065,9 +1110,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::duration_truncate",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql, argTypes) => argSql[0] && argSql[1]
-      ? `_gel_duration_truncate(${argSql[0]}, ${argSql[1]}, '${argTypes?.[0] ?? ""}')`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] && argSql[1]
+        ? `_gel_duration_truncate(${argSql[0]}, ${argSql[1]}, '${argTypes?.[0] ?? ""}')`
+        : null,
     runtime: (args) => {
       const unit = String(extractScalar(args[0]) ?? "").toLowerCase();
       const duration = parseDurationParts(String(extractScalar(args[1]) ?? ""));
@@ -1083,7 +1129,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "cal::duration_normalize_hours",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_duration_normalize_hours(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_duration_normalize_hours(${argSql[0]})` : null),
     runtime: (args) => {
       const duration = parseDurationParts(String(extractScalar(args[0]) ?? ""));
       const normalized = duration.hours + Math.floor(duration.minutes / 60);
@@ -1094,7 +1140,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "cal::duration_normalize_days",
     meta: { minArgs: 1, maxArgs: 1 },
-    sql: (argSql) => argSql[0] ? `_gel_duration_normalize_days(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_duration_normalize_days(${argSql[0]})` : null),
     runtime: (args) => {
       const duration = parseDurationParts(String(extractScalar(args[0]) ?? ""));
       const days = Math.floor(duration.hours / 24);
@@ -1104,9 +1150,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   },
   {
     name: "std::duration_to_seconds",
-    sql: (argSql) => argSql[0]
-      ? `_gel_duration_to_seconds(${argSql[0]})`
-      : null,
+    sql: (argSql) => (argSql[0] ? `_gel_duration_to_seconds(${argSql[0]})` : null),
   },
 
   // internal helpers
@@ -1133,7 +1177,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     meta: { minArgs: 1, maxArgs: 1, returnOptional: true },
     // `to_json(s)` parses the string as JSON; SQLite's json() validates and
     // minifies, raising on malformed input like EdgeQL does.
-    sql: (argSql) => argSql[0] ? `json(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `json(${argSql[0]})` : null),
     runtime: (args) => {
       const raw = extractScalar(args[0]);
       if (raw === null || raw === undefined) {
@@ -1153,7 +1197,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     name: "std::json_get",
     sql: (argSql) => {
       if (!argSql[0] || argSql.length < 2 || argSql.slice(1).some((a) => !a)) return null;
-      const path = argSql.slice(1).map((a) => ` || '."' || ${a} || '"'`).join("");
+      const path = argSql
+        .slice(1)
+        .map((a) => ` || '."' || ${a} || '"'`)
+        .join("");
       return `json_extract(${argSql[0]}, '$'${path})`;
     },
   },
@@ -1232,9 +1279,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     // SQLite functions registered in openSQLite().
     name: "std::re_test",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `(_gel_re_test(${argSql[0]}, ${argSql[1]}) = 1)`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `(_gel_re_test(${argSql[0]}, ${argSql[1]}) = 1)` : null,
     runtime: (args) => {
       const pattern = String(args[0] ?? "");
       const subject = String(args[1] ?? "");
@@ -1245,9 +1291,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   {
     name: "std::re_match",
     meta: { minArgs: 2, maxArgs: 2 },
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_re_match_first(${argSql[0]}, ${argSql[1]})`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_re_match_first(${argSql[0]}, ${argSql[1]})` : null,
     runtime: (args) => {
       const patterns = toStringList(args[0]);
       const subjects = toStringList(args[1]);
@@ -1257,8 +1302,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
         for (const subject of subjects) {
           const match = new RegExp(source, flags).exec(subject);
           if (!match) continue;
-          out.push((match.length === 1 ? [match[0]] : match.slice(1))
-            .map((group) => group ?? ""));
+          out.push((match.length === 1 ? [match[0]] : match.slice(1)).map((group) => group ?? ""));
         }
       }
       return out;
@@ -1275,8 +1319,7 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       const out: unknown[] = [];
       let m: RegExpExecArray | null;
       while ((m = re.exec(subject)) !== null) {
-        out.push((m.length === 1 ? [m[0]] : m.slice(1))
-          .map((group) => group ?? ""));
+        out.push((m.length === 1 ? [m[0]] : m.slice(1)).map((group) => group ?? ""));
         if (m.index === re.lastIndex) re.lastIndex += 1;
       }
       return out;
@@ -1287,7 +1330,8 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     meta: { minArgs: 3, maxArgs: 4 },
     sql: (argSql) => {
       if (!argSql[0] || !argSql[1] || !argSql[2]) return null;
-      if (argSql[3]) return `_gel_re_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${argSql[3]})`;
+      if (argSql[3])
+        return `_gel_re_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${argSql[3]})`;
       return `_gel_re_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`;
     },
     runtime: (args) => {
@@ -1297,7 +1341,10 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
       const optFlags = args[3] !== undefined ? String(args[3]) : "";
       const { source, flags } = parseEdgeQLRegex(pattern);
       const finalFlags = optFlags.includes("g") ? flags + "g" : flags;
-      return subject.replace(new RegExp(source, finalFlags.replace(/(.)(?=.*\1)/g, "")), replacement);
+      return subject.replace(
+        new RegExp(source, finalFlags.replace(/(.)(?=.*\1)/g, "")),
+        replacement,
+      );
     },
   },
 
@@ -1306,101 +1353,118 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
     name: "std::str_trim",
     // str_trim family: SQLite's trim(x, y) trims any character in y from both
     // ends (ltrim/rtrim for one side), matching EdgeQL's optional `trim` arg.
-    sql: (argSql) => argSql[0]
-      ? (argSql[1] ? `trim(${argSql[0]}, ${argSql[1]})` : `trim(${argSql[0]})`)
-      : null,
+    sql: (argSql) =>
+      argSql[0] ? (argSql[1] ? `trim(${argSql[0]}, ${argSql[1]})` : `trim(${argSql[0]})`) : null,
   },
   {
     name: "std::str_trim_start",
-    sql: (argSql) => argSql[0]
-      ? (argSql[1] ? `ltrim(${argSql[0]}, ${argSql[1]})` : `ltrim(${argSql[0]})`)
-      : null,
+    sql: (argSql) =>
+      argSql[0] ? (argSql[1] ? `ltrim(${argSql[0]}, ${argSql[1]})` : `ltrim(${argSql[0]})`) : null,
   },
   {
     name: "std::str_trim_end",
-    sql: (argSql) => argSql[0]
-      ? (argSql[1] ? `rtrim(${argSql[0]}, ${argSql[1]})` : `rtrim(${argSql[0]})`)
-      : null,
+    sql: (argSql) =>
+      argSql[0] ? (argSql[1] ? `rtrim(${argSql[0]}, ${argSql[1]})` : `rtrim(${argSql[0]})`) : null,
   },
   {
     name: "std::str_ltrim",
     meta: { minArgs: 1, maxArgs: 2 },
-    sql: (argSql) => argSql[0] ? (argSql[1] ? `ltrim(${argSql[0]}, ${argSql[1]})` : `ltrim(${argSql[0]})`) : null,
+    sql: (argSql) =>
+      argSql[0] ? (argSql[1] ? `ltrim(${argSql[0]}, ${argSql[1]})` : `ltrim(${argSql[0]})`) : null,
   },
   {
     name: "std::str_rtrim",
     meta: { minArgs: 1, maxArgs: 2 },
-    sql: (argSql) => argSql[0] ? (argSql[1] ? `rtrim(${argSql[0]}, ${argSql[1]})` : `rtrim(${argSql[0]})`) : null,
+    sql: (argSql) =>
+      argSql[0] ? (argSql[1] ? `rtrim(${argSql[0]}, ${argSql[1]})` : `rtrim(${argSql[0]})`) : null,
   },
   {
     name: "std::str_pad_start",
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_str_pad_start(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1]
+        ? `_gel_str_pad_start(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
+        : null,
   },
   {
     name: "std::str_pad_end",
-    sql: (argSql) => argSql[0] && argSql[1]
-      ? `_gel_str_pad_end(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1]
+        ? `_gel_str_pad_end(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
+        : null,
   },
   {
     name: "std::str_lpad",
     meta: { minArgs: 2, maxArgs: 3 },
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_str_pad_start(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1]
+        ? `_gel_str_pad_start(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
+        : null,
   },
   {
     name: "std::str_rpad",
     meta: { minArgs: 2, maxArgs: 3 },
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_str_pad_end(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1]
+        ? `_gel_str_pad_end(${argSql[0]}, ${argSql[1]}${argSql[2] ? `, ${argSql[2]}` : ""})`
+        : null,
   },
   {
     name: "std::str_repeat",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_str_repeat(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_str_repeat(${argSql[0]}, ${argSql[1]})` : null,
   },
   {
     name: "std::str_reverse",
-    sql: (argSql) => argSql[0] ? `_gel_str_reverse(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_str_reverse(${argSql[0]})` : null),
   },
   {
     name: "std::str_replace",
-    sql: (argSql) => argSql[0] && argSql[1] && argSql[2]
-      ? `replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
-      : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] && argSql[2]
+        ? `replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]})`
+        : null,
   },
   {
     name: "std::array_replace",
-    sql: (argSql, argTypes) => argSql[0] && argSql[1] && argSql[2]
-      ? `_gel_array_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[1])})`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] && argSql[1] && argSql[2]
+        ? `_gel_array_replace(${argSql[0]}, ${argSql[1]}, ${argSql[2]}, ${structuredCollectionArg(argTypes?.[1])})`
+        : null,
   },
   {
     name: "std::to_int16",
-    sql: (argSql) => argSql[0] ? `_gel_to_int16(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] ? `_gel_to_int16(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
   },
   {
     name: "std::to_int32",
-    sql: (argSql) => argSql[0] ? `_gel_to_int32(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] ? `_gel_to_int32(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
   },
   {
     name: "std::to_int64",
-    sql: (argSql) => argSql[0] ? `_gel_to_int64(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] ? `_gel_to_int64(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
   },
   {
     name: "std::to_float32",
-    sql: (argSql) => argSql[0] ? `_gel_to_float32(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] ? `_gel_to_float32(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
   },
   {
     name: "std::to_float64",
-    sql: (argSql) => argSql[0] ? `_gel_to_float64(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] ? `_gel_to_float64(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
   },
   {
     name: "std::to_bigint",
-    sql: (argSql) => argSql[0] ? `_gel_to_bigint(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] ? `_gel_to_bigint(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
   },
   {
     name: "std::to_decimal",
-    sql: (argSql) => argSql[0] ? `_gel_to_decimal(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
+    sql: (argSql) =>
+      argSql[0] ? `_gel_to_decimal(${argSql[0]}${argSql[1] ? `, ${argSql[1]}` : ""})` : null,
   },
   // Bitwise functions. AND/OR/NOT sign-extend cleanly from any width to
   // 64-bit (the ops are homomorphic under sign extension), so SQLite's
@@ -1408,100 +1472,112 @@ export const STDLIB_FUNCTIONS: StdlibFunctionEntry[] = [
   // popcount are width-sensitive — those go through `_gel_bit_*` UDFs.
   {
     name: "std::bit_and",
-    sql: (argSql) => argSql[0] && argSql[1] ? `(${argSql[0]} & ${argSql[1]})` : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `(${argSql[0]} & ${argSql[1]})` : null),
   },
   {
     name: "std::bit_or",
-    sql: (argSql) => argSql[0] && argSql[1] ? `(${argSql[0]} | ${argSql[1]})` : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `(${argSql[0]} | ${argSql[1]})` : null),
   },
   {
     name: "std::bit_not",
-    sql: (argSql) => argSql[0] ? `(~(${argSql[0]}))` : null,
+    sql: (argSql) => (argSql[0] ? `(~(${argSql[0]}))` : null),
   },
   {
     name: "std::bit_xor",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_bit_xor(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) => (argSql[0] && argSql[1] ? `_gel_bit_xor(${argSql[0]}, ${argSql[1]})` : null),
   },
   {
     name: "std::bit_lshift",
-    sql: (argSql, argTypes) => argSql[0] && argSql[1]
-      ? `_gel_bit_lshift(${argSql[0]}, ${argSql[1]}, ${bitWidthOf(argTypes?.[0])})`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] && argSql[1]
+        ? `_gel_bit_lshift(${argSql[0]}, ${argSql[1]}, ${bitWidthOf(argTypes?.[0])})`
+        : null,
   },
   {
     name: "std::bit_rshift",
-    sql: (argSql, argTypes) => argSql[0] && argSql[1]
-      ? `_gel_bit_rshift(${argSql[0]}, ${argSql[1]}, ${bitWidthOf(argTypes?.[0])})`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] && argSql[1]
+        ? `_gel_bit_rshift(${argSql[0]}, ${argSql[1]}, ${bitWidthOf(argTypes?.[0])})`
+        : null,
   },
   {
     name: "std::bit_count",
-    sql: (argSql, argTypes) => argSql[0]
-      ? `_gel_bit_count(${argSql[0]}, ${bitWidthOf(argTypes?.[0])})`
-      : null,
+    sql: (argSql, argTypes) =>
+      argSql[0] ? `_gel_bit_count(${argSql[0]}, ${bitWidthOf(argTypes?.[0])})` : null,
   },
   // Range predicates/accessors — ranges are JSON objects produced by
   // `_gel_range` (constructed in compileFunctionCallSQL, which knows the
   // bound types). Boolean results are JSON-encoded by the caller.
   {
     name: "std::overlaps",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_range_overlaps(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_range_overlaps(${argSql[0]}, ${argSql[1]})` : null,
   },
   {
     name: "std::adjacent",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_range_adjacent(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_range_adjacent(${argSql[0]}, ${argSql[1]})` : null,
   },
   {
     name: "std::strictly_below",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_range_strictly_below(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_range_strictly_below(${argSql[0]}, ${argSql[1]})` : null,
   },
   {
     name: "std::strictly_above",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_range_strictly_above(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_range_strictly_above(${argSql[0]}, ${argSql[1]})` : null,
   },
   {
     name: "std::bounded_above",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_range_bounded_above(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_range_bounded_above(${argSql[0]}, ${argSql[1]})` : null,
   },
   {
     name: "std::bounded_below",
-    sql: (argSql) => argSql[0] && argSql[1] ? `_gel_range_bounded_below(${argSql[0]}, ${argSql[1]})` : null,
+    sql: (argSql) =>
+      argSql[0] && argSql[1] ? `_gel_range_bounded_below(${argSql[0]}, ${argSql[1]})` : null,
   },
   {
     name: "std::range_is_empty",
-    sql: (argSql) => argSql[0] ? `_gel_range_is_empty(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_range_is_empty(${argSql[0]})` : null),
   },
   {
     name: "std::range_is_inclusive_lower",
-    sql: (argSql) => argSql[0] ? `_gel_range_is_inclusive_lower(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_range_is_inclusive_lower(${argSql[0]})` : null),
   },
   {
     name: "std::range_is_inclusive_upper",
-    sql: (argSql) => argSql[0] ? `_gel_range_is_inclusive_upper(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_range_is_inclusive_upper(${argSql[0]})` : null),
   },
   {
     name: "std::range_get_lower",
-    sql: (argSql) => argSql[0] ? `_gel_range_get_lower(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_range_get_lower(${argSql[0]})` : null),
   },
   {
     name: "std::range_get_upper",
-    sql: (argSql) => argSql[0] ? `_gel_range_get_upper(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_range_get_upper(${argSql[0]})` : null),
   },
   {
     name: "std::multirange",
-    sql: (argSql) => argSql[0] ? `_gel_multirange(${argSql[0]})` : null,
+    sql: (argSql) => (argSql[0] ? `_gel_multirange(${argSql[0]})` : null),
   },
 ];
 
 // ── Index + accessors (the readers both engines go through) ────────────────
 
-const BY_NAME = new Map<string, StdlibFunctionEntry>(STDLIB_FUNCTIONS.map((entry) => [entry.name, entry]));
+const BY_NAME = new Map<string, StdlibFunctionEntry>(
+  STDLIB_FUNCTIONS.map((entry) => [entry.name, entry]),
+);
 
 export const getStdlibEntry = (name: string): StdlibFunctionEntry | undefined => BY_NAME.get(name);
 
 /** The metadata view (arity gating included), or undefined when `name` has no
  * metadata slot or the arity is out of range. */
-export const resolveStdlibFunction = (qualifiedName: string, arity: number): StdlibFunctionDef | undefined => {
+export const resolveStdlibFunction = (
+  qualifiedName: string,
+  arity: number,
+): StdlibFunctionDef | undefined => {
   const entry = BY_NAME.get(qualifiedName);
   if (!entry || !entry.meta) {
     return undefined;
@@ -1512,7 +1588,11 @@ export const resolveStdlibFunction = (qualifiedName: string, arity: number): Std
   return { name: entry.name, ...entry.meta };
 };
 
-export const tryResolveStdlibFunction = (name: string, arity: number, activeModule: string): StdlibFunctionDef | undefined => {
+export const tryResolveStdlibFunction = (
+  name: string,
+  arity: number,
+  activeModule: string,
+): StdlibFunctionDef | undefined => {
   // If the name comes in already qualified (e.g. `default::range`) and that
   // exact name isn't a stdlib function, fall back to the unqualified name
   // resolved against `std::` / `math::` / `cal::`. EdgeQL's name resolution
@@ -1546,7 +1626,8 @@ export const executeStdlibFunction = (name: string, args: RuntimeFunctionArg[]):
 
 /** The SQL-lowering adapter for `name`, or undefined when the function has no
  * SQL slot (i.e. it is not SQL-lowerable). */
-export const getStdlibSqlTemplate = (name: string): StdlibSqlTemplate | undefined => BY_NAME.get(name)?.sql;
+export const getStdlibSqlTemplate = (name: string): StdlibSqlTemplate | undefined =>
+  BY_NAME.get(name)?.sql;
 
 /** A stdlib function is SQL-lowerable iff it has a SQL slot in the registry.
  * This replaced the hand-synced `BASE_SQL_NATIVE_STDLIB_LOWERING` name-set in

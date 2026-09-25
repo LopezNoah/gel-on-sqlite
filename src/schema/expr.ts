@@ -118,7 +118,10 @@ export class ObjectCollection<T extends SchemaObjectLike> {
     this.values = [...values];
   }
 
-  static create<T extends SchemaObjectLike>(_schema: SchemaLike, values: Iterable<T>): ObjectCollection<T> {
+  static create<T extends SchemaObjectLike>(
+    _schema: SchemaLike,
+    values: Iterable<T>,
+  ): ObjectCollection<T> {
     void _schema;
     return new ObjectCollection(values);
   }
@@ -146,22 +149,11 @@ export class ObjectCollection<T extends SchemaObjectLike> {
   }
 }
 
-export type ObjectCollectionSchemaData = [
-  string,
-  UUID[],
-  Array<[string, unknown]>,
-];
+export type ObjectCollectionSchemaData = [string, UUID[], Array<[string, unknown]>];
 
-export type ExpressionSchemaData = [
-  string,
-  ObjectCollectionSchemaData,
-  string | null,
-];
+export type ExpressionSchemaData = [string, ObjectCollectionSchemaData, string | null];
 
-export type ExpressionSchemaDataWithoutOrigin = [
-  string,
-  ObjectCollectionSchemaData,
-];
+export type ExpressionSchemaDataWithoutOrigin = [string, ObjectCollectionSchemaData];
 
 const refKey = (obj: SchemaObjectLike, schema: SchemaLike): string =>
   `${obj.constructor.name}:${obj.getName(schema)}`;
@@ -436,7 +428,12 @@ export class Expression {
   asShell(schema: SchemaLike): ExpressionShell {
     return new ExpressionShell({
       text: this.text,
-      refs: this.refs ? this.refs.objects(schema).map((r) => r.asShell?.(schema)).filter(isDefined) : null,
+      refs: this.refs
+        ? this.refs
+            .objects(schema)
+            .map((r) => r.asShell?.(schema))
+            .filter(isDefined)
+        : null,
       _qlast: this._qlast,
       _irast: this._irast,
     });
@@ -446,11 +443,7 @@ export class Expression {
     if (!this.refs) {
       throw new Error("expected expression to be compiled");
     }
-    return [
-      this.text,
-      this.refs.schemaReduce(),
-      this.origin,
-    ];
+    return [this.text, this.refs.schemaReduce(), this.origin];
   }
 
   static schemaRestore(data: ExpressionSchemaData): Expression {
@@ -491,9 +484,7 @@ export class Expression {
 
 const isDeltaRoot = (value: unknown): value is DeltaRootLike => {
   return Boolean(
-    value
-      && typeof value === "object"
-      && Array.isArray((value as DeltaRootLike).warnings),
+    value && typeof value === "object" && Array.isArray((value as DeltaRootLike).warnings),
   );
 };
 
@@ -542,7 +533,10 @@ export class ExpressionShell {
 
   resolve(schema: SchemaLike): Expression {
     const refs = this.refs
-      ? ObjectCollection.create(schema, this.refs.map((shell) => shell.resolve(schema)))
+      ? ObjectCollection.create(
+          schema,
+          this.refs.map((shell) => shell.resolve(schema)),
+        )
       : null;
 
     if (this._irast) {
@@ -584,7 +578,9 @@ export class ExpressionList extends Array<Expression> {
 
   static mergeValues(
     target: { getExplicitFieldValue(fieldName: string): ExpressionList | null | undefined },
-    sources: ReadonlyArray<{ getExplicitFieldValue(fieldName: string): ExpressionList | null | undefined }>,
+    sources: ReadonlyArray<{
+      getExplicitFieldValue(fieldName: string): ExpressionList | null | undefined;
+    }>,
     fieldName: string,
     options?: { ignoreLocal?: boolean },
   ): ExpressionList | null {
@@ -635,7 +631,9 @@ export class ExpressionList extends Array<Expression> {
 export class ExpressionDict extends Map<string, Expression> {
   static mergeValues(
     target: { getExplicitFieldValue(fieldName: string): ExpressionDict | null | undefined },
-    sources: ReadonlyArray<{ getExplicitFieldValue(fieldName: string): ExpressionDict | null | undefined }>,
+    sources: ReadonlyArray<{
+      getExplicitFieldValue(fieldName: string): ExpressionDict | null | undefined;
+    }>,
     fieldName: string,
     options?: { ignoreLocal?: boolean },
   ): ExpressionDict | null {
@@ -702,20 +700,17 @@ export class ExpressionDict extends Map<string, Expression> {
   }
 }
 
-export const EXPRESSION_TYPES = [
-  Expression,
-  ExpressionList,
-  ExpressionDict,
-] as const;
+export const EXPRESSION_TYPES = [Expression, ExpressionList, ExpressionDict] as const;
 
 export const imprintExprContext = (
   qltree: EdgeQLBase,
   modaliases: Readonly<Record<string, string>>,
 ): EdgeQLBase => {
   if (
-    qltree.kind === "BaseConstant"
-    || (qltree.kind === "Set" && (!isEdgeQLSet(qltree).elements.length))
-    || (qltree.kind === "Array" && isEdgeQLArray(qltree).elements.every((el) => el.kind === "BaseConstant"))
+    qltree.kind === "BaseConstant" ||
+    (qltree.kind === "Set" && !isEdgeQLSet(qltree).elements.length) ||
+    (qltree.kind === "Array" &&
+      isEdgeQLArray(qltree).elements.every((el) => el.kind === "BaseConstant"))
   ) {
     return qltree;
   }
@@ -815,4 +810,5 @@ const isExpressionLike = (value: EdgeQLBase): boolean => {
   return true;
 };
 
-const isDefined = <T>(value: T | null | undefined): value is T => value !== null && value !== undefined;
+const isDefined = <T>(value: T | null | undefined): value is T =>
+  value !== null && value !== undefined;

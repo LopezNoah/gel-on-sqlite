@@ -149,7 +149,4 @@ export interface DeleteIR extends MutationBaseIR {
   inference?: InferenceResult;
 }
 
-export type IRStatement =
-  | InsertIR
-  | UpdateIR
-  | DeleteIR;
+export type IRStatement = InsertIR | UpdateIR | DeleteIR;

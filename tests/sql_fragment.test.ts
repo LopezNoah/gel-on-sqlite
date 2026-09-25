@@ -10,14 +10,20 @@ import { bindOperandsOnce } from "../src/sql/sql_fragment.js";
 
 describe("bindOperandsOnce", () => {
   it("binds a single operand once and references it by alias in the body", () => {
-    expect(bindOperandsOnce([{ alias: "p", sql: "?" }], "CASE WHEN p IS NULL THEN 0 ELSE 1 END")).toBe(
-      "(SELECT CASE WHEN p IS NULL THEN 0 ELSE 1 END FROM (SELECT (?) AS p))",
-    );
+    expect(
+      bindOperandsOnce([{ alias: "p", sql: "?" }], "CASE WHEN p IS NULL THEN 0 ELSE 1 END"),
+    ).toBe("(SELECT CASE WHEN p IS NULL THEN 0 ELSE 1 END FROM (SELECT (?) AS p))");
   });
 
   it("binds multiple operands once each, preserving order", () => {
     expect(
-      bindOperandsOnce([{ alias: "l", sql: "?" }, { alias: "r", sql: "?" }], "l = r"),
+      bindOperandsOnce(
+        [
+          { alias: "l", sql: "?" },
+          { alias: "r", sql: "?" },
+        ],
+        "l = r",
+      ),
     ).toBe("(SELECT l = r FROM (SELECT (?) AS l, (?) AS r))");
   });
 

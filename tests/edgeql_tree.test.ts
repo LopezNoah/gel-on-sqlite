@@ -40,7 +40,9 @@ describe("TestTree", () => {
                     }
                 ),
             };`);
-    assertQueryResult(h, `SELECT Tree {
+    assertQueryResult(
+      h,
+      `SELECT Tree {
                     val,
                     children: {
                         val,
@@ -52,21 +54,23 @@ describe("TestTree", () => {
                         },
                     },
                 }
-                FILTER .val = 'i0';`, [
-      {
-        "val": "i0",
-        "children": [
-          {
-            "val": "i1",
-            "children": [
-              {
-                "val": "i2",
-              },
-            ],
-          },
-        ],
-      },
-    ]);
+                FILTER .val = 'i0';`,
+      [
+        {
+          val: "i0",
+          children: [
+            {
+              val: "i1",
+              children: [
+                {
+                  val: "i2",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_insert_02 [xerror upstream]", () => {
@@ -83,7 +87,9 @@ describe("TestTree", () => {
                     }
                 ),
             };`);
-    assertQueryResult(h, `SELECT Eert {
+    assertQueryResult(
+      h,
+      `SELECT Eert {
                     val,
                     children: {
                         val,
@@ -95,21 +101,23 @@ describe("TestTree", () => {
                         },
                     },
                 }
-                FILTER .val = 'i0';`, [
-      {
-        "val": "i0",
-        "children": [
-          {
-            "val": "i1",
-            "children": [
-              {
-                "val": "i2",
-              },
-            ],
-          },
-        ],
-      },
-    ]);
+                FILTER .val = 'i0';`,
+      [
+        {
+          val: "i0",
+          children: [
+            {
+              val: "i1",
+              children: [
+                {
+                  val: "i2",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_insert_03 [xerror upstream]", () => {
@@ -129,7 +137,9 @@ describe("TestTree", () => {
                     }
                 ),
             };`);
-    assertQueryResult(h, `SELECT Tree {
+    assertQueryResult(
+      h,
+      `SELECT Tree {
                     val,
                     children: {
                         val,
@@ -141,25 +151,29 @@ describe("TestTree", () => {
                         },
                     },
                 }
-                FILTER .val = 'i0';`, [
-      {
-        "val": "i0",
-        "children": [
-          {
-            "val": "i1",
-            "children": [
-              {
-                "val": "i2",
-              },
-            ],
-          },
-        ],
-      },
-    ]);
+                FILTER .val = 'i0';`,
+      [
+        {
+          val: "i0",
+          children: [
+            {
+              val: "i1",
+              children: [
+                {
+                  val: "i2",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_01 [unconverted: computed parent/children link not exposed]", () => {
-    assertQueryResult(h, `SELECT Tree {
+    assertQueryResult(
+      h,
+      `SELECT Tree {
                     val,
                     children: {
                         val,
@@ -172,60 +186,64 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER NOT EXISTS .parent
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "00",
-            "children": [
-              {
-                "val": "000",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-      {
-        "val": "1",
-        "children": [
-          {
-            "val": "10",
-            "children": [],
-          },
-          {
-            "val": "11",
-            "children": [],
-          },
-          {
-            "val": "12",
-            "children": [],
-          },
-          {
-            "val": "13",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "00",
+              children: [
+                {
+                  val: "000",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+        {
+          val: "1",
+          children: [
+            {
+              val: "10",
+              children: [],
+            },
+            {
+              val: "11",
+              children: [],
+            },
+            {
+              val: "12",
+              children: [],
+            },
+            {
+              val: "13",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_02 [unconverted: computed parent link not exposed]", () => {
-    assertQueryResult(h, `SELECT Eert {
+    assertQueryResult(
+      h,
+      `SELECT Eert {
                     val,
                     children: {
                         val,
@@ -238,121 +256,122 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER NOT EXISTS .parent
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "00",
-            "children": [
-              {
-                "val": "000",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-      {
-        "val": "1",
-        "children": [
-          {
-            "val": "10",
-            "children": [],
-          },
-          {
-            "val": "11",
-            "children": [],
-          },
-          {
-            "val": "12",
-            "children": [],
-          },
-          {
-            "val": "13",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "00",
+              children: [
+                {
+                  val: "000",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+        {
+          val: "1",
+          children: [
+            {
+              val: "10",
+              children: [],
+            },
+            {
+              val: "11",
+              children: [],
+            },
+            {
+              val: "12",
+              children: [],
+            },
+            {
+              val: "13",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_03", () => {
-    assertQueryResult(h, `SELECT Tree.parent.parent.val;`, [
-      "0",
-    ]);
+    assertQueryResult(h, `SELECT Tree.parent.parent.val;`, ["0"]);
   });
 
   it("test_edgeql_tree_select_04 [unconverted: computed parent link not exposed]", () => {
-    assertQueryResult(h, `SELECT Eert.parent.parent.val;`, [
-      "0",
-    ]);
+    assertQueryResult(h, `SELECT Eert.parent.parent.val;`, ["0"]);
   });
 
   it("test_edgeql_tree_select_05 [unconverted: backlink chain through aliased target not supported]", () => {
-    assertQueryResult(h, `SELECT Eert.<children[IS Eert].<children[IS Eert].val;`, [
-      "0",
-    ]);
+    assertQueryResult(h, `SELECT Eert.<children[IS Eert].<children[IS Eert].val;`, ["0"]);
   });
 
   it("test_edgeql_tree_select_06", () => {
-    assertQueryResult(h, `SELECT Eert.children.children.val;`, unorderedSet([
-      "000",
-      "010",
-    ]));
+    assertQueryResult(h, `SELECT Eert.children.children.val;`, unorderedSet(["000", "010"]));
   });
 
   it("test_edgeql_tree_select_07", () => {
-    assertQueryResult(h, `SELECT Tree.children.children.val;`, unorderedSet([
-      "000",
-      "010",
-    ]));
+    assertQueryResult(h, `SELECT Tree.children.children.val;`, unorderedSet(["000", "010"]));
   });
 
   it("test_edgeql_tree_select_08", () => {
-    assertQueryResult(h, `SELECT Tree.<parent[IS Tree].<parent[IS Tree].val;`, unorderedSet([
-      "000",
-      "010",
-    ]));
+    assertQueryResult(
+      h,
+      `SELECT Tree.<parent[IS Tree].<parent[IS Tree].val;`,
+      unorderedSet(["000", "010"]),
+    );
   });
 
   it("test_edgeql_tree_select_09", () => {
-    assertQueryResult(h, `SELECT Tree {val}
+    assertQueryResult(
+      h,
+      `SELECT Tree {val}
                 FILTER
                     any(.children.children.val = '000')
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_10", () => {
-    assertQueryResult(h, `SELECT Eert {val}
+    assertQueryResult(
+      h,
+      `SELECT Eert {val}
                 FILTER
                     any(.children.children.val = '000')
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_11 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
-    assertQueryResult(h, `WITH
+    assertQueryResult(
+      h,
+      `WITH
                     x := '010',
                 SELECT Tree {
                     val,
@@ -373,39 +392,43 @@ describe("TestTree", () => {
                         .children.val,
                         .children.children.val,
                         .children.children.children.val,
-                    };`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "00",
-            "children": [
-              {
-                "val": "000",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                    };`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "00",
+              children: [
+                {
+                  val: "000",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_12 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
-    assertQueryResult(h, `WITH
+    assertQueryResult(
+      h,
+      `WITH
                     x := '12',
                 SELECT Tree {
                     val,
@@ -426,33 +449,37 @@ describe("TestTree", () => {
                         .children.val,
                         .children.children.val,
                         .children.children.children.val,
-                    };`, [
-      {
-        "val": "1",
-        "children": [
-          {
-            "val": "10",
-            "children": [],
-          },
-          {
-            "val": "11",
-            "children": [],
-          },
-          {
-            "val": "12",
-            "children": [],
-          },
-          {
-            "val": "13",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                    };`,
+      [
+        {
+          val: "1",
+          children: [
+            {
+              val: "10",
+              children: [],
+            },
+            {
+              val: "11",
+              children: [],
+            },
+            {
+              val: "12",
+              children: [],
+            },
+            {
+              val: "13",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_13 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
-    assertQueryResult(h, `WITH
+    assertQueryResult(
+      h,
+      `WITH
                     x := '010',
                 SELECT Eert {
                     val,
@@ -473,39 +500,43 @@ describe("TestTree", () => {
                         .children.val,
                         .children.children.val,
                         .children.children.children.val,
-                    };`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "00",
-            "children": [
-              {
-                "val": "000",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                    };`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "00",
+              children: [
+                {
+                  val: "000",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_select_14 [unconverted: WITH-binding string literal not evaluated as literal]", () => {
-    assertQueryResult(h, `WITH
+    assertQueryResult(
+      h,
+      `WITH
                     x := '12',
                 SELECT Eert {
                     val,
@@ -526,29 +557,31 @@ describe("TestTree", () => {
                         .children.val,
                         .children.children.val,
                         .children.children.children.val,
-                    };`, [
-      {
-        "val": "1",
-        "children": [
-          {
-            "val": "10",
-            "children": [],
-          },
-          {
-            "val": "11",
-            "children": [],
-          },
-          {
-            "val": "12",
-            "children": [],
-          },
-          {
-            "val": "13",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                    };`,
+      [
+        {
+          val: "1",
+          children: [
+            {
+              val: "10",
+              children: [],
+            },
+            {
+              val: "11",
+              children: [],
+            },
+            {
+              val: "12",
+              children: [],
+            },
+            {
+              val: "13",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_01 [unconverted: computed parent/children link not exposed]", () => {
@@ -562,7 +595,9 @@ describe("TestTree", () => {
                         '_'
                     )
                 }`);
-    assertQueryResult(h, `SELECT Tree {
+    assertQueryResult(
+      h,
+      `SELECT Tree {
                     val,
                     children: {
                         val,
@@ -575,56 +610,58 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER NOT EXISTS .parent
-                ORDER BY .val;`, [
-      {
-        "val": "0_c_00_01_02",
-        "children": [
-          {
-            "val": "00_c_000",
-            "children": [
-              {
-                "val": "000_c",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01_c_010",
-            "children": [
-              {
-                "val": "010_c",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02_c",
-            "children": [],
-          },
-        ],
-      },
-      {
-        "val": "1_c_10_11_12_13",
-        "children": [
-          {
-            "val": "10_c",
-            "children": [],
-          },
-          {
-            "val": "11_c",
-            "children": [],
-          },
-          {
-            "val": "12_c",
-            "children": [],
-          },
-          {
-            "val": "13_c",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0_c_00_01_02",
+          children: [
+            {
+              val: "00_c_000",
+              children: [
+                {
+                  val: "000_c",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01_c_010",
+              children: [
+                {
+                  val: "010_c",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02_c",
+              children: [],
+            },
+          ],
+        },
+        {
+          val: "1_c_10_11_12_13",
+          children: [
+            {
+              val: "10_c",
+              children: [],
+            },
+            {
+              val: "11_c",
+              children: [],
+            },
+            {
+              val: "12_c",
+              children: [],
+            },
+            {
+              val: "13_c",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_02 [unconverted: computed parent link not exposed]", () => {
@@ -638,7 +675,9 @@ describe("TestTree", () => {
                         '_'
                     )
                 }`);
-    assertQueryResult(h, `SELECT Eert {
+    assertQueryResult(
+      h,
+      `SELECT Eert {
                     val,
                     children: {
                         val,
@@ -651,56 +690,58 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER NOT EXISTS .parent
-                ORDER BY .val;`, [
-      {
-        "val": "0_c_00_01_02",
-        "children": [
-          {
-            "val": "00_c_000",
-            "children": [
-              {
-                "val": "000_c",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01_c_010",
-            "children": [
-              {
-                "val": "010_c",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02_c",
-            "children": [],
-          },
-        ],
-      },
-      {
-        "val": "1_c_10_11_12_13",
-        "children": [
-          {
-            "val": "10_c",
-            "children": [],
-          },
-          {
-            "val": "11_c",
-            "children": [],
-          },
-          {
-            "val": "12_c",
-            "children": [],
-          },
-          {
-            "val": "13_c",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0_c_00_01_02",
+          children: [
+            {
+              val: "00_c_000",
+              children: [
+                {
+                  val: "000_c",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01_c_010",
+              children: [
+                {
+                  val: "010_c",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02_c",
+              children: [],
+            },
+          ],
+        },
+        {
+          val: "1_c_10_11_12_13",
+          children: [
+            {
+              val: "10_c",
+              children: [],
+            },
+            {
+              val: "11_c",
+              children: [],
+            },
+            {
+              val: "12_c",
+              children: [],
+            },
+            {
+              val: "13_c",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_03 [unconverted: parent path access in UPDATE assignment not lowered]", () => {
@@ -708,42 +749,46 @@ describe("TestTree", () => {
                 SET {
                     val := .val ++ '_p' ++ (('_' ++ .parent.val) ?? '')
                 };`);
-    assertQueryResult(h, `SELECT Tree {val}
-                ORDER BY .val;`, [
-      {
-        "val": "000_p_00",
-      },
-      {
-        "val": "00_p_0",
-      },
-      {
-        "val": "010_p_01",
-      },
-      {
-        "val": "01_p_0",
-      },
-      {
-        "val": "02_p_0",
-      },
-      {
-        "val": "0_p",
-      },
-      {
-        "val": "10_p_1",
-      },
-      {
-        "val": "11_p_1",
-      },
-      {
-        "val": "12_p_1",
-      },
-      {
-        "val": "13_p_1",
-      },
-      {
-        "val": "1_p",
-      },
-    ]);
+    assertQueryResult(
+      h,
+      `SELECT Tree {val}
+                ORDER BY .val;`,
+      [
+        {
+          val: "000_p_00",
+        },
+        {
+          val: "00_p_0",
+        },
+        {
+          val: "010_p_01",
+        },
+        {
+          val: "01_p_0",
+        },
+        {
+          val: "02_p_0",
+        },
+        {
+          val: "0_p",
+        },
+        {
+          val: "10_p_1",
+        },
+        {
+          val: "11_p_1",
+        },
+        {
+          val: "12_p_1",
+        },
+        {
+          val: "13_p_1",
+        },
+        {
+          val: "1_p",
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_04 [unconverted: parent path access in UPDATE assignment not lowered]", () => {
@@ -751,42 +796,46 @@ describe("TestTree", () => {
                 SET {
                     val := .val ++ '_p' ++ (('_' ++ .parent.val) ?? '')
                 };`);
-    assertQueryResult(h, `SELECT Eert {val}
-                ORDER BY .val;`, [
-      {
-        "val": "000_p_00",
-      },
-      {
-        "val": "00_p_0",
-      },
-      {
-        "val": "010_p_01",
-      },
-      {
-        "val": "01_p_0",
-      },
-      {
-        "val": "02_p_0",
-      },
-      {
-        "val": "0_p",
-      },
-      {
-        "val": "10_p_1",
-      },
-      {
-        "val": "11_p_1",
-      },
-      {
-        "val": "12_p_1",
-      },
-      {
-        "val": "13_p_1",
-      },
-      {
-        "val": "1_p",
-      },
-    ]);
+    assertQueryResult(
+      h,
+      `SELECT Eert {val}
+                ORDER BY .val;`,
+      [
+        {
+          val: "000_p_00",
+        },
+        {
+          val: "00_p_0",
+        },
+        {
+          val: "010_p_01",
+        },
+        {
+          val: "01_p_0",
+        },
+        {
+          val: "02_p_0",
+        },
+        {
+          val: "0_p",
+        },
+        {
+          val: "10_p_1",
+        },
+        {
+          val: "11_p_1",
+        },
+        {
+          val: "12_p_1",
+        },
+        {
+          val: "13_p_1",
+        },
+        {
+          val: "1_p",
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_05 [unconverted: WITH bindings as type aliases not supported]", () => {
@@ -805,7 +854,9 @@ describe("TestTree", () => {
                     ),
                 UPDATE T00
                 SET {parent := TC};`);
-    assertQueryResult(h, `SELECT Tree {
+    assertQueryResult(
+      h,
+      `SELECT Tree {
                     val,
                     children: {
                         val,
@@ -818,35 +869,37 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER .val = '0'
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "000",
-            "children": [
-              {
-                "val": "00",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "000",
+              children: [
+                {
+                  val: "00",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_06 [xerror upstream]", () => {
@@ -898,7 +951,9 @@ describe("TestTree", () => {
     // Postgres ON CONFLICT limitation, so it executes the literal query and
     // returns its actual result: '0' keeps {01, 02}, while '000'→'00' detaches
     // into its own subtree (verified separately below).
-    assertQueryResult(h, `SELECT Eert {
+    assertQueryResult(
+      h,
+      `SELECT Eert {
                     val,
                     children: {
                         val,
@@ -911,36 +966,42 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER .val = '0'
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
     // The detached '000'→'00' subtree, confirming the writes that *did* happen.
-    assertQueryResult(h, `SELECT Eert {
+    assertQueryResult(
+      h,
+      `SELECT Eert {
                     val,
                     children: { val } ORDER BY .val,
                 }
                 FILTER .val IN {'000', '00'}
-                ORDER BY .val;`, [
-      { "val": "00", "children": [] },
-      { "val": "000", "children": [{ "val": "00" }] },
-    ]);
+                ORDER BY .val;`,
+      [
+        { val: "00", children: [] },
+        { val: "000", children: [{ val: "00" }] },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_07 [unconverted: WITH bindings as type aliases not supported]", () => {
@@ -958,7 +1019,9 @@ describe("TestTree", () => {
                     )
                 UPDATE TP
                 SET {parent := T000};`);
-    assertQueryResult(h, `SELECT Tree {
+    assertQueryResult(
+      h,
+      `SELECT Tree {
                     val,
                     children: {
                         val,
@@ -971,35 +1034,37 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER .val = '0'
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "000",
-            "children": [
-              {
-                "val": "00",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "000",
+              children: [
+                {
+                  val: "00",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_08 [unconverted: WITH bindings + assert_distinct not supported]", () => {
@@ -1034,7 +1099,9 @@ describe("TestTree", () => {
                 SET {
                     children := assert_distinct({.children, TP})
                 };`);
-    assertQueryResult(h, `SELECT Eert {
+    assertQueryResult(
+      h,
+      `SELECT Eert {
                     val,
                     children: {
                         val,
@@ -1047,78 +1114,87 @@ describe("TestTree", () => {
                     } ORDER BY .val,
                 }
                 FILTER .val = '0'
-                ORDER BY .val;`, [
-      {
-        "val": "0",
-        "children": [
-          {
-            "val": "000",
-            "children": [
-              {
-                "val": "00",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "01",
-            "children": [
-              {
-                "val": "010",
-                "children": [],
-              },
-            ],
-          },
-          {
-            "val": "02",
-            "children": [],
-          },
-        ],
-      },
-    ]);
+                ORDER BY .val;`,
+      [
+        {
+          val: "0",
+          children: [
+            {
+              val: "000",
+              children: [
+                {
+                  val: "00",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "01",
+              children: [
+                {
+                  val: "010",
+                  children: [],
+                },
+              ],
+            },
+            {
+              val: "02",
+              children: [],
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_09 [unconverted: empty UPDATE SET {} not supported]", () => {
-    assertQueryResult(h, `select (update Tree filter .val = "00" set { }) {
+    assertQueryResult(
+      h,
+      `select (update Tree filter .val = "00" set { }) {
                     children: {val}
-                }`, [
-      {
-        "children": [
-          {
-            "val": "000",
-          },
-        ],
-      },
-    ]);
+                }`,
+      [
+        {
+          children: [
+            {
+              val: "000",
+            },
+          ],
+        },
+      ],
+    );
   });
 
   it("test_edgeql_tree_update_10 [unconverted: multi-predicate UPDATE FILTER (IN {}) not supported]", () => {
-    assertQueryResult(h, `select (
+    assertQueryResult(
+      h,
+      `select (
                     update Tree filter .val IN {"0", "00"}
                     set { parent := {} }
                ) {
                    val, children: {val} order by .val
-               } order by .val;`, [
-      {
-        "children": [
-          {
-            "val": "01",
-          },
-          {
-            "val": "02",
-          },
-        ],
-        "val": "0",
-      },
-      {
-        "children": [
-          {
-            "val": "000",
-          },
-        ],
-        "val": "00",
-      },
-    ]);
+               } order by .val;`,
+      [
+        {
+          children: [
+            {
+              val: "01",
+            },
+            {
+              val: "02",
+            },
+          ],
+          val: "0",
+        },
+        {
+          children: [
+            {
+              val: "000",
+            },
+          ],
+          val: "00",
+        },
+      ],
+    );
   });
-
 });

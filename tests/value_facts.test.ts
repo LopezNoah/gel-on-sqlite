@@ -25,13 +25,15 @@ const issues = (): SchemaSnapshot =>
 
 const factsOf = (schema: SchemaSnapshot, query: string): ValueFacts => {
   const r = inspect(schema, query);
-  if (!r.ok || !r.facts) throw new Error(`did not compile: ${query} (${r.error?.code} ${r.error?.message})`);
+  if (!r.ok || !r.facts)
+    throw new Error(`did not compile: ${query} (${r.error?.code} ${r.error?.message})`);
   return r.facts.valueFacts;
 };
 
 const resultSetOf = (schema: SchemaSnapshot, query: string): IRSet => {
   const r = inspect(schema, query);
-  if (!r.ok || !r.artifact) throw new Error(`did not compile: ${query} (${r.error?.code} ${r.error?.message})`);
+  if (!r.ok || !r.artifact)
+    throw new Error(`did not compile: ${query} (${r.error?.code} ${r.error?.message})`);
   return r.artifact.gelIr.expr;
 };
 
@@ -58,21 +60,23 @@ describe("valueFactsOf — string/bytes index & slice failure group", () => {
     expect(isBytesValued(resultSetOf(schema, query))).toBe(false);
   });
 
-  it.each([
-    ["SELECT <bytes>b'xy'"],
-    ["SELECT (<bytes>b'xy')[1]"],
-    ["SELECT (<bytes>b'xy')[0:1]"],
-  ])("%s is a std::bytes scalar", (query) => {
-    const f = factsOf(schema, query);
-    expect(f.category).toBe("scalar");
-    expect(f.typeName).toBe("std::bytes");
-    expect(isBytesValued(resultSetOf(schema, query))).toBe(true);
-    expect(isStrValued(resultSetOf(schema, query))).toBe(false);
-  });
+  it.each([["SELECT <bytes>b'xy'"], ["SELECT (<bytes>b'xy')[1]"], ["SELECT (<bytes>b'xy')[0:1]"]])(
+    "%s is a std::bytes scalar",
+    (query) => {
+      const f = factsOf(schema, query);
+      expect(f.category).toBe("scalar");
+      expect(f.typeName).toBe("std::bytes");
+      expect(isBytesValued(resultSetOf(schema, query))).toBe(true);
+      expect(isStrValued(resultSetOf(schema, query))).toBe(false);
+    },
+  );
 
   // A real str-typed pointer path (not a literal) is also detected.
   it("a str-typed pointer path is a std::str scalar", () => {
-    expect(factsOf(schema, "SELECT Issue.name")).toEqual({ category: "scalar", typeName: "std::str" });
+    expect(factsOf(schema, "SELECT Issue.name")).toEqual({
+      category: "scalar",
+      typeName: "std::str",
+    });
   });
 });
 
@@ -84,7 +88,10 @@ describe("valueFactsOf — category coverage", () => {
     expect(factsOf(schema, "SELECT 1.5").category).toBe("scalar");
     expect(factsOf(schema, "SELECT true").category).toBe("scalar");
     // a cast pins the concrete scalar type
-    expect(factsOf(schema, "SELECT <int64>1")).toEqual({ category: "scalar", typeName: "std::int64" });
+    expect(factsOf(schema, "SELECT <int64>1")).toEqual({
+      category: "scalar",
+      typeName: "std::int64",
+    });
   });
 
   it("array and tuple literals are collections", () => {
@@ -93,16 +100,39 @@ describe("valueFactsOf — category coverage", () => {
   });
 
   it("object sets are objects with their qualified type name", () => {
-    expect(factsOf(schema, "SELECT Issue")).toEqual({ category: "object", typeName: "default::Issue" });
+    expect(factsOf(schema, "SELECT Issue")).toEqual({
+      category: "object",
+      typeName: "default::Issue",
+    });
   });
 });
 
 describe("qualifiedTypeRefName", () => {
   it("uses nameHint verbatim when already qualified", () => {
-    expect(qualifiedTypeRefName({ kind: "type_ref", id: "x", nameHint: "std::str", module: "std", isView: false, isScalar: true, isAbstract: false })).toBe("std::str");
+    expect(
+      qualifiedTypeRefName({
+        kind: "type_ref",
+        id: "x",
+        nameHint: "std::str",
+        module: "std",
+        isView: false,
+        isScalar: true,
+        isAbstract: false,
+      }),
+    ).toBe("std::str");
   });
   it("joins module + nameHint when the hint is bare", () => {
-    expect(qualifiedTypeRefName({ kind: "type_ref", id: "x", nameHint: "Issue", module: "default", isView: false, isScalar: false, isAbstract: false })).toBe("default::Issue");
+    expect(
+      qualifiedTypeRefName({
+        kind: "type_ref",
+        id: "x",
+        nameHint: "Issue",
+        module: "default",
+        isView: false,
+        isScalar: false,
+        isAbstract: false,
+      }),
+    ).toBe("default::Issue");
   });
 });
 

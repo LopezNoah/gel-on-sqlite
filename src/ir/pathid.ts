@@ -7,7 +7,6 @@ import type {
   LinkDef,
   LinkPropertyDef,
   ScalarType,
-  TypeDef,
 } from "../types.js";
 
 export type PointerDirection = "outbound" | "inbound";
@@ -52,9 +51,9 @@ const SCALAR_DISPLAY_NAMES: Record<string, string> = {
   uuid: "std::uuid",
 };
 
-
 const scalarTypeRef = (scalar: ScalarType | string): TypeRef => {
-  const displayName = SCALAR_DISPLAY_NAMES[scalar] ?? (scalar.includes("::") ? scalar : `std::${scalar}`);
+  const displayName =
+    SCALAR_DISPLAY_NAMES[scalar] ?? (scalar.includes("::") ? scalar : `std::${scalar}`);
   return { kind: "scalar", name: displayName, displayName };
 };
 
@@ -129,8 +128,7 @@ const collectComputeds = (
   return dedupeByName([...(typeDef.computeds ?? []), ...inherited]);
 };
 
-const typeRefForField = (field: FieldDef | LinkPropertyDef): TypeRef =>
-  scalarTypeRef(field.type);
+const typeRefForField = (field: FieldDef | LinkPropertyDef): TypeRef => scalarTypeRef(field.type);
 
 const inferLiteralScalar = (value: unknown): ScalarType => {
   switch (typeof value) {
@@ -151,7 +149,9 @@ const inferComputedPropertyType = (
   const expr = computed.expr;
   if (expr.kind === "concat") return scalarTypeRef("str");
   if (expr.kind === "field_ref") {
-    const field = collectFields(schema, sourceTypeName).find((candidate) => candidate.name === expr.field);
+    const field = collectFields(schema, sourceTypeName).find(
+      (candidate) => candidate.name === expr.field,
+    );
     return field ? typeRefForField(field) : scalarTypeRef("str");
   }
   if (expr.kind === "literal") return scalarTypeRef(inferLiteralScalar(expr.value));
@@ -171,16 +171,21 @@ const inferComputedLinkTarget = (
   if (expr.kind === "backlink") {
     if (expr.sourceType) return objectTypeRef(schema, expr.sourceType);
 
-    const sourceTypeName = schema.listTypes().find((typeDef) =>
-      collectLinks(schema, qualifiedTypeName(typeDef)).some((link) =>
-        link.name === expr.link && normalizeTypeName(link.targetType) === sourceType.name,
-      ),
-    );
+    const sourceTypeName = schema
+      .listTypes()
+      .find((typeDef) =>
+        collectLinks(schema, qualifiedTypeName(typeDef)).some(
+          (link) =>
+            link.name === expr.link && normalizeTypeName(link.targetType) === sourceType.name,
+        ),
+      );
     if (sourceTypeName) return objectTypeRef(schema, qualifiedTypeName(sourceTypeName));
   }
 
   if (expr.kind === "link_ref") {
-    const link = collectLinks(schema, sourceType.name).find((candidate) => candidate.name === expr.link);
+    const link = collectLinks(schema, sourceType.name).find(
+      (candidate) => candidate.name === expr.link,
+    );
     if (link) return objectTypeRef(schema, link.targetType);
   }
 
@@ -188,16 +193,26 @@ const inferComputedLinkTarget = (
     return objectTypeRef(schema, expr.typeName);
   }
 
-  throw new Error(`Cannot infer target type for computed link '${computed.name}' on ${sourceType.name}`);
+  throw new Error(
+    `Cannot infer target type for computed link '${computed.name}' on ${sourceType.name}`,
+  );
 };
 
-const resolvePointer = (schema: SchemaSnapshot, sourceType: TypeRef, stepName: string): PointerRef => {
+const resolvePointer = (
+  schema: SchemaSnapshot,
+  sourceType: TypeRef,
+  stepName: string,
+): PointerRef => {
   if (sourceType.kind !== "object") {
-    throw new Error(`Cannot resolve pointer '${stepName}' on scalar type ${sourceType.displayName}`);
+    throw new Error(
+      `Cannot resolve pointer '${stepName}' on scalar type ${sourceType.displayName}`,
+    );
   }
 
   const sourceQualifiedName = sourceType.name;
-  const link = collectLinks(schema, sourceQualifiedName).find((candidate) => candidate.name === stepName);
+  const link = collectLinks(schema, sourceQualifiedName).find(
+    (candidate) => candidate.name === stepName,
+  );
   if (link) {
     return {
       name: `${sourceQualifiedName}.${link.name}`,
@@ -208,7 +223,9 @@ const resolvePointer = (schema: SchemaSnapshot, sourceType: TypeRef, stepName: s
     };
   }
 
-  const field = collectFields(schema, sourceQualifiedName).find((candidate) => candidate.name === stepName);
+  const field = collectFields(schema, sourceQualifiedName).find(
+    (candidate) => candidate.name === stepName,
+  );
   if (field) {
     return {
       name: `${sourceQualifiedName}.${field.name}`,
@@ -219,7 +236,9 @@ const resolvePointer = (schema: SchemaSnapshot, sourceType: TypeRef, stepName: s
     };
   }
 
-  const computed = collectComputeds(schema, sourceQualifiedName).find((candidate) => candidate.name === stepName);
+  const computed = collectComputeds(schema, sourceQualifiedName).find(
+    (candidate) => candidate.name === stepName,
+  );
   if (computed?.kind === "property") {
     return {
       name: `${sourceQualifiedName}.${computed.name}`,
@@ -247,7 +266,9 @@ const inferComputedLinkPropertyType = (property: ComputedLinkPropertyDef): TypeR
 };
 
 const resolveLinkProperty = (sourcePointer: PointerRef, propertyName: string): PointerRef => {
-  const property = sourcePointer.link?.properties?.find((candidate) => candidate.name === propertyName);
+  const property = sourcePointer.link?.properties?.find(
+    (candidate) => candidate.name === propertyName,
+  );
   if (property) {
     return {
       name: `${sourcePointer.name}@${property.name}`,
@@ -259,7 +280,9 @@ const resolveLinkProperty = (sourcePointer: PointerRef, propertyName: string): P
     };
   }
 
-  const computedProperty = sourcePointer.link?.computedProperties?.find((candidate) => candidate.name === propertyName);
+  const computedProperty = sourcePointer.link?.computedProperties?.find(
+    (candidate) => candidate.name === propertyName,
+  );
   if (computedProperty) {
     return {
       name: `${sourcePointer.name}@${computedProperty.name}`,
@@ -274,8 +297,7 @@ const resolveLinkProperty = (sourcePointer: PointerRef, propertyName: string): P
   throw new Error(`Unknown link property '@${propertyName}' on ${sourcePointer.name}`);
 };
 
-const namespaceFrom = (namespace?: PathNamespace): Set<string> =>
-  new Set(namespace ?? []);
+const namespaceFrom = (namespace?: PathNamespace): Set<string> => new Set(namespace ?? []);
 
 const setEquals = (left: ReadonlySet<string>, right: ReadonlySet<string>): boolean =>
   left.size === right.size && [...left].every((item) => right.has(item));
@@ -337,14 +359,7 @@ export class PathId {
       name: derivedName,
       displayName: derivedName,
     };
-    return new PathId(
-      root,
-      [],
-      namespaceFrom(options.namespace),
-      undefined,
-      false,
-      false,
-    );
+    return new PathId(root, [], namespaceFrom(options.namespace), undefined, false, false);
   }
 
   get namespace(): Set<string> {
@@ -387,9 +402,12 @@ export class PathId {
     }
 
     const namespace = namespaceFrom(options.namespace);
-    const nextNamespace = namespace.size > 0
-      ? this.ns.size > 0 ? union(this.ns, namespace) : namespace
-      : new Set(this.ns);
+    const nextNamespace =
+      namespace.size > 0
+        ? this.ns.size > 0
+          ? union(this.ns, namespace)
+          : namespace
+        : new Set(this.ns);
     const prefix = setEquals(this.ns, nextNamespace) ? this.prefix : this;
     const target = direction === "outbound" ? pointer.targetType : pointer.sourceType;
 
@@ -404,20 +422,22 @@ export class PathId {
   }
 
   equals(other: PathId): boolean {
-    return this.pointerPath === other.pointerPath
-      && this.pathSignature() === other.pathSignature()
-      && setEquals(this.ns, other.ns)
-      && ((this.prefix === undefined && other.prefix === undefined)
-        || (this.prefix !== undefined && other.prefix !== undefined && this.prefix.equals(other.prefix)));
+    return (
+      this.pointerPath === other.pointerPath &&
+      this.pathSignature() === other.pathSignature() &&
+      setEquals(this.ns, other.ns) &&
+      ((this.prefix === undefined && other.prefix === undefined) ||
+        (this.prefix !== undefined &&
+          other.prefix !== undefined &&
+          this.prefix.equals(other.prefix)))
+    );
   }
 
-  startsWith(
-    pathId: PathId,
-    options: { permissivePointerPath?: boolean } = {},
-  ): boolean {
+  startsWith(pathId: PathId, options: { permissivePointerPath?: boolean } = {}): boolean {
     const base = this.prefixForPathSize(pathId.pathSize);
-    return base.equals(pathId)
-      || Boolean(options.permissivePointerPath && base.tgtPath().equals(pathId));
+    return (
+      base.equals(pathId) || Boolean(options.permissivePointerPath && base.tgtPath().equals(pathId))
+    );
   }
 
   *iterPrefixes(options: { includePointerPaths?: boolean } = {}): IterableIterator<PathId> {
@@ -522,7 +542,8 @@ export class PathId {
 
     if (this.prefix) {
       if (this.prefix.pathSize === normalizedSize) return this.prefix;
-      if (this.prefix.pathSize > normalizedSize) return this.prefix.prefixForPathSize(normalizedSize);
+      if (this.prefix.pathSize > normalizedSize)
+        return this.prefix.prefixForPathSize(normalizedSize);
     }
 
     const stepCount = (normalizedSize - 1) / 2;
@@ -531,14 +552,7 @@ export class PathId {
     const isPointerPath = nextStep?.pointer.sourcePointer !== undefined;
     const isLinkPropertyPath = steps.at(-1)?.pointer.sourcePointer !== undefined;
 
-    return new PathId(
-      this.root,
-      steps,
-      this.ns,
-      this.prefix,
-      isPointerPath,
-      isLinkPropertyPath,
-    );
+    return new PathId(this.root, steps, this.ns, this.prefix, isPointerPath, isLinkPropertyPath);
   }
 }
 

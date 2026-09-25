@@ -164,7 +164,11 @@ export class OperatorCommand {
     return undefined;
   }
 
-  cmdTreeFromAst(schema: OperatorSchema, astnode: OperatorAst, context: OperatorCommandContext): CreateOperator {
+  cmdTreeFromAst(
+    schema: OperatorSchema,
+    astnode: OperatorAst,
+    context: OperatorCommandContext,
+  ): CreateOperator {
     if (!context.stdmode && !context.testmode) {
       throw new errors.UnsupportedFeatureError("user-defined operators are not supported");
     }
@@ -179,7 +183,11 @@ export class OperatorCommand {
 }
 
 export class CreateOperator extends OperatorCommand {
-  static cmdTreeFromAst(schema: OperatorSchema, astnode: OperatorAst, _context: OperatorCommandContext): CreateOperator {
+  static cmdTreeFromAst(
+    schema: OperatorSchema,
+    astnode: OperatorAst,
+    _context: OperatorCommandContext,
+  ): CreateOperator {
     const cmd = new CreateOperator();
     void schema;
     void astnode;

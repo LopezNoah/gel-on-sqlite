@@ -10,15 +10,23 @@ import type { Statement } from "../src/edgeql/ast.js";
 type Multiplicity = "empty" | "unique" | "duplicate" | "unknown";
 
 const loadSchema = (): SchemaSnapshot => {
-  const source = fs.readFileSync(new URL("./schemas/cards_ir_inference.esdl", import.meta.url), "utf8");
-  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, { legacySyntaxCompat: true });
+  const source = fs.readFileSync(
+    new URL("./schemas/cards_ir_inference.esdl", import.meta.url),
+    "utf8",
+  );
+  const decl = parseDeclarativeSchema(`module default {\n${source}\n}`, {
+    legacySyntaxCompat: true,
+  });
   return schemaSnapshotFromDeclarative(decl);
 };
 
 const compileQuery = (schema: SchemaSnapshot, query: string) => {
   const ast = parseEdgeQL(query) as unknown;
   const stmt = (Array.isArray(ast) ? (ast as Statement[])[0] : (ast as Statement)) as Statement;
-  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), { module: (stmt as { withModule?: string }).withModule, schema });
+  return compileASTToGelIR(expandSchemaAliasesInStatement(stmt, schema), {
+    module: (stmt as { withModule?: string }).withModule,
+    schema,
+  });
 };
 
 const expectMultiplicity = (
@@ -144,9 +152,13 @@ describe("TestEdgeQLMultiplicityInference", () => {
   });
 
   it("test_edgeql_ir_mult_inference_24", () => {
-    expectMultiplicity(schema, `WITH
+    expectMultiplicity(
+      schema,
+      `WITH
             C := (SELECT Card FILTER .name = 'Imp')
-        SELECT str_split(<str>C.id, '')`, "unique");
+        SELECT str_split(<str>C.id, '')`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_25", () => {
@@ -226,28 +238,40 @@ describe("TestEdgeQLMultiplicityInference", () => {
   });
 
   it("test_edgeql_ir_mult_inference_44", () => {
-    expectMultiplicity(schema, `SELECT User {
+    expectMultiplicity(
+      schema,
+      `SELECT User {
             friends_of_friends := .friends.friends,
             others := (
                 SELECT WaterOrEarthCard.owners
             )
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_45", () => {
-    expectMultiplicity(schema, `SELECT Award {
+    expectMultiplicity(
+      schema,
+      `SELECT Award {
             owner := .<awards[IS User]
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_46", () => {
-    expectMultiplicity(schema, `SELECT User {
+    expectMultiplicity(
+      schema,
+      `SELECT User {
             card_names := .deck.name,
             card_elements := DISTINCT .deck.element,
             deck: {
                 el := User.deck.element[:2]
             }
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_47", () => {
@@ -259,11 +283,15 @@ describe("TestEdgeQLMultiplicityInference", () => {
   });
 
   it("test_edgeql_ir_mult_inference_49", () => {
-    expectMultiplicity(schema, `WITH
+    expectMultiplicity(
+      schema,
+      `WITH
             A := (
                 SELECT Award FILTER .name = 'Wow'
             )
-        SELECT A IS Named`, "unique");
+        SELECT A IS Named`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_50", () => {
@@ -279,35 +307,53 @@ describe("TestEdgeQLMultiplicityInference", () => {
   });
 
   it("test_edgeql_ir_mult_inference_53", () => {
-    expectMultiplicity(schema, `SELECT User {
+    expectMultiplicity(
+      schema,
+      `SELECT User {
             card_elements := .deck.element
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_54", () => {
-    expectMultiplicity(schema, `SELECT User {
+    expectMultiplicity(
+      schema,
+      `SELECT User {
             foo := {1, 1, 2}
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_55a", () => {
-    expectMultiplicity(schema, `FOR x IN {'fire', 'water'}
+    expectMultiplicity(
+      schema,
+      `FOR x IN {'fire', 'water'}
         UNION (
             SELECT Card
             FILTER .element = x
-        )`, "unique");
+        )`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_55b", () => {
-    expectMultiplicity(schema, `FOR letter IN {'I', 'B'}
+    expectMultiplicity(
+      schema,
+      `FOR letter IN {'I', 'B'}
         UNION (
             SELECT Card
             FILTER .name[0] = letter
-        )`, "duplicate");
+        )`,
+      "duplicate",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_56", () => {
-    expectMultiplicity(schema, `SELECT User {
+    expectMultiplicity(
+      schema,
+      `SELECT User {
             wishlist := (
                 FOR x IN {'fire', 'water'}
                 UNION (
@@ -315,7 +361,9 @@ describe("TestEdgeQLMultiplicityInference", () => {
                     FILTER .element = x
                 )
             )
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_57", () => {
@@ -327,36 +375,50 @@ describe("TestEdgeQLMultiplicityInference", () => {
   });
 
   it("test_edgeql_ir_mult_inference_59", () => {
-    expectMultiplicity(schema, `FOR x IN {enumerate({'fire', 'water'})}
+    expectMultiplicity(
+      schema,
+      `FOR x IN {enumerate({'fire', 'water'})}
         UNION (
             SELECT Card
             FILTER .element = x.1
-        )`, "unique");
+        )`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_59a", () => {
-    expectMultiplicity(schema, `FOR x IN {enumerate({'fire', 'water'})}
+    expectMultiplicity(
+      schema,
+      `FOR x IN {enumerate({'fire', 'water'})}
         UNION (
             SELECT (
                 SELECT Card
                 FILTER .element = x.1
             )
-        )`, "unique");
+        )`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_60", () => {
-    expectMultiplicity(schema, `FOR x IN {
+    expectMultiplicity(
+      schema,
+      `FOR x IN {
             enumerate(
                 DISTINCT array_unpack(['fire', 'water']))
         }
         UNION (
             SELECT Card
             FILTER .element = x.1
-        )`, "unique");
+        )`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_61", () => {
-    expectMultiplicity(schema, `FOR x IN {
+    expectMultiplicity(
+      schema,
+      `FOR x IN {
             enumerate(
                 array_unpack(['A', 'B']))
         }
@@ -368,7 +430,9 @@ describe("TestEdgeQLMultiplicityInference", () => {
                 req_awards := {}, # wtvr
                 req_tags := {}, # wtvr
             }
-        )`, "unique");
+        )`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_62", () => {
@@ -376,83 +440,129 @@ describe("TestEdgeQLMultiplicityInference", () => {
   });
 
   it("test_edgeql_ir_mult_inference_63", () => {
-    expectMultiplicity(schema, `FOR card IN {enumerate(Card)}
-        UNION (SELECT card.1)`, "unique");
+    expectMultiplicity(
+      schema,
+      `FOR card IN {enumerate(Card)}
+        UNION (SELECT card.1)`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_64", () => {
-    expectMultiplicity(schema, `FOR card IN {Card}
-        UNION card`, "unique");
+    expectMultiplicity(
+      schema,
+      `FOR card IN {Card}
+        UNION card`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_65", () => {
-    expectMultiplicity(schema, `WITH C := <Card>{}
+    expectMultiplicity(
+      schema,
+      `WITH C := <Card>{}
         FOR card IN {C}
-        UNION card`, "empty");
+        UNION card`,
+      "empty",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_66", () => {
-    expectMultiplicity(schema, `FOR card IN {Card, SpecialCard}
-        UNION card`, "duplicate");
+    expectMultiplicity(
+      schema,
+      `FOR card IN {Card, SpecialCard}
+        UNION card`,
+      "duplicate",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_67", () => {
-    expectMultiplicity(schema, `SELECT
+    expectMultiplicity(
+      schema,
+      `SELECT
             (SELECT User FILTER .name = "foo")
             ??
-            (SELECT User FILTER .name = "bar")`, "unique");
+            (SELECT User FILTER .name = "bar")`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_68", () => {
-    expectMultiplicity(schema, `SELECT
+    expectMultiplicity(
+      schema,
+      `SELECT
             (SELECT User FILTER .name = "foo")
             ??
             {
                 User,
                 User,
-            }`, "duplicate");
+            }`,
+      "duplicate",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_69", () => {
-    expectMultiplicity(schema, `SELECT
+    expectMultiplicity(
+      schema,
+      `SELECT
             {
                 (INSERT User { name := "a" }),
                 (INSERT User { name := "b" }),
-            }`, "unique");
+            }`,
+      "unique",
+    );
   });
 
   // Live IR gap: deep nested double-computed tuple-index over a backlink shape (ADR 0017).
   it.skip("test_edgeql_ir_mult_inference_70", () => {
-    expectMultiplicity(schema, `WITH
+    expectMultiplicity(
+      schema,
+      `WITH
             X1 := Card {
                 z := (.<deck[IS User],)
             }
         SELECT X1 {
             foo := .z.0
-        }.foo`, "unique");
+        }.foo`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_71", () => {
-    expectMultiplicity(schema, `FOR card IN {assert_distinct(Card UNION SpecialCard)}
-        UNION card`, "unique");
+    expectMultiplicity(
+      schema,
+      `FOR card IN {assert_distinct(Card UNION SpecialCard)}
+        UNION card`,
+      "unique",
+    );
   });
 
   // Live IR gap: error-detection case the Live IR does not reject (ADR 0017).
   it.skip("test_edgeql_ir_mult_inference_error_01", () => {
-    expect(() => compileQuery(schema, `SELECT User {
+    expect(() =>
+      compileQuery(
+        schema,
+        `SELECT User {
     bad_link := {Card, Card},
     name,
-}`)).toThrow();
+}`,
+      ),
+    ).toThrow();
   });
 
   // Live IR gap: error-detection case the Live IR does not reject (ADR 0017).
   it.skip("test_edgeql_ir_mult_inference_error_02", () => {
-    expect(() => compileQuery(schema, `WITH
+    expect(() =>
+      compileQuery(
+        schema,
+        `WITH
     A := {Card, Card}
 SELECT User {
     bad_link := A,
     name,
-}`)).toThrow();
+}`,
+      ),
+    ).toThrow();
   });
 
   it("test_edgeql_ir_mult_inference_72", () => {
@@ -484,8 +594,12 @@ SELECT User {
   });
 
   it("test_edgeql_ir_mult_inference_78", () => {
-    expectMultiplicity(schema, `with F := { foo := 10 }
-        for x in {1, 2} union F`, "unique");
+    expectMultiplicity(
+      schema,
+      `with F := { foo := 10 }
+        for x in {1, 2} union F`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_79", () => {
@@ -533,43 +647,66 @@ SELECT User {
   });
 
   it("test_edgeql_ir_mult_inference_90", () => {
-    expectMultiplicity(schema, `if <bool>$0 then
+    expectMultiplicity(
+      schema,
+      `if <bool>$0 then
             (insert User { name := "test" })
         else
-            (insert User { name := "???" })`, "unique");
+            (insert User { name := "???" })`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_91", () => {
-    expectMultiplicity(schema, `if <bool>$0 then
+    expectMultiplicity(
+      schema,
+      `if <bool>$0 then
             (insert User { name := "test" })
         else
-            {(insert User { name := "???" }), (insert User { name := "!!!" })}`, "unique");
+            {(insert User { name := "???" }), (insert User { name := "!!!" })}`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_92", () => {
-    expectMultiplicity(schema, `if <bool>$0 then
+    expectMultiplicity(
+      schema,
+      `if <bool>$0 then
             (insert User { name := "test" })
         else
-            <User>{}`, "unique");
+            <User>{}`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_93", () => {
-    expectMultiplicity(schema, `with groupedCards := User { cards := (group .deck by .element) }
-        select groupedCards.cards`, "unique");
+    expectMultiplicity(
+      schema,
+      `with groupedCards := User { cards := (group .deck by .element) }
+        select groupedCards.cards`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_94", () => {
-    expectMultiplicity(schema, `FOR user IN User SELECT user {
+    expectMultiplicity(
+      schema,
+      `FOR user IN User SELECT user {
           name,
           asdf := (FOR card IN .deck SELECT card),
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
 
   it("test_edgeql_ir_mult_inference_95", () => {
-    expectMultiplicity(schema, `FOR user IN User SELECT user {
+    expectMultiplicity(
+      schema,
+      `FOR user IN User SELECT user {
           name,
           asdf := (FOR card IN .deck SELECT Card filter Card = card),
-        }`, "unique");
+        }`,
+      "unique",
+    );
   });
-
 });

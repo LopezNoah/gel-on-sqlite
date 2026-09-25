@@ -14,13 +14,13 @@ apply only when running on D1 / Durable Objects.
 
 ## Numeric
 
-| Function | Gel | D1 / DO (native SQLite) |
-|---|---|---|
-| `math::sin/cos/tan/asin/acos/ln/lg/log/exp/sqrt/cot` | throws on out-of-domain / non-finite input | returns `NULL` (SQLite domain behaviour) |
-| `math::round` | banker's rounding (half to **even**) — `round(2.5) = 2` | half **away from zero** — `round(2.5) = 3` |
-| `math::mean` | exact | native `avg` (identical for valid input; `NULL` over the empty set instead of raising) |
-| `//` (floor div), `%` (mod) | floored (sign of divisor); raises on division by zero | native `floor()`-based — **values match exactly, including negatives**; division by zero yields `NULL` instead of raising. (`//` result is float-typed.) |
-| `math::var`, `var_pop`, `stddev`, `stddev_pop` | numerically-stable; raises on empty / single-element | reimplemented via `avg`/`sum` (`var_pop = E[x²]−E[x]²`): correct to within float **ULPs**; `NULL` (not raise) over empty set or single element |
+| Function                                             | Gel                                                     | D1 / DO (native SQLite)                                                                                                                                  |
+| ---------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `math::sin/cos/tan/asin/acos/ln/lg/log/exp/sqrt/cot` | throws on out-of-domain / non-finite input              | returns `NULL` (SQLite domain behaviour)                                                                                                                 |
+| `math::round`                                        | banker's rounding (half to **even**) — `round(2.5) = 2` | half **away from zero** — `round(2.5) = 3`                                                                                                               |
+| `math::mean`                                         | exact                                                   | native `avg` (identical for valid input; `NULL` over the empty set instead of raising)                                                                   |
+| `//` (floor div), `%` (mod)                          | floored (sign of divisor); raises on division by zero   | native `floor()`-based — **values match exactly, including negatives**; division by zero yields `NULL` instead of raising. (`//` result is float-typed.) |
+| `math::var`, `var_pop`, `stddev`, `stddev_pop`       | numerically-stable; raises on empty / single-element    | reimplemented via `avg`/`sum` (`var_pop = E[x²]−E[x]²`): correct to within float **ULPs**; `NULL` (not raise) over empty set or single element           |
 
 ## Datetime
 
@@ -38,12 +38,12 @@ lowered).
 
 ## Bitwise
 
-| Function | D1 / DO |
-|---|---|
-| `bit_and`, `bit_or`, `bit_not` | already native (`&`, `\|`, `~`) — identical |
-| `bit_xor` | native `(x\|y)-(x&y)` — identical for all widths |
-| `bit_lshift`, `bit_rshift` | native `<<` / `>>` — identical for `int64`; on `int16`/`int32` they do **not** wrap to the type width |
-| `bit_count` | no native popcount — **unsupported** (`no such function: _gel_bit_count`) |
+| Function                       | D1 / DO                                                                                               |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `bit_and`, `bit_or`, `bit_not` | already native (`&`, `\|`, `~`) — identical                                                           |
+| `bit_xor`                      | native `(x\|y)-(x&y)` — identical for all widths                                                      |
+| `bit_lshift`, `bit_rshift`     | native `<<` / `>>` — identical for `int64`; on `int16`/`int32` they do **not** wrap to the type width |
+| `bit_count`                    | no native popcount — **unsupported** (`no such function: _gel_bit_count`)                             |
 
 ## Not yet supported on D1 / DO
 
@@ -54,7 +54,7 @@ equivalent / not yet lowered) and will raise `no such function` on D1/DO:
   (interval semantics).
 - **`std::to_int*/to_float*/to_bigint/to_decimal`**: these are the
   format-string parsers (`to_int64(str, fmt)`); SQLite `CAST` can't replicate
-  format parsing. (The `<int64>x` cast *operator* already uses native `CAST`.)
+  format parsing. (The `<int64>x` cast _operator_ already uses native `CAST`.)
 - **`decimal` / large `bigint`**: SQLite has no decimal type and uses float64,
   so precision beyond 2⁵³ cannot be preserved.
 - **Regex** (`re_test`, `re_match`, `re_replace`): D1 has no `regexp`.

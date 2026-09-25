@@ -181,8 +181,9 @@ const loadTestCorpus = (): string[] => {
   // Heuristic: find calls like `assertQueryResult(h,\n    \`...\``,
   // capture the backtick string. Good-enough for benchmarking.
   const testsDir = join(__dirname, "..", "tests");
-  const files = readdirSync(testsDir)
-    .filter((f) => f.startsWith("edgeql_") && f.endsWith(".test.ts"));
+  const files = readdirSync(testsDir).filter(
+    (f) => f.startsWith("edgeql_") && f.endsWith(".test.ts"),
+  );
   const queries: string[] = [];
   const re = /assertQueryResult\s*\(\s*h\s*,\s*`([\s\S]*?)`/g;
   for (const f of files) {
@@ -243,8 +244,24 @@ const main = (): void => {
   }
   if (skipped > 0) console.log(`Skipped ${skipped} queries that failed to parse`);
 
-  const tokResult = runBench("tokenize", goodCorpus, (q) => { tokenize(q); }, iters, warmup);
-  const parseResult = runBench("tokenize+parse", goodCorpus, (q) => { parseEdgeQL(q); }, iters, warmup);
+  const tokResult = runBench(
+    "tokenize",
+    goodCorpus,
+    (q) => {
+      tokenize(q);
+    },
+    iters,
+    warmup,
+  );
+  const parseResult = runBench(
+    "tokenize+parse",
+    goodCorpus,
+    (q) => {
+      parseEdgeQL(q);
+    },
+    iters,
+    warmup,
+  );
 
   printResult(tokResult);
   printResult(parseResult);
@@ -263,8 +280,18 @@ const main = (): void => {
     // Strip any existing trailing semicolons from pieces so we control termination.
     scriptInputs.push(chunk.map((q) => q.replace(/;\s*$/, "")).join(";\n") + ";\n");
   }
-  console.log(`\n  script mode: ${scriptInputs.length} scripts averaging ${formatNum(goodCorpus.length / scriptInputs.length, 1)} stmts each`);
-  const scriptResult = runBench("parseEdgeQLScript", scriptInputs, (s) => { parseEdgeQLScript(s); }, iters, warmup);
+  console.log(
+    `\n  script mode: ${scriptInputs.length} scripts averaging ${formatNum(goodCorpus.length / scriptInputs.length, 1)} stmts each`,
+  );
+  const scriptResult = runBench(
+    "parseEdgeQLScript",
+    scriptInputs,
+    (s) => {
+      parseEdgeQLScript(s);
+    },
+    iters,
+    warmup,
+  );
   printResult(scriptResult);
 };
 

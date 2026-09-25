@@ -247,7 +247,10 @@ const asSchemaParseError = (err: unknown): AppError => {
   return new AppError("E_SYNTAX", "Unknown SDL parse error", 1, 1);
 };
 
-export const gelSchema = (strings: TemplateStringsArray, ...values: unknown[]): DeclarativeSchema => {
+export const gelSchema = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+): DeclarativeSchema => {
   const source = strings.reduce((acc, part, index) => {
     const value = index < values.length ? String(values[index]) : "";
     return `${acc}${part}${value}`;
@@ -255,7 +258,7 @@ export const gelSchema = (strings: TemplateStringsArray, ...values: unknown[]): 
 
   try {
     return parseDeclarativeSchema(source, {
-      legacySyntaxCompat: true
+      legacySyntaxCompat: true,
     });
   } catch (err) {
     throw asSchemaParseError(err);

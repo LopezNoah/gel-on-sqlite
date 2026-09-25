@@ -4,7 +4,7 @@ import {
   assertQueryResult,
   queryRows,
   unorderedBag,
-  unorderedSet
+  unorderedSet,
 } from "./python_query_test_helpers.js";
 
 interface TestValueDesc {
@@ -20,38 +20,292 @@ interface TestValueDesc {
 const value = (desc: TestValueDesc): TestValueDesc => desc;
 
 const VALUES: Array<[string, TestValueDesc]> = [
-  ["<bool>True", value({ typename: "bool", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: false })],
-  ["<uuid>\"d4288330-eea3-11e8-bc5f-7faf132b1d84\"", value({ typename: "uuid", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: false })],
-  ["<bytes>b\"Hello\"", value({ typename: "bytes", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: false })],
-  ["<str>\"Hello\"", value({ typename: "str", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: false })],
-  ["<json>\"Hello\"", value({ typename: "json", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: false })],
-  ["<datetime>\"2018-05-07T20:01:22.306916+00:00\"", value({ typename: "datetime", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: true })],
-  ["<cal::local_datetime>\"2018-05-07T00:00:00\"", value({ typename: "std::cal::local_datetime", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: true })],
-  ["<cal::local_date>\"2018-05-07\"", value({ typename: "std::cal::local_date", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: true })],
-  ["<cal::local_time>\"20:01:22.306916\"", value({ typename: "std::cal::local_time", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: false, datetime: true })],
-  ["<duration>\"20:01:22.306916\"", value({ typename: "duration", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: true, datetime: true })],
-  ["<int16>1", value({ typename: "int16", anyreal: true, anyint: true, anyfloat: false, anynumeric: false, signed: true, datetime: false })],
-  ["<int32>1", value({ typename: "int32", anyreal: true, anyint: true, anyfloat: false, anynumeric: false, signed: true, datetime: false })],
-  ["<int64>1", value({ typename: "int64", anyreal: true, anyint: true, anyfloat: false, anynumeric: false, signed: true, datetime: false })],
-  ["1", value({ typename: "int64", anyreal: true, anyint: true, anyfloat: false, anynumeric: false, signed: true, datetime: false })],
-  ["<float32>1", value({ typename: "float32", anyreal: true, anyint: false, anyfloat: true, anynumeric: false, signed: true, datetime: false })],
-  ["<float64>1", value({ typename: "float64", anyreal: true, anyint: false, anyfloat: true, anynumeric: false, signed: true, datetime: false })],
-  ["1.0", value({ typename: "float64", anyreal: true, anyint: false, anyfloat: true, anynumeric: false, signed: true, datetime: false })],
-  ["<bigint>1", value({ typename: "bigint", anyreal: true, anyint: true, anyfloat: false, anynumeric: true, signed: true, datetime: false })],
-  ["1n", value({ typename: "bigint", anyreal: true, anyint: true, anyfloat: false, anynumeric: true, signed: true, datetime: false })],
-  ["<decimal>1.0", value({ typename: "decimal", anyreal: true, anyint: false, anyfloat: false, anynumeric: true, signed: true, datetime: false })],
-  ["1.0n", value({ typename: "decimal", anyreal: true, anyint: false, anyfloat: false, anynumeric: true, signed: true, datetime: false })],
-  ["<cal::relative_duration>\"P1Y2M3D\"", value({ typename: "std::cal::relative_duration", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: true, datetime: true })],
-  ["<cal::date_duration>\"P1Y2M3D\"", value({ typename: "std::cal::date_duration", anyreal: false, anyint: false, anyfloat: false, anynumeric: false, signed: true, datetime: true })],
+  [
+    "<bool>True",
+    value({
+      typename: "bool",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: false,
+    }),
+  ],
+  [
+    '<uuid>"d4288330-eea3-11e8-bc5f-7faf132b1d84"',
+    value({
+      typename: "uuid",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: false,
+    }),
+  ],
+  [
+    '<bytes>b"Hello"',
+    value({
+      typename: "bytes",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: false,
+    }),
+  ],
+  [
+    '<str>"Hello"',
+    value({
+      typename: "str",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: false,
+    }),
+  ],
+  [
+    '<json>"Hello"',
+    value({
+      typename: "json",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: false,
+    }),
+  ],
+  [
+    '<datetime>"2018-05-07T20:01:22.306916+00:00"',
+    value({
+      typename: "datetime",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: true,
+    }),
+  ],
+  [
+    '<cal::local_datetime>"2018-05-07T00:00:00"',
+    value({
+      typename: "std::cal::local_datetime",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: true,
+    }),
+  ],
+  [
+    '<cal::local_date>"2018-05-07"',
+    value({
+      typename: "std::cal::local_date",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: true,
+    }),
+  ],
+  [
+    '<cal::local_time>"20:01:22.306916"',
+    value({
+      typename: "std::cal::local_time",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: false,
+      datetime: true,
+    }),
+  ],
+  [
+    '<duration>"20:01:22.306916"',
+    value({
+      typename: "duration",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: true,
+      datetime: true,
+    }),
+  ],
+  [
+    "<int16>1",
+    value({
+      typename: "int16",
+      anyreal: true,
+      anyint: true,
+      anyfloat: false,
+      anynumeric: false,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "<int32>1",
+    value({
+      typename: "int32",
+      anyreal: true,
+      anyint: true,
+      anyfloat: false,
+      anynumeric: false,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "<int64>1",
+    value({
+      typename: "int64",
+      anyreal: true,
+      anyint: true,
+      anyfloat: false,
+      anynumeric: false,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "1",
+    value({
+      typename: "int64",
+      anyreal: true,
+      anyint: true,
+      anyfloat: false,
+      anynumeric: false,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "<float32>1",
+    value({
+      typename: "float32",
+      anyreal: true,
+      anyint: false,
+      anyfloat: true,
+      anynumeric: false,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "<float64>1",
+    value({
+      typename: "float64",
+      anyreal: true,
+      anyint: false,
+      anyfloat: true,
+      anynumeric: false,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "1.0",
+    value({
+      typename: "float64",
+      anyreal: true,
+      anyint: false,
+      anyfloat: true,
+      anynumeric: false,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "<bigint>1",
+    value({
+      typename: "bigint",
+      anyreal: true,
+      anyint: true,
+      anyfloat: false,
+      anynumeric: true,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "1n",
+    value({
+      typename: "bigint",
+      anyreal: true,
+      anyint: true,
+      anyfloat: false,
+      anynumeric: true,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "<decimal>1.0",
+    value({
+      typename: "decimal",
+      anyreal: true,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: true,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    "1.0n",
+    value({
+      typename: "decimal",
+      anyreal: true,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: true,
+      signed: true,
+      datetime: false,
+    }),
+  ],
+  [
+    '<cal::relative_duration>"P1Y2M3D"',
+    value({
+      typename: "std::cal::relative_duration",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: true,
+      datetime: true,
+    }),
+  ],
+  [
+    '<cal::date_duration>"P1Y2M3D"',
+    value({
+      typename: "std::cal::date_duration",
+      anyreal: false,
+      anyint: false,
+      anyfloat: false,
+      anynumeric: false,
+      signed: true,
+      datetime: true,
+    }),
+  ],
 ];
 
 type ValueFlags = Partial<Record<keyof Omit<TestValueDesc, "typename">, boolean>>;
 
 function get_test_items(flags: ValueFlags = {}): Array<[string, TestValueDesc]> {
   return VALUES.filter(([, desc]) =>
-    Object.entries(flags).every(([key, expected]) =>
-      Boolean(desc[key as keyof Omit<TestValueDesc, "typename">]) === Boolean(expected)
-    )
+    Object.entries(flags).every(
+      ([key, expected]) =>
+        Boolean(desc[key as keyof Omit<TestValueDesc, "typename">]) === Boolean(expected),
+    ),
   );
 }
 
@@ -80,9 +334,9 @@ function realDivisionResultType(left: TestValueDesc, right: TestValueDesc): stri
 function compatibleScalarType(left: TestValueDesc, right: TestValueDesc): string | null {
   const argtypes = new Set([left.typename, right.typename]);
   if (
-    left.typename === right.typename
-    || sameTypeSet(argtypes, ["std::cal::date_duration", "std::cal::relative_duration"])
-    || sameTypeSet(argtypes, ["std::cal::local_date", "std::cal::local_datetime"])
+    left.typename === right.typename ||
+    sameTypeSet(argtypes, ["std::cal::date_duration", "std::cal::relative_duration"]) ||
+    sameTypeSet(argtypes, ["std::cal::local_date", "std::cal::local_datetime"])
   ) {
     if (argtypes.has("std::cal::relative_duration")) return "std::cal::relative_duration";
     if (argtypes.has("std::cal::local_datetime")) return "std::cal::local_datetime";
@@ -96,27 +350,31 @@ describe("TestExpressions", () => {
 
   beforeEach(async () => {
     h = await QueryHarness.create({
-      schema: "issues"
+      schema: "issues",
     });
   });
 
-  function _test_boolop(left?: string, right?: string, op?: string, not_op?: string, result?: boolean | string): void {
-    if (left === undefined || right === undefined || op === undefined || not_op === undefined || result === undefined) {
+  function _test_boolop(
+    left?: string,
+    right?: string,
+    op?: string,
+    not_op?: string,
+    result?: boolean | string,
+  ): void {
+    if (
+      left === undefined ||
+      right === undefined ||
+      op === undefined ||
+      not_op === undefined ||
+      result === undefined
+    ) {
       return;
     }
     if (typeof result === "boolean") {
-      assertQueryResult(
-        h,
-        `SELECT ${left} ${op} ${right};`,
-        unorderedSet([result])
-      );
-      assertQueryResult(
-        h,
-        `SELECT ${left} ${not_op} ${right};`,
-        unorderedSet([!result])
-      );
+      assertQueryResult(h, `SELECT ${left} ${op} ${right};`, unorderedSet([result]));
+      assertQueryResult(h, `SELECT ${left} ${not_op} ${right};`, unorderedSet([!result]));
     } else {
-      for (const binop of ([op, not_op] as any)) {
+      for (const binop of [op, not_op] as any) {
         let query = `SELECT ${left} ${binop} ${right};`;
         expect(() => h.query(query)).toThrow(new RegExp(result));
       }
@@ -136,7 +394,7 @@ describe("TestExpressions", () => {
                     ${r0} ${op} multirange([${r1}]),
                     multirange([${r0}]) ${op} multirange([${r1}]),
             );`,
-      [[answer, answer, answer, answer]]
+      [[answer, answer, answer, answer]],
     );
   }
 
@@ -146,90 +404,38 @@ describe("TestExpressions", () => {
   }
 
   it("test_edgeql_expr_emptyset_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT <int64>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT <str>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} + 1;`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT 1 + <int64>{};`,
-      []
-    );
+    assertQueryResult(h, `SELECT <int64>{};`, []);
+    assertQueryResult(h, `SELECT <str>{};`, []);
+    assertQueryResult(h, `SELECT <int64>{} + 1;`, []);
+    assertQueryResult(h, `SELECT 1 + <int64>{};`, []);
     expect(() => {
       h.script(
         `
                 SELECT {};
-            `
+            `,
       );
     }).toThrow(new RegExp("expression returns value of indeterminate type"));
   });
 
   it("test_edgeql_expr_emptyset_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT count(<int64>{});`,
-      [0]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT <int64>{});`,
-      [0]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count({});`,
-      [0]
-    );
+    assertQueryResult(h, `SELECT count(<int64>{});`, [0]);
+    assertQueryResult(h, `SELECT count(DISTINCT <int64>{});`, [0]);
+    assertQueryResult(h, `SELECT count({});`, [0]);
   });
 
   it("test_edgeql_expr_emptyset_03", () => {
-    assertQueryResult(
-      h,
-      `SELECT {1, {}};`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT {1, {}};`, [1]);
   });
 
   it("test_edgeql_expr_emptyset_04", () => {
-    assertQueryResult(
-      h,
-      `SELECT sum({1, 1, {}});`,
-      [2]
-    );
+    assertQueryResult(h, `SELECT sum({1, 1, {}});`, [2]);
   });
 
   it("test_edgeql_expr_emptyset_05", () => {
-    assertQueryResult(
-      h,
-      `SELECT {False, <bool>{}};`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {False, {False, <bool>{}}};`,
-      [false, false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {<bool>{}, <bool>{}};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT {False, {<bool>{}, <bool>{}}};`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT {False, <bool>{}};`, [false]);
+    assertQueryResult(h, `SELECT {False, {False, <bool>{}}};`, [false, false]);
+    assertQueryResult(h, `SELECT {<bool>{}, <bool>{}};`, []);
+    assertQueryResult(h, `SELECT {False, {<bool>{}, <bool>{}}};`, [false]);
   });
 
   it("test_edgeql_expr_idempotent_01", () => {
@@ -238,199 +444,87 @@ describe("TestExpressions", () => {
       `
                 SELECT (SELECT (SELECT (SELECT 42)));
             `,
-      [42]
+      [42],
     );
   });
 
   it("test_edgeql_expr_idempotent_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT 'f';`,
-      ["f"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'f'[0];`,
-      ["f"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'foo'[0];`,
-      ["f"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'f'[0][0][0][0][0];`,
-      ["f"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'foo'[0][0][0][0][0];`,
-      ["f"]
-    );
+    assertQueryResult(h, `SELECT 'f';`, ["f"]);
+    assertQueryResult(h, `SELECT 'f'[0];`, ["f"]);
+    assertQueryResult(h, `SELECT 'foo'[0];`, ["f"]);
+    assertQueryResult(h, `SELECT 'f'[0][0][0][0][0];`, ["f"]);
+    assertQueryResult(h, `SELECT 'foo'[0][0][0][0][0];`, ["f"]);
   });
 
   it("test_edgeql_expr_op_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT 40 + 2;`,
-      [42]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 - 2;`,
-      [38]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 * 2;`,
-      [80]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 / 2;`,
-      [20]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 % 2;`,
-      [0]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40000000000000000000000000n + 1;`,
-      [40000000000000000000000001]
-    );
+    assertQueryResult(h, `SELECT 40 + 2;`, [42]);
+    assertQueryResult(h, `SELECT 40 - 2;`, [38]);
+    assertQueryResult(h, `SELECT 40 * 2;`, [80]);
+    assertQueryResult(h, `SELECT 40 / 2;`, [20]);
+    assertQueryResult(h, `SELECT 40 % 2;`, [0]);
+    assertQueryResult(h, `SELECT 40000000000000000000000000n + 1;`, [40000000000000000000000001]);
   });
 
   it("test_edgeql_expr_literals_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF 1).name;`,
-      unorderedSet(["std::int64"])
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF 1.0).name;`,
-      unorderedSet(["std::float64"])
-    );
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF 1).name;`, unorderedSet(["std::int64"]));
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF 1.0).name;`, unorderedSet(["std::float64"]));
     assertQueryResult(
       h,
       `SELECT (INTROSPECT TYPEOF 9223372036854775807).name;`,
-      unorderedSet(["std::int64"])
+      unorderedSet(["std::int64"]),
     );
     assertQueryResult(
       h,
       `SELECT (INTROSPECT TYPEOF -9223372036854775808).name;`,
-      unorderedSet(["std::int64"])
+      unorderedSet(["std::int64"]),
     );
     assertQueryResult(
       h,
       `SELECT (INTROSPECT TYPEOF 9223372036854775808).name;`,
-      unorderedSet(["std::int64"])
+      unorderedSet(["std::int64"]),
     );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF 1n).name;`,
-      unorderedSet(["std::bigint"])
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF 1.0n).name;`,
-      unorderedSet(["std::decimal"])
-    );
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF 1n).name;`, unorderedSet(["std::bigint"]));
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF 1.0n).name;`, unorderedSet(["std::decimal"]));
   });
 
   it("test_edgeql_expr_literals_02", () => {
     expect(() => {
-      h.query(
-        `SELECT <int16>36893488147419`
-      );
+      h.query(`SELECT <int16>36893488147419`);
     }).toThrow(new RegExp("std::int16 out of range"));
     expect(() => {
-      h.query(
-        `SELECT <int32>36893488147419`
-      );
+      h.query(`SELECT <int32>36893488147419`);
     }).toThrow(new RegExp("std::int32 out of range"));
     expect(() => {
-      h.query(
-        `SELECT <int64>'3689348814741900000000000' `
-      );
+      h.query(`SELECT <int64>'3689348814741900000000000' `);
     }).toThrow(new RegExp("is out of range for type std::int64"));
     expect(() => {
-      h.query(
-        `SELECT 0. `
-      );
+      h.query(`SELECT 0. `);
     }).toThrow(new RegExp("expected digit after dot"));
     expect(() => {
-      h.query(
-        `SELECT 1e999`
-      );
+      h.query(`SELECT 1e999`);
     }).toThrow(new RegExp("number is out of range for std::float64"));
     expect(() => {
-      h.query(
-        `SELECT <duration>'13074457345618258602us' `
-      );
+      h.query(`SELECT <duration>'13074457345618258602us' `);
     }).toThrow(new RegExp("interval field value out of range"));
   });
 
   it("test_edgeql_expr_op_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT 40 ^ 2;`,
-      [1600]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 121 ^ 0.5;`,
-      [11]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 ^ 3 ^ 2;`,
-      [512]
-    );
+    assertQueryResult(h, `SELECT 40 ^ 2;`, [1600]);
+    assertQueryResult(h, `SELECT 121 ^ 0.5;`, [11]);
+    assertQueryResult(h, `SELECT 2 ^ 3 ^ 2;`, [512]);
   });
 
   it("test_edgeql_expr_op_03", () => {
-    assertQueryResult(
-      h,
-      `SELECT 40 < 2;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 > 2;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 <= 2;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 >= 2;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 = 2;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 40 != 2;`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT 40 < 2;`, [false]);
+    assertQueryResult(h, `SELECT 40 > 2;`, [true]);
+    assertQueryResult(h, `SELECT 40 <= 2;`, [false]);
+    assertQueryResult(h, `SELECT 40 >= 2;`, [true]);
+    assertQueryResult(h, `SELECT 40 = 2;`, [false]);
+    assertQueryResult(h, `SELECT 40 != 2;`, [true]);
   });
 
   it("test_edgeql_expr_op_04", () => {
-    assertQueryResult(
-      h,
-      `SELECT -1 + 2 * 3 - 5 - 6.0 / 2;`,
-      [-3]
-    );
+    assertQueryResult(h, `SELECT -1 + 2 * 3 - 5 - 6.0 / 2;`, [-3]);
     assertQueryResult(
       h,
       `
@@ -438,13 +532,9 @@ describe("TestExpressions", () => {
                     -1 + 2 * 3 - 5 - 6.0 / 2 > 0
                     OR 25 % 4 = 3 AND 42 IN {12, 42, 14};
             `,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `SELECT (-1 + 2) * 3 - (5 - 6.0) / 2;`,
-      [3.5]
-    );
+    assertQueryResult(h, `SELECT (-1 + 2) * 3 - (5 - 6.0) / 2;`, [3.5]);
     assertQueryResult(
       h,
       `
@@ -452,78 +542,22 @@ describe("TestExpressions", () => {
                     ((-1 + 2) * 3 - (5 - 6.0) / 2 > 0 OR 25 % 4 = 3)
                     AND 42 IN {12, 42, 14};
             `,
-      [true]
+      [true],
     );
-    assertQueryResult(
-      h,
-      `SELECT 1 * 0.2;`,
-      [0.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 0.2 * 1;`,
-      [0.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT -0.2 * 1;`,
-      [-0.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 0.2 + 1;`,
-      [1.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 1 + 0.2;`,
-      [1.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT -0.2 - 1;`,
-      [-1.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT -1 - 0.2;`,
-      [-1.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT -1 / 0.2;`,
-      [-5]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 0.2 / -1;`,
-      [-0.2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 // 2;`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 // 1.2;`,
-      [4.0]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF (5.5 // 1.2)).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT -9.6 // 2;`,
-      [-5.0]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF (<float32>-9.6 // 2)).name;`,
-      ["std::float64"]
-    );
+    assertQueryResult(h, `SELECT 1 * 0.2;`, [0.2]);
+    assertQueryResult(h, `SELECT 0.2 * 1;`, [0.2]);
+    assertQueryResult(h, `SELECT -0.2 * 1;`, [-0.2]);
+    assertQueryResult(h, `SELECT 0.2 + 1;`, [1.2]);
+    assertQueryResult(h, `SELECT 1 + 0.2;`, [1.2]);
+    assertQueryResult(h, `SELECT -0.2 - 1;`, [-1.2]);
+    assertQueryResult(h, `SELECT -1 - 0.2;`, [-1.2]);
+    assertQueryResult(h, `SELECT -1 / 0.2;`, [-5]);
+    assertQueryResult(h, `SELECT 0.2 / -1;`, [-0.2]);
+    assertQueryResult(h, `SELECT 5 // 2;`, [2]);
+    assertQueryResult(h, `SELECT 5.5 // 1.2;`, [4.0]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF (5.5 // 1.2)).name;`, ["std::float64"]);
+    assertQueryResult(h, `SELECT -9.6 // 2;`, [-5.0]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF (<float32>-9.6 // 2)).name;`, ["std::float64"]);
   });
 
   it("test_edgeql_expr_op_05", () => {
@@ -532,34 +566,18 @@ describe("TestExpressions", () => {
       `
                 SELECT 'foo' ++ 'bar';
             `,
-      ["foobar"]
+      ["foobar"],
     );
   });
 
   it("test_edgeql_expr_op_06", () => {
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} = <int64>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} = 42;`,
-      []
-    );
+    assertQueryResult(h, `SELECT <int64>{} = <int64>{};`, []);
+    assertQueryResult(h, `SELECT <int64>{} = 42;`, []);
   });
 
   it("test_edgeql_expr_op_07", () => {
-    assertQueryResult(
-      h,
-      `SELECT TRUE OR <bool>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT FALSE AND <bool>{};`,
-      []
-    );
+    assertQueryResult(h, `SELECT TRUE OR <bool>{};`, []);
+    assertQueryResult(h, `SELECT FALSE AND <bool>{};`, []);
   });
 
   it("test_edgeql_expr_op_08", () => {
@@ -567,7 +585,7 @@ describe("TestExpressions", () => {
       h.query(
         `
                 SELECT -'aaa';
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '-' cannot .* 'std::str'"));
   });
@@ -579,85 +597,29 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_op_10", () => {
-    assertQueryResult(
-      h,
-      `SELECT +<int64>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT -<int64>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT NOT <bool>{};`,
-      []
-    );
+    assertQueryResult(h, `SELECT +<int64>{};`, []);
+    assertQueryResult(h, `SELECT -<int64>{};`, []);
+    assertQueryResult(h, `SELECT NOT <bool>{};`, []);
   });
 
   it("test_edgeql_expr_op_11", () => {
-    assertQueryResult(
-      h,
-      `SELECT 1 + (1 + len([1, 2])) + 1;`,
-      [5]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 * (2 * len([1, 2])) * 2;`,
-      [16]
-    );
+    assertQueryResult(h, `SELECT 1 + (1 + len([1, 2])) + 1;`, [5]);
+    assertQueryResult(h, `SELECT 2 * (2 * len([1, 2])) * 2;`, [16]);
   });
 
   it("test_edgeql_expr_op_12", () => {
-    assertQueryResult(
-      h,
-      `SELECT -2^2;`,
-      [-4]
-    );
+    assertQueryResult(h, `SELECT -2^2;`, [-4]);
   });
 
   it("test_edgeql_expr_op_13", () => {
-    assertQueryResult(
-      h,
-      `SELECT 2 ?= 2;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 ?= 3;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 ?!= 2;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 ?!= 3;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 ?= <int64>{};`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} ?= <int64>{};`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 ?!= <int64>{};`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} ?!= <int64>{};`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT 2 ?= 2;`, [true]);
+    assertQueryResult(h, `SELECT 2 ?= 3;`, [false]);
+    assertQueryResult(h, `SELECT 2 ?!= 2;`, [false]);
+    assertQueryResult(h, `SELECT 2 ?!= 3;`, [true]);
+    assertQueryResult(h, `SELECT 2 ?= <int64>{};`, [false]);
+    assertQueryResult(h, `SELECT <int64>{} ?= <int64>{};`, [true]);
+    assertQueryResult(h, `SELECT 2 ?!= <int64>{};`, [true]);
+    assertQueryResult(h, `SELECT <int64>{} ?!= <int64>{};`, [false]);
   });
 
   it("test_edgeql_expr_op_14", () => {
@@ -667,7 +629,7 @@ describe("TestExpressions", () => {
                 SELECT _ := {9, 1, 13}
                 FILTER _ IN {11, 12, 13};
             `,
-      unorderedSet([13])
+      unorderedSet([13]),
     );
     assertQueryResult(
       h,
@@ -675,7 +637,7 @@ describe("TestExpressions", () => {
                 SELECT _ := {9, 1, 13, 11}
                 FILTER _ IN {11, 12, 13};
             `,
-      unorderedSet([11, 13])
+      unorderedSet([11, 13]),
     );
   });
 
@@ -686,7 +648,7 @@ describe("TestExpressions", () => {
                 SELECT _ := {9, 12, 13}
                 FILTER _ NOT IN {11, 12, 13};
             `,
-      unorderedSet([9])
+      unorderedSet([9]),
     );
     assertQueryResult(
       h,
@@ -694,7 +656,7 @@ describe("TestExpressions", () => {
                 SELECT _ := {9, 1, 13, 11}
                 FILTER _ NOT IN {11, 12, 13};
             `,
-      unorderedSet([1, 9])
+      unorderedSet([1, 9]),
     );
   });
 
@@ -706,7 +668,7 @@ describe("TestExpressions", () => {
                 SELECT _ := {9, 1, 13}
                 FILTER _ IN a;
             `,
-      unorderedSet([13])
+      unorderedSet([13]),
     );
     assertQueryResult(
       h,
@@ -722,7 +684,7 @@ describe("TestExpressions", () => {
                     ).name)
                 );
             `,
-      unorderedSet([13])
+      unorderedSet([13]),
     );
   });
 
@@ -734,7 +696,7 @@ describe("TestExpressions", () => {
                 SELECT _ := {9, 1, 13}
                 FILTER _ NOT IN a;
             `,
-      unorderedSet([1, 9])
+      unorderedSet([1, 9]),
     );
     assertQueryResult(
       h,
@@ -750,7 +712,7 @@ describe("TestExpressions", () => {
                     ).name)
                 );
             `,
-      unorderedSet([1, 9])
+      unorderedSet([1, 9]),
     );
   });
 
@@ -761,54 +723,26 @@ describe("TestExpressions", () => {
                 SELECT _ := {1, 2, 3} IN {3, 4}
                 ORDER BY _;
             `,
-      [false, false, true]
+      [false, false, true],
     );
   });
 
   it("test_edgeql_expr_op_19", () => {
-    assertQueryResult(
-      h,
-      `SELECT 1 IN <int64>{};`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <optional int64>$0 IN <int64>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT {1, 2, 3} IN <int64>{};`,
-      [false, false, false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 1 NOT IN <int64>{};`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {1, 2, 3} NOT IN <int64>{};`,
-      [true, true, true]
-    );
+    assertQueryResult(h, `SELECT 1 IN <int64>{};`, [false]);
+    assertQueryResult(h, `SELECT <optional int64>$0 IN <int64>{};`, []);
+    assertQueryResult(h, `SELECT {1, 2, 3} IN <int64>{};`, [false, false, false]);
+    assertQueryResult(h, `SELECT 1 NOT IN <int64>{};`, [true]);
+    assertQueryResult(h, `SELECT {1, 2, 3} NOT IN <int64>{};`, [true, true, true]);
   });
 
   it("test_edgeql_expr_op_20", () => {
-    assertQueryResult(
-      h,
-      `SELECT (10 + math::floor(random()))^308;`,
-      [1e+308]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (10 + math::floor(random()))^308 = 1e308;`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT (10 + math::floor(random()))^308;`, [1e308]);
+    assertQueryResult(h, `SELECT (10 + math::floor(random()))^308 = 1e308;`, [true]);
     expect(() => {
       h.query(
         `
                 SELECT (10 + math::floor(random()))^309;
-            `
+            `,
       );
     }).toThrow(new RegExp("overflow"));
   });
@@ -819,7 +753,7 @@ describe("TestExpressions", () => {
       `
             SELECT 0.797693134862311111111n = <decimal>0.797693134862311111111;
             `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -829,149 +763,94 @@ describe("TestExpressions", () => {
                 AND
                 0.797693134862311111111n <= <decimal>0.797693134862311111111;
             `,
-      [false]
+      [false],
     );
   });
 
   it("test_edgeql_expr_mod_01", () => {
     // Python: `types = [v.typename for v in VALUES.values() if v.anyreal]`
     const types = get_test_items({ anyreal: true }).map(([, desc]: any) => desc.typename);
-    for (const t of (types as any)) {
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"5"} // <${t}>${"3"};`,
-        [1]
-      );
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"5"} % <${t}>${"3"};`,
-        [2]
-      );
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"-5"} // <${t}>${"3"};`,
-        [-2]
-      );
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"-5"} % <${t}>${"3"};`,
-        [1]
-      );
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"-5"} // <${t}>${"-3"};`,
-        [1]
-      );
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"-5"} % <${t}>${"-3"};`,
-        [-2]
-      );
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"5"} // <${t}>${"-3"};`,
-        [-2]
-      );
-      assertQueryResult(
-        h,
-        `SELECT <${t}>${"5"} % <${t}>${"-3"};`,
-        [-1]
-      );
+    for (const t of types as any) {
+      assertQueryResult(h, `SELECT <${t}>${"5"} // <${t}>${"3"};`, [1]);
+      assertQueryResult(h, `SELECT <${t}>${"5"} % <${t}>${"3"};`, [2]);
+      assertQueryResult(h, `SELECT <${t}>${"-5"} // <${t}>${"3"};`, [-2]);
+      assertQueryResult(h, `SELECT <${t}>${"-5"} % <${t}>${"3"};`, [1]);
+      assertQueryResult(h, `SELECT <${t}>${"-5"} // <${t}>${"-3"};`, [1]);
+      assertQueryResult(h, `SELECT <${t}>${"-5"} % <${t}>${"-3"};`, [-2]);
+      assertQueryResult(h, `SELECT <${t}>${"5"} // <${t}>${"-3"};`, [-2]);
+      assertQueryResult(h, `SELECT <${t}>${"5"} % <${t}>${"-3"};`, [-1]);
     }
   });
 
   it("test_edgeql_expr_mod_02", () => {
-    assertQueryResult(
-      h,
-      `select 2000000 % 9223372036854770000;`,
-      [2000000]
-    );
-    assertQueryResult(
-      h,
-      `select -2000000 % -9223372036854770000;`,
-      [-2000000]
-    );
-    assertQueryResult(
-      h,
-      `select (<int32>2000000) % <int32>2147483000;`,
-      [2000000]
-    );
-    assertQueryResult(
-      h,
-      `select (-<int32>2000000) % -<int32>2147483000;`,
-      [-2000000]
-    );
-    assertQueryResult(
-      h,
-      `select (<int16>20000) % <int16>32000;`,
-      [20000]
-    );
-    assertQueryResult(
-      h,
-      `select (-<int16>20000) % -<int16>32000;`,
-      [-20000]
-    );
+    assertQueryResult(h, `select 2000000 % 9223372036854770000;`, [2000000]);
+    assertQueryResult(h, `select -2000000 % -9223372036854770000;`, [-2000000]);
+    assertQueryResult(h, `select (<int32>2000000) % <int32>2147483000;`, [2000000]);
+    assertQueryResult(h, `select (-<int32>2000000) % -<int32>2147483000;`, [-2000000]);
+    assertQueryResult(h, `select (<int16>20000) % <int16>32000;`, [20000]);
+    assertQueryResult(h, `select (-<int16>20000) % -<int16>32000;`, [-20000]);
   });
 
   it("test_edgeql_expr_mod_03", () => {
-    assertQueryResult(
-      h,
-      `select 100000000000000001 // 2;`,
-      [50000000000000000]
-    );
-    assertQueryResult(
-      h,
-      `select -100000000000000001 // 2;`,
-      [-50000000000000001]
-    );
-    assertQueryResult(
-      h,
-      `select (<int32>1000000001) // <int32>2;`,
-      [500000000]
-    );
-    assertQueryResult(
-      h,
-      `select (-<int32>1000000001) // <int32>2;`,
-      [-500000001]
-    );
-    assertQueryResult(
-      h,
-      `select (<int16>10001) // <int16>2;`,
-      [5000]
-    );
-    assertQueryResult(
-      h,
-      `select (-<int16>10001) // <int16>2;`,
-      [-5001]
-    );
+    assertQueryResult(h, `select 100000000000000001 // 2;`, [50000000000000000]);
+    assertQueryResult(h, `select -100000000000000001 // 2;`, [-50000000000000001]);
+    assertQueryResult(h, `select (<int32>1000000001) // <int32>2;`, [500000000]);
+    assertQueryResult(h, `select (-<int32>1000000001) // <int32>2;`, [-500000001]);
+    assertQueryResult(h, `select (<int16>10001) // <int16>2;`, [5000]);
+    assertQueryResult(h, `select (-<int16>10001) // <int16>2;`, [-5001]);
     assertQueryResult(
       h,
       `select 10000000000000000000000000000000001n // 2n;`,
-      [5000000000000000000000000000000000]
+      [5000000000000000000000000000000000],
     );
     assertQueryResult(
       h,
       `select -10000000000000000000000000000000001n // 2n;`,
-      [-5000000000000000000000000000000001]
+      [-5000000000000000000000000000000001],
     );
     assertQueryResult(
       h,
       `select 10000000000000000000000000000000001.0n // 2.0n;`,
-      [5000000000000000000000000000000000]
+      [5000000000000000000000000000000000],
     );
     assertQueryResult(
       h,
       `select -10000000000000000000000000000000001.0n // 2.0n;`,
-      [-5000000000000000000000000000000001]
+      [-5000000000000000000000000000000001],
     );
   });
 
   it("test_edgeql_expr_mod_04", () => {
     const cases = [
-      { tname: "int16", vals: [["5", "3", 1], ["-5", "3", -2], ["5", "-3", -2]] },
-      { tname: "int32", vals: [["2000000", "2147483000", 0], ["-2000000", "2147483000", -1]] },
-      { tname: "int64", vals: [["1000000001", "2", 500000000], ["-1000000001", "2", -500000001]] },
-      { tname: "bigint", vals: [["1000000000001n", "2n", 500000000000], ["-1000000000001n", "2n", -500000000001]] },
+      {
+        tname: "int16",
+        vals: [
+          ["5", "3", 1],
+          ["-5", "3", -2],
+          ["5", "-3", -2],
+        ],
+      },
+      {
+        tname: "int32",
+        vals: [
+          ["2000000", "2147483000", 0],
+          ["-2000000", "2147483000", -1],
+        ],
+      },
+      {
+        tname: "int64",
+        vals: [
+          ["1000000001", "2", 500000000],
+          ["-1000000001", "2", -500000001],
+        ],
+      },
+      {
+        tname: "bigint",
+        vals: [
+          ["1000000000001n", "2n", 500000000000],
+          ["-1000000000001n", "2n", -500000000001],
+        ],
+      },
     ] as const;
     for (const { tname, vals } of cases) {
       for (const [a, b, expected] of vals) {
@@ -5018,10 +4897,35 @@ describe("TestExpressions", () => {
 
   it("test_edgeql_expr_mod_05", () => {
     const cases = [
-      { tname: "int16", vals: [["5", "3", 2], ["-5", "3", 1], ["5", "-3", -1]] },
-      { tname: "int32", vals: [["2000000", "2147483000", 2000000], ["-2000000", "2147483000", 2145483000]] },
-      { tname: "int64", vals: [["1000000001", "2", 1], ["-1000000001", "2", 1]] },
-      { tname: "bigint", vals: [["1000000000001n", "2n", 1], ["-1000000000001n", "2n", 1]] },
+      {
+        tname: "int16",
+        vals: [
+          ["5", "3", 2],
+          ["-5", "3", 1],
+          ["5", "-3", -1],
+        ],
+      },
+      {
+        tname: "int32",
+        vals: [
+          ["2000000", "2147483000", 2000000],
+          ["-2000000", "2147483000", 2145483000],
+        ],
+      },
+      {
+        tname: "int64",
+        vals: [
+          ["1000000001", "2", 1],
+          ["-1000000001", "2", 1],
+        ],
+      },
+      {
+        tname: "bigint",
+        vals: [
+          ["1000000000001n", "2n", 1],
+          ["-1000000000001n", "2n", 1],
+        ],
+      },
     ] as const;
     for (const { tname, vals } of cases) {
       for (const [a, b, expected] of vals) {
@@ -9070,7 +8974,7 @@ describe("TestExpressions", () => {
     assertQueryResult(
       h,
       `SELECT (INTROSPECT TYPEOF <int64>$0).name;`,
-      unorderedSet(["std::int64"])
+      unorderedSet(["std::int64"]),
     );
   });
 
@@ -9078,7 +8982,7 @@ describe("TestExpressions", () => {
     assertQueryResult(
       h,
       `SELECT <str>$1 ++ (INTROSPECT TYPEOF <int64>$0).name;`,
-      unorderedSet(["xstd::int64"])
+      unorderedSet(["xstd::int64"]),
     );
   });
 
@@ -9086,156 +8990,62 @@ describe("TestExpressions", () => {
     assertQueryResult(
       h,
       `SELECT (INTROSPECT TYPEOF <int64>$x).name;`,
-      unorderedSet(["std::int64"])
+      unorderedSet(["std::int64"]),
     );
   });
 
   it("test_edgeql_expr_variables_04", () => {
     expect(() => {
-      assertQueryResult(
-        h,
-        `SELECT <int64>$x;`,
-        null
-      );
+      assertQueryResult(h, `SELECT <int64>$x;`, null);
     }).toThrow(new RegExp("argument \\$x is required"));
     expect(() => {
-      assertQueryResult(
-        h,
-        `SELECT <int64>$0;`,
-        null
-      );
+      assertQueryResult(h, `SELECT <int64>$0;`, null);
     }).toThrow(new RegExp("argument \\$0 is required"));
     expect(() => {
-      assertQueryResult(
-        h,
-        `SELECT <REQUIRED int64>$x;`,
-        null
-      );
+      assertQueryResult(h, `SELECT <REQUIRED int64>$x;`, null);
     }).toThrow(new RegExp("argument \\$x is required"));
     expect(() => {
-      assertQueryResult(
-        h,
-        `SELECT <REQUIRED int64>$0;`,
-        null
-      );
+      assertQueryResult(h, `SELECT <REQUIRED int64>$0;`, null);
     }).toThrow(new RegExp("argument \\$0 is required"));
-    assertQueryResult(
-      h,
-      `SELECT <OPTIONAL int64>$x ?? -1;`,
-      [-1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <OPTIONAL int64>$0 ?? -1;`,
-      [-1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <REQUIRED int64>$x ?? -1;`,
-      [7]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <REQUIRED int64>$0 ?? -1;`,
-      [11]
-    );
+    assertQueryResult(h, `SELECT <OPTIONAL int64>$x ?? -1;`, [-1]);
+    assertQueryResult(h, `SELECT <OPTIONAL int64>$0 ?? -1;`, [-1]);
+    assertQueryResult(h, `SELECT <REQUIRED int64>$x ?? -1;`, [7]);
+    assertQueryResult(h, `SELECT <REQUIRED int64>$0 ?? -1;`, [11]);
     assertQueryResult(
       h,
       `SELECT (INTROSPECT TYPEOF <OPTIONAL int64>$x).name;`,
-      unorderedSet(["std::int64"])
+      unorderedSet(["std::int64"]),
     );
     expect(() => {
-      assertQueryResult(
-        h,
-        `SELECT (INTROSPECT TYPEOF <int64>$x).name;`,
-        null
-      );
+      assertQueryResult(h, `SELECT (INTROSPECT TYPEOF <int64>$x).name;`, null);
     }).toThrow(new RegExp("argument \\$x is required"));
   });
 
   it("test_edgeql_expr_variables_05", () => {
-    assertQueryResult(
-      h,
-      `SELECT <int16>$x;`,
-      [123]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <array<int16>>$x;`,
-      [
-            [123],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int32>$x;`,
-      [123]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <array<int32>>$x;`,
-      [
-            [123],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int64>$x;`,
-      [123]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <array<int64>>$x;`,
-      [
-            [123],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <bigint>$x;`,
-      [123]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <array<bigint>>$x;`,
-      [
-            [123],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <decimal>$x;`,
-      [123]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <array<decimal>>$x;`,
-      [
-            [123],
-          ]
-    );
+    assertQueryResult(h, `SELECT <int16>$x;`, [123]);
+    assertQueryResult(h, `SELECT <array<int16>>$x;`, [[123]]);
+    assertQueryResult(h, `SELECT <int32>$x;`, [123]);
+    assertQueryResult(h, `SELECT <array<int32>>$x;`, [[123]]);
+    assertQueryResult(h, `SELECT <int64>$x;`, [123]);
+    assertQueryResult(h, `SELECT <array<int64>>$x;`, [[123]]);
+    assertQueryResult(h, `SELECT <bigint>$x;`, [123]);
+    assertQueryResult(h, `SELECT <array<bigint>>$x;`, [[123]]);
+    assertQueryResult(h, `SELECT <decimal>$x;`, [123]);
+    assertQueryResult(h, `SELECT <array<decimal>>$x;`, [[123]]);
   });
 
   it("test_edgeql_expr_variables_06", () => {
-    assertQueryResult(
-      h,
-      `SELECT <OPTIONAL int64>$x + <int64>$y;`,
-      [5]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <OPTIONAL int64>$x + <int64>$y;`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT len(<OPTIONAL str>$x);`,
-      []
-    );
+    assertQueryResult(h, `SELECT <OPTIONAL int64>$x + <int64>$y;`, [5]);
+    assertQueryResult(h, `SELECT <OPTIONAL int64>$x + <int64>$y;`, []);
+    assertQueryResult(h, `SELECT len(<OPTIONAL str>$x);`, []);
   });
 
   it("test_edgeql_expr_valid_eq_01", () => {
-    const ops = [["=", "!="], ["?=", "?!="], ["IN", "NOT IN"]] as const;
+    const ops = [
+      ["=", "!="],
+      ["?=", "?!="],
+      ["IN", "NOT IN"],
+    ] as const;
     for (const left of get_test_values({ anyreal: true })) {
       for (const right of get_test_values({ anyreal: false })) {
         for (const [op, notOp] of ops) {
@@ -9246,12 +9056,17 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_eq_02", () => {
-    const ops = [["=", "!="], ["?=", "?!="], ["IN", "NOT IN"]] as const;
+    const ops = [
+      ["=", "!="],
+      ["?=", "?!="],
+      ["IN", "NOT IN"],
+    ] as const;
     for (const [left, ldesc] of get_test_items({ anyreal: true })) {
       for (const [right, rdesc] of get_test_items({ anyreal: true })) {
-        const expected = (ldesc.anynumeric && rdesc.anyfloat) || (rdesc.anynumeric && ldesc.anyfloat)
-          ? "cannot be applied to operands"
-          : true;
+        const expected =
+          (ldesc.anynumeric && rdesc.anyfloat) || (rdesc.anynumeric && ldesc.anyfloat)
+            ? "cannot be applied to operands"
+            : true;
         for (const [op, notOp] of ops) {
           _test_boolop(left, right, op, notOp, expected);
         }
@@ -9260,15 +9075,24 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_eq_03", () => {
-    const ops = [["=", "!="], ["?=", "?!="], ["IN", "NOT IN"]] as const;
+    const ops = [
+      ["=", "!="],
+      ["?=", "?!="],
+      ["IN", "NOT IN"],
+    ] as const;
     const compatible = (ldesc: TestValueDesc, rdesc: TestValueDesc) =>
-      sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::relative_duration", "std::cal::date_duration"])
-      || sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::local_date", "std::cal::local_datetime"]);
+      sameTypeSet(
+        [ldesc.typename, rdesc.typename],
+        ["std::cal::relative_duration", "std::cal::date_duration"],
+      ) ||
+      sameTypeSet(
+        [ldesc.typename, rdesc.typename],
+        ["std::cal::local_date", "std::cal::local_datetime"],
+      );
     for (const [left, ldesc] of get_test_items({ anyreal: false })) {
-      for (const [right, rdesc] of get_test_items({anyreal: false})) {
-        const expected = left === right || compatible(ldesc, rdesc)
-          ? true
-          : "cannot be applied to operands";
+      for (const [right, rdesc] of get_test_items({ anyreal: false })) {
+        const expected =
+          left === right || compatible(ldesc, rdesc) ? true : "cannot be applied to operands";
         for (const [op, notOp] of ops) {
           _test_boolop(left, right, op, notOp, expected);
         }
@@ -9278,14 +9102,22 @@ describe("TestExpressions", () => {
 
   it("test_edgeql_expr_valid_comp_02", () => {
     const compatible = (ldesc: TestValueDesc, rdesc: TestValueDesc) =>
-      sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::relative_duration", "std::cal::date_duration"])
-      || sameTypeSet([ldesc.typename, rdesc.typename], ["std::cal::local_date", "std::cal::local_datetime"]);
+      sameTypeSet(
+        [ldesc.typename, rdesc.typename],
+        ["std::cal::relative_duration", "std::cal::date_duration"],
+      ) ||
+      sameTypeSet(
+        [ldesc.typename, rdesc.typename],
+        ["std::cal::local_date", "std::cal::local_datetime"],
+      );
     for (const [left, ldesc] of get_test_items({ anyreal: false })) {
-      for (const [right, rdesc] of get_test_items({anyreal: false})) {
-        const expected = left === right || compatible(ldesc, rdesc)
-          ? true
-          : "cannot be applied to operands";
-        for (const [op, notOp] of [[">=", "<"], ["<=", ">"]] as const) {
+      for (const [right, rdesc] of get_test_items({ anyreal: false })) {
+        const expected =
+          left === right || compatible(ldesc, rdesc) ? true : "cannot be applied to operands";
+        for (const [op, notOp] of [
+          [">=", "<"],
+          ["<=", ">"],
+        ] as const) {
           _test_boolop(left, right, op, notOp, expected);
         }
       }
@@ -9294,11 +9126,17 @@ describe("TestExpressions", () => {
 
   it("test_edgeql_expr_valid_comp_03", () => {
     for (const [left, ldesc] of get_test_items({ anyreal: true })) {
-      for (const [right, rdesc] of get_test_items({anyreal: true})) {
-        const expected = (ldesc.anynumeric && rdesc.anyfloat) || (rdesc.anynumeric && ldesc.anyfloat) || !rdesc.anyreal
-          ? "cannot be applied to operands"
-          : true;
-        for (const [op, notOp] of [[">=", "<"], ["<=", ">"]] as const) {
+      for (const [right, rdesc] of get_test_items({ anyreal: true })) {
+        const expected =
+          (ldesc.anynumeric && rdesc.anyfloat) ||
+          (rdesc.anynumeric && ldesc.anyfloat) ||
+          !rdesc.anyreal
+            ? "cannot be applied to operands"
+            : true;
+        for (const [op, notOp] of [
+          [">=", "<"],
+          ["<=", ">"],
+        ] as const) {
           _test_boolop(left, right, op, notOp, expected);
         }
       }
@@ -9312,7 +9150,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9320,7 +9158,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9328,7 +9166,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9336,7 +9174,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9344,7 +9182,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9352,7 +9190,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9360,7 +9198,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9368,7 +9206,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9376,7 +9214,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9384,7 +9222,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9392,7 +9230,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' < b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9400,7 +9238,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9408,7 +9246,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9416,7 +9254,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9424,7 +9262,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' > b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9432,7 +9270,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9440,7 +9278,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9448,7 +9286,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9456,7 +9294,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' < b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9464,7 +9302,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9472,7 +9310,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9480,7 +9318,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9488,7 +9326,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' > b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9496,7 +9334,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9504,7 +9342,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9512,7 +9350,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9520,7 +9358,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9528,7 +9366,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9536,7 +9374,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9544,7 +9382,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9552,7 +9390,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9560,7 +9398,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9568,7 +9406,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9576,7 +9414,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9584,7 +9422,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9592,7 +9430,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9600,7 +9438,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9608,7 +9446,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9616,7 +9454,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9624,7 +9462,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9632,7 +9470,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9640,7 +9478,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9648,7 +9486,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9656,7 +9494,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9664,7 +9502,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9672,7 +9510,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9680,7 +9518,7 @@ describe("TestExpressions", () => {
                         SELECT (b'04b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9688,7 +9526,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('04b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9696,7 +9534,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9704,7 +9542,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9712,7 +9550,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9720,7 +9558,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9728,7 +9566,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9736,7 +9574,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9744,7 +9582,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9752,7 +9590,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9760,7 +9598,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9768,7 +9606,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9776,7 +9614,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9784,7 +9622,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9792,7 +9630,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9800,7 +9638,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9808,7 +9646,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9816,7 +9654,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9824,7 +9662,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9832,7 +9670,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9840,7 +9678,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9848,7 +9686,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9856,7 +9694,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9864,7 +9702,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9872,7 +9710,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9880,7 +9718,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9888,7 +9726,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9896,7 +9734,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9904,7 +9742,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9912,7 +9750,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9920,7 +9758,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9928,7 +9766,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9936,7 +9774,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9944,7 +9782,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9952,7 +9790,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9960,7 +9798,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9968,7 +9806,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9976,7 +9814,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9984,7 +9822,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -9992,7 +9830,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10000,7 +9838,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10008,7 +9846,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10016,7 +9854,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10024,7 +9862,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10032,7 +9870,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10040,7 +9878,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10048,7 +9886,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10056,7 +9894,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10064,7 +9902,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10072,7 +9910,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10080,7 +9918,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10088,7 +9926,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10096,7 +9934,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10104,7 +9942,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10112,7 +9950,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10120,7 +9958,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10128,7 +9966,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10136,7 +9974,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10144,7 +9982,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10152,7 +9990,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10160,7 +9998,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' < b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10168,7 +10006,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10176,7 +10014,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10184,7 +10022,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10192,7 +10030,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' > b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10200,7 +10038,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10208,7 +10046,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10216,7 +10054,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10224,7 +10062,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' < b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10232,7 +10070,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10240,7 +10078,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10248,7 +10086,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10256,7 +10094,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' > b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10264,7 +10102,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10272,7 +10110,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10280,7 +10118,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10288,7 +10126,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10296,7 +10134,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10304,7 +10142,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10312,7 +10150,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10320,7 +10158,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10328,7 +10166,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10336,7 +10174,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10344,7 +10182,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10352,7 +10190,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10360,7 +10198,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10368,7 +10206,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10376,7 +10214,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10384,7 +10222,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10392,7 +10230,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10400,7 +10238,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10408,7 +10246,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10416,7 +10254,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10424,7 +10262,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10432,7 +10270,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10440,7 +10278,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10448,7 +10286,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a4b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10456,7 +10294,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10464,7 +10302,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10472,7 +10310,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10480,7 +10318,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10488,7 +10326,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10496,7 +10334,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10504,7 +10342,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10512,7 +10350,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10520,7 +10358,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10528,7 +10366,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10536,7 +10374,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10544,7 +10382,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' < b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10552,7 +10390,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10560,7 +10398,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10568,7 +10406,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10576,7 +10414,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' > b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10584,7 +10422,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10592,7 +10430,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10600,7 +10438,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10608,7 +10446,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' < b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10616,7 +10454,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10624,7 +10462,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10632,7 +10470,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10640,7 +10478,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' > b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10648,7 +10486,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10656,7 +10494,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10664,7 +10502,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10672,7 +10510,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10680,7 +10518,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10688,7 +10526,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10696,7 +10534,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10704,7 +10542,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10712,7 +10550,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10720,7 +10558,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10728,7 +10566,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10736,7 +10574,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10744,7 +10582,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10752,7 +10590,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10760,7 +10598,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10768,7 +10606,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10776,7 +10614,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10784,7 +10622,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10792,7 +10630,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10800,7 +10638,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10808,7 +10646,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10816,7 +10654,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10824,7 +10662,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10832,7 +10670,7 @@ describe("TestExpressions", () => {
                         SELECT (b'a5b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10840,7 +10678,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('a5b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10848,7 +10686,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10856,7 +10694,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10864,7 +10702,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10872,7 +10710,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10880,7 +10718,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10888,7 +10726,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10896,7 +10734,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10904,7 +10742,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10912,7 +10750,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10920,7 +10758,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10928,7 +10766,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' < b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10936,7 +10774,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10944,7 +10782,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10952,7 +10790,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10960,7 +10798,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' > b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10968,7 +10806,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10976,7 +10814,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10984,7 +10822,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -10992,7 +10830,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' < b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11000,7 +10838,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11008,7 +10846,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11016,7 +10854,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11024,7 +10862,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' > b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11032,7 +10870,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11040,7 +10878,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11048,7 +10886,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11056,7 +10894,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11064,7 +10902,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11072,7 +10910,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11080,7 +10918,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11088,7 +10926,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11096,7 +10934,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11104,7 +10942,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11112,7 +10950,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11120,7 +10958,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11128,7 +10966,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11136,7 +10974,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11144,7 +10982,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11152,7 +10990,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11160,7 +10998,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11168,7 +11006,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11176,7 +11014,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11184,7 +11022,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' < b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11192,7 +11030,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11200,7 +11038,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11208,7 +11046,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11216,7 +11054,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b57b94db9402' > b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11224,7 +11062,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b57b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11232,7 +11070,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11240,7 +11078,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11248,7 +11086,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11256,7 +11094,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' < <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11264,7 +11102,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11272,7 +11110,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11280,7 +11118,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11288,7 +11126,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' > <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11296,7 +11134,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11304,7 +11142,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11312,7 +11150,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' < b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11320,7 +11158,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' < <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11328,7 +11166,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11336,7 +11174,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11344,7 +11182,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' > b'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11352,7 +11190,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' > <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'a4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11360,7 +11198,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11368,7 +11206,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11376,7 +11214,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' < b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11384,7 +11222,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' < <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11392,7 +11230,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11400,7 +11238,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11408,7 +11246,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' > b'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11416,7 +11254,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' > <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'a5b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11424,7 +11262,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11432,7 +11270,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11440,7 +11278,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' < b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11448,7 +11286,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11456,7 +11294,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11464,7 +11302,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11472,7 +11310,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' > b'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11480,7 +11318,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'f4b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11488,7 +11326,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11496,7 +11334,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11504,7 +11342,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' < b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11512,7 +11350,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11520,7 +11358,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11528,7 +11366,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11536,7 +11374,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' > b'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11544,7 +11382,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'f4b4318e-1a01-41e4-b29c-b67b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11552,7 +11390,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11560,7 +11398,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' >= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' >= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11568,7 +11406,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' < b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11576,7 +11414,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' < <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' < 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11584,7 +11422,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11592,7 +11430,7 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' <= <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' <= 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11600,7 +11438,7 @@ describe("TestExpressions", () => {
                         SELECT (b'f4b4318e-1a01-41e4-b29c-b67b94db9402' > b'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11608,27 +11446,27 @@ describe("TestExpressions", () => {
                         SELECT (<uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402' > <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402') =
                             ('f4b4318e-1a01-41e4-b29c-b67b94db9402' > 'f4b4318e-1a01-41e4-b29c-b68b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
   it("test_edgeql_expr_valid_comp_05", () => {
     [
-  "hello",
-  "94b4318e-1a01-41e4-b29c-b57b94db9402",
-  "hello world",
-  "123",
-  "",
-  "&*%#",
-  "&*@#",
-].sort();
+      "hello",
+      "94b4318e-1a01-41e4-b29c-b57b94db9402",
+      "hello world",
+      "123",
+      "",
+      "&*%#",
+      "&*@#",
+    ].sort();
     assertQueryResult(
       h,
       `
                         SELECT (b'hello' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11636,7 +11474,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11644,7 +11482,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11652,7 +11490,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11660,7 +11498,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' >= b'hello world') =
                             ('hello' >= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11668,7 +11506,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' < b'hello world') =
                             ('hello' < 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11676,7 +11514,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' <= b'hello world') =
                             ('hello' <= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11684,7 +11522,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' > b'hello world') =
                             ('hello' > 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11692,7 +11530,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' >= b'123') =
                             ('hello' >= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11700,7 +11538,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' < b'123') =
                             ('hello' < '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11708,7 +11546,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' <= b'123') =
                             ('hello' <= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11716,7 +11554,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' > b'123') =
                             ('hello' > '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11724,7 +11562,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' >= b'') =
                             ('hello' >= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11732,7 +11570,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' < b'') =
                             ('hello' < '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11740,7 +11578,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' <= b'') =
                             ('hello' <= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11748,7 +11586,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' > b'') =
                             ('hello' > '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11756,7 +11594,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' >= b'&*%#') =
                             ('hello' >= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11764,7 +11602,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' < b'&*%#') =
                             ('hello' < '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11772,7 +11610,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' <= b'&*%#') =
                             ('hello' <= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11780,7 +11618,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' > b'&*%#') =
                             ('hello' > '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11788,7 +11626,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' >= b'&*@#') =
                             ('hello' >= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11796,7 +11634,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' < b'&*@#') =
                             ('hello' < '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11804,7 +11642,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' <= b'&*@#') =
                             ('hello' <= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11812,7 +11650,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello' > b'&*@#') =
                             ('hello' > '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11820,7 +11658,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11828,7 +11666,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11836,7 +11674,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11844,7 +11682,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11852,7 +11690,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'hello world') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11860,7 +11698,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'hello world') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11868,7 +11706,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'hello world') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11876,7 +11714,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'hello world') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11884,7 +11722,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'123') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11892,7 +11730,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'123') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11900,7 +11738,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'123') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11908,7 +11746,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'123') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11916,7 +11754,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11924,7 +11762,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11932,7 +11770,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11940,7 +11778,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11948,7 +11786,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'&*%#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11956,7 +11794,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'&*%#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11964,7 +11802,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'&*%#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11972,7 +11810,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'&*%#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11980,7 +11818,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' >= b'&*@#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' >= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11988,7 +11826,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' < b'&*@#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' < '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -11996,7 +11834,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' <= b'&*@#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' <= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12004,7 +11842,7 @@ describe("TestExpressions", () => {
                         SELECT (b'94b4318e-1a01-41e4-b29c-b57b94db9402' > b'&*@#') =
                             ('94b4318e-1a01-41e4-b29c-b57b94db9402' > '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12012,7 +11850,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello world' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12020,7 +11858,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello world' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12028,7 +11866,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello world' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12036,7 +11874,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('hello world' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12044,7 +11882,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' >= b'hello world') =
                             ('hello world' >= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12052,7 +11890,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' < b'hello world') =
                             ('hello world' < 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12060,7 +11898,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' <= b'hello world') =
                             ('hello world' <= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12068,7 +11906,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' > b'hello world') =
                             ('hello world' > 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12076,7 +11914,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' >= b'123') =
                             ('hello world' >= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12084,7 +11922,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' < b'123') =
                             ('hello world' < '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12092,7 +11930,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' <= b'123') =
                             ('hello world' <= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12100,7 +11938,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' > b'123') =
                             ('hello world' > '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12108,7 +11946,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' >= b'') =
                             ('hello world' >= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12116,7 +11954,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' < b'') =
                             ('hello world' < '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12124,7 +11962,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' <= b'') =
                             ('hello world' <= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12132,7 +11970,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' > b'') =
                             ('hello world' > '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12140,7 +11978,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' >= b'&*%#') =
                             ('hello world' >= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12148,7 +11986,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' < b'&*%#') =
                             ('hello world' < '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12156,7 +11994,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' <= b'&*%#') =
                             ('hello world' <= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12164,7 +12002,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' > b'&*%#') =
                             ('hello world' > '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12172,7 +12010,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' >= b'&*@#') =
                             ('hello world' >= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12180,7 +12018,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' < b'&*@#') =
                             ('hello world' < '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12188,7 +12026,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' <= b'&*@#') =
                             ('hello world' <= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12196,7 +12034,7 @@ describe("TestExpressions", () => {
                         SELECT (b'hello world' > b'&*@#') =
                             ('hello world' > '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12204,7 +12042,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('123' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12212,7 +12050,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('123' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12220,7 +12058,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('123' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12228,7 +12066,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('123' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12236,7 +12074,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' >= b'hello world') =
                             ('123' >= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12244,7 +12082,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' < b'hello world') =
                             ('123' < 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12252,7 +12090,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' <= b'hello world') =
                             ('123' <= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12260,7 +12098,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' > b'hello world') =
                             ('123' > 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12268,7 +12106,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' >= b'123') =
                             ('123' >= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12276,7 +12114,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' < b'123') =
                             ('123' < '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12284,7 +12122,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' <= b'123') =
                             ('123' <= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12292,7 +12130,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' > b'123') =
                             ('123' > '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12300,7 +12138,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' >= b'') =
                             ('123' >= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12308,7 +12146,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' < b'') =
                             ('123' < '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12316,7 +12154,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' <= b'') =
                             ('123' <= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12324,7 +12162,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' > b'') =
                             ('123' > '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12332,7 +12170,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' >= b'&*%#') =
                             ('123' >= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12340,7 +12178,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' < b'&*%#') =
                             ('123' < '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12348,7 +12186,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' <= b'&*%#') =
                             ('123' <= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12356,7 +12194,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' > b'&*%#') =
                             ('123' > '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12364,7 +12202,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' >= b'&*@#') =
                             ('123' >= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12372,7 +12210,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' < b'&*@#') =
                             ('123' < '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12380,7 +12218,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' <= b'&*@#') =
                             ('123' <= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12388,7 +12226,7 @@ describe("TestExpressions", () => {
                         SELECT (b'123' > b'&*@#') =
                             ('123' > '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12396,7 +12234,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12404,7 +12242,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12412,7 +12250,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12420,7 +12258,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12428,7 +12266,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' >= b'hello world') =
                             ('' >= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12436,7 +12274,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' < b'hello world') =
                             ('' < 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12444,7 +12282,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' <= b'hello world') =
                             ('' <= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12452,7 +12290,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' > b'hello world') =
                             ('' > 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12460,7 +12298,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' >= b'123') =
                             ('' >= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12468,7 +12306,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' < b'123') =
                             ('' < '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12476,7 +12314,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' <= b'123') =
                             ('' <= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12484,7 +12322,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' > b'123') =
                             ('' > '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12492,7 +12330,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' >= b'') =
                             ('' >= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12500,7 +12338,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' < b'') =
                             ('' < '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12508,7 +12346,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' <= b'') =
                             ('' <= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12516,7 +12354,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' > b'') =
                             ('' > '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12524,7 +12362,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' >= b'&*%#') =
                             ('' >= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12532,7 +12370,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' < b'&*%#') =
                             ('' < '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12540,7 +12378,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' <= b'&*%#') =
                             ('' <= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12548,7 +12386,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' > b'&*%#') =
                             ('' > '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12556,7 +12394,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' >= b'&*@#') =
                             ('' >= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12564,7 +12402,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' < b'&*@#') =
                             ('' < '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12572,7 +12410,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' <= b'&*@#') =
                             ('' <= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12580,7 +12418,7 @@ describe("TestExpressions", () => {
                         SELECT (b'' > b'&*@#') =
                             ('' > '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12588,7 +12426,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' >= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('&*%#' >= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12596,7 +12434,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' < b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('&*%#' < '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12604,7 +12442,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' <= b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('&*%#' <= '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12612,7 +12450,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' > b'94b4318e-1a01-41e4-b29c-b57b94db9402') =
                             ('&*%#' > '94b4318e-1a01-41e4-b29c-b57b94db9402');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12620,7 +12458,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' >= b'hello world') =
                             ('&*%#' >= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12628,7 +12466,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' < b'hello world') =
                             ('&*%#' < 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12636,7 +12474,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' <= b'hello world') =
                             ('&*%#' <= 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12644,7 +12482,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' > b'hello world') =
                             ('&*%#' > 'hello world');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12652,7 +12490,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' >= b'123') =
                             ('&*%#' >= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12660,7 +12498,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' < b'123') =
                             ('&*%#' < '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12668,7 +12506,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' <= b'123') =
                             ('&*%#' <= '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12676,7 +12514,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' > b'123') =
                             ('&*%#' > '123');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12684,7 +12522,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' >= b'') =
                             ('&*%#' >= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12692,7 +12530,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' < b'') =
                             ('&*%#' < '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12700,7 +12538,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' <= b'') =
                             ('&*%#' <= '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12708,7 +12546,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' > b'') =
                             ('&*%#' > '');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12716,7 +12554,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' >= b'&*%#') =
                             ('&*%#' >= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12724,7 +12562,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' < b'&*%#') =
                             ('&*%#' < '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12732,7 +12570,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' <= b'&*%#') =
                             ('&*%#' <= '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12740,7 +12578,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' > b'&*%#') =
                             ('&*%#' > '&*%#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12748,7 +12586,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' >= b'&*@#') =
                             ('&*%#' >= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12756,7 +12594,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' < b'&*@#') =
                             ('&*%#' < '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12764,7 +12602,7 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' <= b'&*@#') =
                             ('&*%#' <= '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -12772,23 +12610,19 @@ describe("TestExpressions", () => {
                         SELECT (b'&*%#' > b'&*@#') =
                             ('&*%#' > '&*@#');
                     `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
   it("test_edgeql_expr_valid_order_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT <json>2 < <json>'2';`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT <json>2 < <json>'2';`, [false]);
     assertQueryResult(
       h,
       `
                 WITH X := {<json>1, <json>True, <json>'1'}
                 SELECT X ORDER BY X;
             `,
-      ["1", 1, true]
+      ["1", 1, true],
     );
     assertQueryResult(
       h,
@@ -12804,38 +12638,36 @@ describe("TestExpressions", () => {
                 SELECT X ORDER BY X;
             `,
       [
-            "b",
-            1,
-            2,
-            ["a", 1, "b", 2],
-            {
-              "a": 1,
-              "b": 2,
-            },
-            {
-              "a": 1,
-              "b": 2,
-            },
-          ]
+        "b",
+        1,
+        2,
+        ["a", 1, "b", 2],
+        {
+          a: 1,
+          b: 2,
+        },
+        {
+          a: 1,
+          b: 2,
+        },
+      ],
     );
   });
 
   it("test_edgeql_expr_valid_order_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT False < True;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT X := {True, False, True, False} ORDER BY X;`,
-      [false, false, true, true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT X := {True, False, True, False} ORDER BY X DESC;`,
-      [true, true, false, false]
-    );
+    assertQueryResult(h, `SELECT False < True;`, [true]);
+    assertQueryResult(h, `SELECT X := {True, False, True, False} ORDER BY X;`, [
+      false,
+      false,
+      true,
+      true,
+    ]);
+    assertQueryResult(h, `SELECT X := {True, False, True, False} ORDER BY X DESC;`, [
+      true,
+      true,
+      false,
+      false,
+    ]);
   });
 
   it("test_edgeql_expr_valid_order_03", () => {
@@ -12848,7 +12680,7 @@ describe("TestExpressions", () => {
                 SELECT array_agg(A ORDER BY A) =
                     [<uuid>'04b4318e-1a01-41e4-b29c-b57b94db9402', <uuid>'94b4318e-1a01-41e4-b29c-b57b94db9402', <uuid>'a4b4318e-1a01-41e4-b29c-b57b94db9402', <uuid>'a5b4318e-1a01-41e4-b29c-b57b94db9402', <uuid>'f4b4318e-1a01-41e4-b29c-b57b94db9402', <uuid>'f4b4318e-1a01-41e4-b29c-b67b94db9402', <uuid>'f4b4318e-1a01-41e4-b29c-b68b94db9402'];
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
@@ -12862,7 +12694,7 @@ describe("TestExpressions", () => {
                 SELECT array_agg(A ORDER BY A) =
                     [b'', b'&*%#', b'&*@#', b'123', b'94b4318e-1a01-41e4-b29c-b57b94db9402', b'hello', b'hello world'];
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
@@ -12875,15 +12707,7 @@ describe("TestExpressions", () => {
                 }
                 SELECT A ORDER BY A;
             `,
-      [
-            "",
-            "&*%#",
-            "&*@#",
-            "123",
-            "94b4318e-1a01-41e4-b29c-b57b94db9402",
-            "hello",
-            "hello world",
-          ]
+      ["", "&*%#", "&*@#", "123", "94b4318e-1a01-41e4-b29c-b57b94db9402", "hello", "hello world"],
     );
   });
 
@@ -12897,7 +12721,7 @@ describe("TestExpressions", () => {
                 }
                 SELECT A ORDER BY A;
             `,
-      ["2017-05-07T20:01:22.306916+00:00", "2018-05-07T20:01:22.306916+00:00"]
+      ["2017-05-07T20:01:22.306916+00:00", "2018-05-07T20:01:22.306916+00:00"],
     );
     assertQueryResult(
       h,
@@ -12908,7 +12732,7 @@ describe("TestExpressions", () => {
                 }
                 SELECT A ORDER BY A;
             `,
-      ["2017-05-07T20:01:22.306916", "2018-05-07T20:01:22.306916"]
+      ["2017-05-07T20:01:22.306916", "2018-05-07T20:01:22.306916"],
     );
     assertQueryResult(
       h,
@@ -12919,7 +12743,7 @@ describe("TestExpressions", () => {
                 }
                 SELECT A ORDER BY A;
             `,
-      ["2017-05-07", "2018-05-07"]
+      ["2017-05-07", "2018-05-07"],
     );
     assertQueryResult(
       h,
@@ -12930,7 +12754,7 @@ describe("TestExpressions", () => {
                 }
                 SELECT A ORDER BY A;
             `,
-      ["19:01:22.306916", "20:01:22.306916"]
+      ["19:01:22.306916", "20:01:22.306916"],
     );
     assertQueryResult(
       h,
@@ -12943,153 +12767,105 @@ describe("TestExpressions", () => {
                 )
                 SELECT A ORDER BY A;
             `,
-      ["PT19H1M22.306916S", "PT20H1M22.306916S"]
+      ["PT19H1M22.306916S", "PT20H1M22.306916S"],
     );
   });
 
   it("test_edgeql_expr_valid_order_07", () => {
-    for (const [_val, vdesc] of (get_test_items({anyreal: true}) as any)) {
+    for (const [_val, vdesc] of get_test_items({ anyreal: true }) as any) {
       let query = `
                 WITH X := <${vdesc.typename}>{ ${"-4, -3, -2, -1, 0, 1, 2, 3, 4"} }
                 SELECT X ORDER BY X DESC;
             `;
-      assertQueryResult(
-        h,
-        query,
-        [
-              4,
-              3,
-              2,
-              1,
-              0,
-              -1,
-              -2,
-              -3,
-              -4,
-            ]
-      );
+      assertQueryResult(h, query, [4, 3, 2, 1, 0, -1, -2, -3, -4]);
     }
   });
 
   it("test_edgeql_expr_valid_arithmetic_01", () => {
-    for (const right of (get_test_values({signed: true}) as any)) {
+    for (const right of get_test_values({ signed: true }) as any) {
       let query = `SELECT count(-${right});`;
-      assertQueryResult(
-        h,
-        query,
-        [1]
-      );
+      assertQueryResult(h, query, [1]);
     }
   });
 
   it("test_edgeql_expr_valid_arithmetic_02", () => {
-    for (const right of (get_test_values({signed: false}) as any)) {
+    for (const right of get_test_values({ signed: false }) as any) {
       let query = `SELECT -${right};`;
       expect(() => {
-        h.query(
-          query
-        );
+        h.query(query);
       }).toThrow(new RegExp("cannot be applied to operands"));
     }
   });
 
   it("test_edgeql_expr_valid_arithmetic_03", () => {
-    for (const left of (get_test_values({datetime: false, anyreal: false}) as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of get_test_values({ datetime: false, anyreal: false }) as any) {
+      for (const right of get_test_values() as any) {
         let query = `SELECT ${left} ${"+"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"-"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"*"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"/"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"//"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"%"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"^"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
   });
 
   it("test_edgeql_expr_valid_arithmetic_04", () => {
-    let dts = get_test_values({datetime: true});
-    for (const left of (dts as any)) {
-      for (const right of (get_test_values() as any)) {
-        if (((dts) as any).includes(right)) {
+    let dts = get_test_values({ datetime: true });
+    for (const left of dts as any) {
+      for (const right of get_test_values() as any) {
+        if ((dts as any).includes(right)) {
           continue;
         }
         let query = `SELECT ${left} ${"+"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"-"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"*"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"/"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"//"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"%"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"^"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
@@ -13106,8 +12882,15 @@ describe("TestExpressions", () => {
           restype = "std::cal::local_date";
         } else if (sameTypeSet(argtypes, ["std::cal::date_duration"])) {
           restype = "std::cal::date_duration";
-        } else if (["duration", "std::cal::relative_duration", "std::cal::date_duration"].some((t) => argtypes.has(t))) {
-          const otherarg = [...argtypes].filter((t) => !["duration", "std::cal::relative_duration", "std::cal::date_duration"].includes(t));
+        } else if (
+          ["duration", "std::cal::relative_duration", "std::cal::date_duration"].some((t) =>
+            argtypes.has(t),
+          )
+        ) {
+          const otherarg = [...argtypes].filter(
+            (t) =>
+              !["duration", "std::cal::relative_duration", "std::cal::date_duration"].includes(t),
+          );
           if (ldesc.typename === rdesc.typename) {
             restype = ldesc.typename;
           } else if (otherarg.length === 0) {
@@ -13136,13 +12919,21 @@ describe("TestExpressions", () => {
         let restype: string | null = null;
 
         if (rdesc.signed && ldesc.signed) {
-          restype = ldesc.typename === rdesc.typename ? rdesc.typename : "std::cal::relative_duration";
-        } else if (ldesc.typename === "std::cal::local_date" && rdesc.typename === "std::cal::local_date") {
+          restype =
+            ldesc.typename === rdesc.typename ? rdesc.typename : "std::cal::relative_duration";
+        } else if (
+          ldesc.typename === "std::cal::local_date" &&
+          rdesc.typename === "std::cal::local_date"
+        ) {
           restype = "std::cal::date_duration";
-        } else if (ldesc.typename === "std::cal::local_date" && rdesc.typename === "std::cal::date_duration") {
+        } else if (
+          ldesc.typename === "std::cal::local_date" &&
+          rdesc.typename === "std::cal::date_duration"
+        ) {
           restype = "std::cal::local_date";
         } else if (rdesc.signed) {
-          restype = ldesc.typename === "std::cal::local_date" ? "std::cal::local_datetime" : ldesc.typename;
+          restype =
+            ldesc.typename === "std::cal::local_date" ? "std::cal::local_datetime" : ldesc.typename;
         } else if (rdesc.typename === "datetime" && ldesc.typename === "datetime") {
           restype = "duration";
         } else if (sameTypeSet(argtypes, ["std::cal::local_datetime"])) {
@@ -13164,197 +12955,173 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_arithmetic_07", () => {
-    let dts = get_test_values({datetime: true});
-    for (const left of (dts as any)) {
-      for (const right of (dts as any)) {
+    let dts = get_test_values({ datetime: true });
+    for (const left of dts as any) {
+      for (const right of dts as any) {
         let query = `SELECT count(${left} ${"*"} ${right});`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT count(${left} ${"/"} ${right});`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT count(${left} ${"//"} ${right});`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT count(${left} ${"%"} ${right});`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT count(${left} ${"^"} ${right});`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
   });
 
   it("test_edgeql_expr_valid_arithmetic_08", () => {
-    for (const left of (get_test_values({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyint: false, anynumeric: false}) as any)) {
+    for (const left of get_test_values({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyint: false, anynumeric: false }) as any) {
         let query = `SELECT ${left} ${"+"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"-"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"*"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"/"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"//"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"%"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"^"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
-    for (const [left, ldesc] of (get_test_items({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyint: true}) as any)) {
+    for (const [left, ldesc] of get_test_items({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyint: true }) as any) {
         assertQueryResult(
           h,
           `
                             SELECT (${left} ${"+"} ${right}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${right} ${"+"} ${left}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${left} ${"-"} ${right}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${right} ${"-"} ${left}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${left} ${"*"} ${right}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${right} ${"*"} ${left}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${left} ${"%"} ${right}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${right} ${"%"} ${left}) IS ${ldesc.typename};
                         `,
-          [true]
+          [true],
         );
       }
     }
-    for (const [left, ldesc] of (get_test_items({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyint: true}) as any)) {
+    for (const [left, ldesc] of get_test_items({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyint: true }) as any) {
         assertQueryResult(
           h,
           `
                         SELECT (${left} ${"//"} ${right}) IS ${ldesc.typename};
                     `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                         SELECT (${right} ${"//"} ${left}) IS ${ldesc.typename};
                     `,
-          [true]
+          [true],
         );
       }
     }
-    for (const left of (get_test_values({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyint: true}) as any)) {
+    for (const left of get_test_values({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyint: true }) as any) {
         assertQueryResult(
           h,
           `
                             SELECT (${left} ${"/"} ${right}) IS decimal;
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${right} ${"/"} ${left}) IS decimal;
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${left} ${"^"} ${right}) IS decimal;
                         `,
-          [true]
+          [true],
         );
         assertQueryResult(
           h,
           `
                             SELECT (${right} ${"^"} ${left}) IS decimal;
                         `,
-          [true]
+          [true],
         );
       }
     }
@@ -13384,57 +13151,39 @@ describe("TestExpressions", () => {
 
   it("test_edgeql_expr_valid_arithmetic_11", () => {
     expect(() => {
-      h.query(
-        `SELECT b"a" + b"b"`
-      );
+      h.query(`SELECT b"a" + b"b"`);
     }).toThrow(new RegExp("operator '\\+' cannot be applied .*"));
     expect(() => {
-      h.query(
-        `SELECT "a" + "b"`
-      );
+      h.query(`SELECT "a" + "b"`);
     }).toThrow(new RegExp("operator '\\+' cannot be applied .*"));
     expect(() => {
-      h.query(
-        `SELECT ["a"] + ["b"]`
-      );
+      h.query(`SELECT ["a"] + ["b"]`);
     }).toThrow(new RegExp("operator '\\+' cannot be applied .*"));
   });
 
   it("test_edgeql_expr_valid_arithmetic_12", () => {
     expect(() => {
-      h.query(
-        `SELECT (-4)^(-0.5);`
-      );
+      h.query(`SELECT (-4)^(-0.5);`);
     }).toThrow();
   });
 
   it("test_edgeql_expr_valid_setop_01", () => {
-    for (const [right, desc] of (get_test_items() as any)) {
+    for (const [right, desc] of get_test_items() as any) {
       let query = `SELECT count(DISTINCT {${right}, ${right}});`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([1])
-      );
+      assertQueryResult(h, query, unorderedSet([1]));
       query = `
                 SELECT (DISTINCT {${right}, ${right}}) IS ${desc.typename};
             `;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
     }
   });
 
   it("test_edgeql_expr_valid_setop_02", () => {
-    for (const left of (get_test_values({anyreal: true, anynumeric: false}) as any)) {
-      for (const right of (get_test_values({anyreal: false}) as any)) {
+    for (const left of get_test_values({ anyreal: true, anynumeric: false }) as any) {
+      for (const right of get_test_values({ anyreal: false }) as any) {
         let query = `SELECT ${left} UNION ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("operator 'UNION' cannot be applied"));
       }
     }
@@ -13444,59 +13193,45 @@ describe("TestExpressions", () => {
     for (const [left, ldesc] of get_test_items({ anyreal: true, anynumeric: false })) {
       for (const [right, rdesc] of get_test_items({ anyreal: true, anynumeric: false })) {
         let query = `SELECT ${left} UNION ${right};`;
-        assertQueryResult(
-          h,
-          query,
-          [1, 1]
-        );
+        assertQueryResult(h, query, [1, 1]);
         const rtype = realArithmeticResultType(ldesc, rdesc);
         query = `
                     SELECT (INTROSPECT TYPEOF (${left} UNION ${right})).name;
                 `;
-        assertQueryResult(
-          h,
-          query,
-          unorderedSet([`std::${rtype}`])
-        );
+        assertQueryResult(h, query, unorderedSet([`std::${rtype}`]));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setop_04", () => {
-    for (const [left, ldesc] of (get_test_items({anyreal: false}) as any)) {
-      for (const [right, rdesc] of (get_test_items() as any)) {
+    for (const [left, ldesc] of get_test_items({ anyreal: false }) as any) {
+      for (const [right, rdesc] of get_test_items() as any) {
         let query = `SELECT count(${left} UNION ${right});`;
         let argtypes = undefined;
-        if (((ldesc.typename === rdesc.typename) || (argtypes === unorderedSet(["std::cal::date_duration", "std::cal::relative_duration"])) || (argtypes === unorderedSet(["std::cal::local_date", "std::cal::local_datetime"])))) {
-          assertQueryResult(
-            h,
-            query,
-            [2]
-          );
+        if (
+          ldesc.typename === rdesc.typename ||
+          argtypes === unorderedSet(["std::cal::date_duration", "std::cal::relative_duration"]) ||
+          argtypes === unorderedSet(["std::cal::local_date", "std::cal::local_datetime"])
+        ) {
+          assertQueryResult(h, query, [2]);
           query = `
                         SELECT (INTROSPECT TYPEOF (${left} UNION ${right})).name
                     `;
-          if (((argtypes) as any).includes("std::cal::relative_duration")) {
+          if ((argtypes as any).includes("std::cal::relative_duration")) {
           } else {
-            if (((argtypes) as any).includes("std::cal::local_datetime")) {
+            if ((argtypes as any).includes("std::cal::local_datetime")) {
             } else {
               if (rdesc.typename.startswith("std::cal::")) {
                 let desc_typename = rdesc.typename;
               } else {
-                let desc_typename = ("std::" + rdesc.typename);
+                let desc_typename = "std::" + rdesc.typename;
               }
             }
           }
-          assertQueryResult(
-            h,
-            query,
-            undefined
-          );
+          assertQueryResult(h, query, undefined);
         } else {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("operator 'UNION' cannot be applied"));
         }
       }
@@ -13504,82 +13239,60 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_05", () => {
-    for (const left of (get_test_values({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyreal: false}) as any)) {
+    for (const left of get_test_values({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyreal: false }) as any) {
         let query = `SELECT ${left} UNION ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("operator 'UNION' cannot be applied"));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setop_06", () => {
-    for (const [left, left_t] of (get_test_items({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyint: true}) as any)) {
+    for (const [left, left_t] of get_test_items({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyint: true }) as any) {
         let query = `SELECT count(${left} UNION ${right});`;
-        assertQueryResult(
-          h,
-          query,
-          [2]
-        );
+        assertQueryResult(h, query, [2]);
         query = `
                     SELECT (INTROSPECT TYPEOF (${left} UNION ${right})).name;
                 `;
-        assertQueryResult(
-          h,
-          query,
-          undefined
-        );
+        assertQueryResult(h, query, undefined);
       }
     }
-    for (const left of (get_test_values({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyfloat: true}) as any)) {
+    for (const left of get_test_values({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyfloat: true }) as any) {
         let query = `SELECT count(${left} UNION ${right});`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("operator 'UNION' cannot be applied"));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setop_07", () => {
-    for (const val of (get_test_values() as any)) {
+    for (const val of get_test_values() as any) {
       let query = `SELECT 1 IF ${val} ELSE 2;`;
-      if ((val === "<bool>True")) {
-        assertQueryResult(
-          h,
-          query,
-          [1]
-        );
+      if (val === "<bool>True") {
+        assertQueryResult(h, query, [1]);
       } else {
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setop_08", () => {
-    for (const left of (get_test_values({anyreal: true, anynumeric: false}) as any)) {
-      for (const right of (get_test_values({anyreal: false}) as any)) {
+    for (const left of get_test_values({ anyreal: true, anynumeric: false }) as any) {
+      for (const right of get_test_values({ anyreal: false }) as any) {
         let query = `SELECT ${left} ${"??"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"IF random() > 0.5 ELSE"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
@@ -13589,86 +13302,50 @@ describe("TestExpressions", () => {
     for (const [left, ldesc] of get_test_items({ anyreal: true, anynumeric: false })) {
       for (const [right, rdesc] of get_test_items({ anyreal: true, anynumeric: false })) {
         let query = `SELECT ${left} ${"??"} ${right};`;
-        assertQueryResult(
-          h,
-          query,
-          [1]
-        );
+        assertQueryResult(h, query, [1]);
         let rtype = realArithmeticResultType(ldesc, rdesc);
         query = `
                         SELECT (INTROSPECT TYPEOF (${left} ${"??"} ${right})).name;
                     `;
-        assertQueryResult(
-          h,
-          query,
-          unorderedSet([`std::${rtype}`])
-        );
+        assertQueryResult(h, query, unorderedSet([`std::${rtype}`]));
         query = `SELECT ${left} ${"IF random() > 0.5 ELSE"} ${right};`;
-        assertQueryResult(
-          h,
-          query,
-          [1]
-        );
+        assertQueryResult(h, query, [1]);
         rtype = realArithmeticResultType(ldesc, rdesc);
         query = `
                         SELECT (INTROSPECT TYPEOF (${left} ${"IF random() > 0.5 ELSE"} ${right})).name;
                     `;
-        assertQueryResult(
-          h,
-          query,
-          unorderedSet([`std::${rtype}`])
-        );
+        assertQueryResult(h, query, unorderedSet([`std::${rtype}`]));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setop_10", () => {
     for (const [left, ldesc] of get_test_items({ anyreal: false })) {
-      for (const [right, rdesc] of get_test_items({anyreal: false})) {
+      for (const [right, rdesc] of get_test_items({ anyreal: false })) {
         let query = `SELECT count(${left} ${"??"} ${right});`;
         let desc_typename = compatibleScalarType(ldesc, rdesc);
         if (desc_typename) {
-          assertQueryResult(
-            h,
-            query,
-            [1]
-          );
+          assertQueryResult(h, query, [1]);
           query = `
                             SELECT (${left} ${"??"} ${right}) IS ${desc_typename};
                         `;
-          assertQueryResult(
-            h,
-            query,
-            unorderedSet([true])
-          );
+          assertQueryResult(h, query, unorderedSet([true]));
         } else {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("cannot be applied to operands"));
         }
         query = `SELECT count(${left} ${"IF random() > 0.5 ELSE"} ${right});`;
         desc_typename = compatibleScalarType(ldesc, rdesc);
         if (desc_typename) {
-          assertQueryResult(
-            h,
-            query,
-            [1]
-          );
+          assertQueryResult(h, query, [1]);
           query = `
                             SELECT (${left} ${"IF random() > 0.5 ELSE"} ${right}) IS ${desc_typename};
                         `;
-          assertQueryResult(
-            h,
-            query,
-            unorderedSet([true])
-          );
+          assertQueryResult(h, query, unorderedSet([true]));
         } else {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("cannot be applied to operands"));
         }
       }
@@ -13676,126 +13353,84 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_setop_11", () => {
-    for (const left of (get_test_values({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyreal: false}) as any)) {
+    for (const left of get_test_values({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyreal: false }) as any) {
         let query = `SELECT ${left} ${"??"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"IF random() > 0.5 ELSE"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setop_12", () => {
-    for (const left of (get_test_values({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyfloat: true}) as any)) {
+    for (const left of get_test_values({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyfloat: true }) as any) {
         let query = `SELECT ${left} ${"??"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
         query = `SELECT ${left} ${"IF random() > 0.5 ELSE"} ${right};`;
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
-    for (const [left, left_t] of (get_test_items({anynumeric: true}) as any)) {
-      for (const right of (get_test_values({anyint: true}) as any)) {
+    for (const [left, left_t] of get_test_items({ anynumeric: true }) as any) {
+      for (const right of get_test_values({ anyint: true }) as any) {
         let query = `SELECT ${left} ${"??"} ${right};`;
-        assertQueryResult(
-          h,
-          query,
-          [1]
-        );
+        assertQueryResult(h, query, [1]);
         query = `
                         SELECT (${left} ${"??"} ${right}) IS ${left_t.typename};
                     `;
-        assertQueryResult(
-          h,
-          query,
-          unorderedSet([true])
-        );
+        assertQueryResult(h, query, unorderedSet([true]));
         query = `SELECT ${left} ${"IF random() > 0.5 ELSE"} ${right};`;
-        assertQueryResult(
-          h,
-          query,
-          [1]
-        );
+        assertQueryResult(h, query, [1]);
         query = `
                         SELECT (${left} ${"IF random() > 0.5 ELSE"} ${right}) IS ${left_t.typename};
                     `;
-        assertQueryResult(
-          h,
-          query,
-          unorderedSet([true])
-        );
+        assertQueryResult(h, query, unorderedSet([true]));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setop_13", () => {
-    for (const val of (get_test_values({anyreal: true}) as any)) {
+    for (const val of get_test_values({ anyreal: true }) as any) {
       let query = `SELECT 1 IF True ELSE ${val};`;
-      assertQueryResult(
-        h,
-        query,
-        [1]
-      );
+      assertQueryResult(h, query, [1]);
     }
   });
 
   it("test_edgeql_expr_valid_setop_14", () => {
-    for (const val of (get_test_values({anyreal: false}) as any)) {
+    for (const val of get_test_values({ anyreal: false }) as any) {
       let query = `SELECT 1 IF True ELSE ${val};`;
       expect(() => {
-        h.script(
-          query
-        );
+        h.script(query);
       }).toThrow(new RegExp("cannot be applied to operands"));
     }
   });
 
   it("test_edgeql_expr_valid_bool_01", () => {
-    for (const left of (get_test_values() as any)) {
-      for (const right of (get_test_values() as any)) {
+    for (const left of get_test_values() as any) {
+      for (const right of get_test_values() as any) {
         let query = `SELECT ${left} ${"AND"} ${right};`;
         if (left === "<bool>True" && right === "<bool>True") {
-          assertQueryResult(
-            h,
-            query,
-            unorderedSet([true])
-          );
+          assertQueryResult(h, query, unorderedSet([true]));
         } else {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("cannot be applied to operands"));
         }
         query = `SELECT ${left} ${"OR"} ${right};`;
         if (left === "<bool>True" && right === "<bool>True") {
-          assertQueryResult(
-            h,
-            query,
-            unorderedSet([true])
-          );
+          assertQueryResult(h, query, unorderedSet([true]));
         } else {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("cannot be applied to operands"));
         }
       }
@@ -13803,41 +13438,27 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_valid_bool_02", () => {
-    for (const right of (get_test_values() as any)) {
+    for (const right of get_test_values() as any) {
       let query = `SELECT NOT ${right};`;
-      if ((right === "<bool>True")) {
-        assertQueryResult(
-          h,
-          query,
-          unorderedSet([false])
-        );
+      if (right === "<bool>True") {
+        assertQueryResult(h, query, unorderedSet([false]));
       } else {
         expect(() => {
-          h.script(
-            query
-          );
+          h.script(query);
         }).toThrow(new RegExp("cannot be applied to operands"));
       }
     }
   });
 
   it("test_edgeql_expr_valid_setbool_01", () => {
-    for (const right of (get_test_values() as any)) {
+    for (const right of get_test_values() as any) {
       let query = `SELECT EXISTS ${right};`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
     }
   });
 
   it("test_edgeql_expr_valid_collection_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT [1] = [<decimal>1];`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT [1] = [<decimal>1];`, [true]);
   });
 
   it("test_edgeql_expr_valid_collection_02", () => {
@@ -13846,7 +13467,7 @@ describe("TestExpressions", () => {
       `
                 SELECT [<int16>1] = [<decimal>1];
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13856,7 +13477,7 @@ describe("TestExpressions", () => {
       `
                 SELECT (1,) = (<decimal>1,);
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13868,7 +13489,7 @@ describe("TestExpressions", () => {
                     [([(1,          )],)] =
                     [([(<decimal>1, )],)];
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13882,7 +13503,7 @@ describe("TestExpressions", () => {
                     (<decimal>1, <decimal>2, (
                         (<decimal>3, <decimal>4), <decimal>5));
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13896,7 +13517,7 @@ describe("TestExpressions", () => {
                     (<decimal>1, <decimal>2, (
                         [<decimal>3, <decimal>4], <decimal>5));
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13906,7 +13527,7 @@ describe("TestExpressions", () => {
       `
                 SELECT [1] ?= [<decimal>1];
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13916,7 +13537,7 @@ describe("TestExpressions", () => {
       `
                 SELECT (1,) ?= (<decimal>1,);
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13928,7 +13549,7 @@ describe("TestExpressions", () => {
                     [([(1,          )],)] ?=
                     [([(<decimal>1, )],)];
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13942,7 +13563,7 @@ describe("TestExpressions", () => {
                     (<decimal>1, <decimal>2, (
                         (<decimal>3, <decimal>4), <decimal>5));
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13956,7 +13577,7 @@ describe("TestExpressions", () => {
                     (<decimal>1, <decimal>2, (
                         [<decimal>3, <decimal>4], <decimal>5));
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13966,7 +13587,7 @@ describe("TestExpressions", () => {
       `
                 SELECT [1] IN [<decimal>1];
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13976,7 +13597,7 @@ describe("TestExpressions", () => {
       `
                 SELECT (1,) IN (<decimal>1,);
             `,
-      [true]
+      [true],
     );
   });
 
@@ -13988,7 +13609,7 @@ describe("TestExpressions", () => {
                     [([(1,          )],)] IN
                     [([(<decimal>1, )],)];
             `,
-      [true]
+      [true],
     );
   });
 
@@ -14001,7 +13622,7 @@ describe("TestExpressions", () => {
                     (<decimal>1, <decimal>2, (
                         (<decimal>3, <decimal>4), <decimal>5));
             `,
-      [true]
+      [true],
     );
   });
 
@@ -14015,58 +13636,34 @@ describe("TestExpressions", () => {
                     (<decimal>1, <decimal>2, (
                         [<decimal>3, <decimal>4], <decimal>5));
             `,
-      [true]
+      [true],
     );
   });
 
   it("test_edgeql_expr_valid_minmax_01", () => {
-    for (const val of (get_test_values() as any)) {
+    for (const val of get_test_values() as any) {
       let query = `SELECT ${"min"}(${val}) = ${val};`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
       query = `SELECT ${"max"}(${val}) = ${val};`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
     }
   });
 
   it("test_edgeql_expr_valid_minmax_02", () => {
-    for (const val of (get_test_values() as any)) {
+    for (const val of get_test_values() as any) {
       let query = `SELECT ${"min"}([${val}]) = [${val}];`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
       query = `SELECT ${"max"}([${val}]) = [${val}];`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
     }
   });
 
   it("test_edgeql_expr_valid_minmax_03", () => {
-    for (const val of (get_test_values() as any)) {
+    for (const val of get_test_values() as any) {
       let query = `SELECT ${"min"}((${val},)) = (${val},);`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
       query = `SELECT ${"max"}((${val},)) = (${val},);`;
-      assertQueryResult(
-        h,
-        query,
-        unorderedSet([true])
-      );
+      assertQueryResult(h, query, unorderedSet([true]));
     }
   });
 
@@ -14076,21 +13673,13 @@ describe("TestExpressions", () => {
       `
                 SELECT len(b'123' ++ b'54');
             `,
-      [5]
+      [5],
     );
   });
 
   it("test_edgeql_expr_bytes_op_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT (b'123' ++ b'54')[-1] = b'4';`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (b'123' ++ b'54')[0:2] = b'12';`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT (b'123' ++ b'54')[-1] = b'4';`, [true]);
+    assertQueryResult(h, `SELECT (b'123' ++ b'54')[0:2] = b'12';`, [true]);
   });
 
   it("test_edgeql_expr_bytes_op_03", () => {
@@ -14100,7 +13689,7 @@ describe("TestExpressions", () => {
                 WITH x := rb'test\\raw\\x01' ++ br'\\now\\x02' ++ b'\\x03\\x04',
                 SELECT x = b"test\\\\raw\\\\x01\\\\now\\\\x02\\x03\\x04";
             `,
-      [true]
+      [true],
     );
   });
 
@@ -14113,7 +13702,7 @@ describe("TestExpressions", () => {
                     }
                 FILTER
                     Issue.owner.name = 'Elvis';
-            `
+            `,
     );
     h.script(
       `
@@ -14123,7 +13712,7 @@ describe("TestExpressions", () => {
                     }
                 FILTER
                     \`Issue\`.\`owner\`.\`name\` = 'Elvis';
-            `
+            `,
     );
   });
 
@@ -14133,7 +13722,7 @@ describe("TestExpressions", () => {
       `
                 SELECT (1, (2, 3), 4).1.0;
             `,
-      [2]
+      [2],
     );
   });
 
@@ -14142,7 +13731,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT .1;
-            `
+            `,
       );
     }).toThrow(new RegExp("could not resolve partial path"));
   });
@@ -14153,7 +13742,7 @@ describe("TestExpressions", () => {
         `
                 SELECT Issue.owner
                 FILTER Issue.number > '2';
-            `
+            `,
       );
     }).toThrow(new RegExp("'Issue.number' changes the interpretation of 'Issue'"));
   });
@@ -14163,7 +13752,7 @@ describe("TestExpressions", () => {
       `
             SELECT Issue.id
             FILTER Issue.number > '2';
-        `
+        `,
     );
   });
 
@@ -14174,7 +13763,7 @@ describe("TestExpressions", () => {
                 SELECT Issue.owner {
                     foo := Issue.number
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("'Issue.number' changes the interpretation of 'Issue'"));
   });
@@ -14188,7 +13777,7 @@ describe("TestExpressions", () => {
                 SET {
                     name := 'Foo'
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("'Issue.number' changes the interpretation of 'Issue'"));
   });
@@ -14201,7 +13790,7 @@ describe("TestExpressions", () => {
                 SET {
                     related_to := Issue
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("'Issue' changes the interpretation of 'Issue'"));
   });
@@ -14217,48 +13806,24 @@ describe("TestExpressions", () => {
                     name
                 }
             };
-        `
+        `,
     );
     h.script(
       `
             SELECT Owned {
                 [IS Named].name
             };
-        `
+        `,
     );
   });
 
   it("test_edgeql_expr_cast_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT <std::str>123;`,
-      ["123"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <std::int64>"123";`,
-      [123]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <std::str>123 ++ 'qw';`,
-      ["123qw"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <std::int64>"123" + 9000;`,
-      [9123]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <std::int64>"123" * 100;`,
-      [12300]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <std::str>(123 * 2);`,
-      ["246"]
-    );
+    assertQueryResult(h, `SELECT <std::str>123;`, ["123"]);
+    assertQueryResult(h, `SELECT <std::int64>"123";`, [123]);
+    assertQueryResult(h, `SELECT <std::str>123 ++ 'qw';`, ["123qw"]);
+    assertQueryResult(h, `SELECT <std::int64>"123" + 9000;`, [9123]);
+    assertQueryResult(h, `SELECT <std::int64>"123" * 100;`, [12300]);
+    assertQueryResult(h, `SELECT <std::str>(123 * 2);`, ["246"]);
   });
 
   it("test_edgeql_expr_cast_02", () => {
@@ -14266,7 +13831,7 @@ describe("TestExpressions", () => {
       h.query(
         `
                 SELECT <std::str>123 * 2;
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '\\*' cannot .* 'std::str' and 'std::int64'"));
   });
@@ -14277,7 +13842,7 @@ describe("TestExpressions", () => {
       `
                 SELECT <std::str><std::int64><std::float64>'123.45' ++ 'foo';
             `,
-      ["123foo"]
+      ["123foo"],
     );
   });
 
@@ -14287,7 +13852,7 @@ describe("TestExpressions", () => {
       `
                 SELECT <str><int64><float64>'123.45' ++ 'foo';
             `,
-      ["123foo"]
+      ["123foo"],
     );
   });
 
@@ -14297,9 +13862,7 @@ describe("TestExpressions", () => {
       `
                 SELECT <array<int64>>['123', '11'];
             `,
-      [
-            [123, 11],
-          ]
+      [[123, 11]],
     );
   });
 
@@ -14310,42 +13873,16 @@ describe("TestExpressions", () => {
   });
 
   it("test_edgeql_expr_cast_09", () => {
-    assertQueryResult(
-      h,
-      `SELECT <tuple<str, int64>> ('foo', 42);`,
-      [
-            ["foo", 42],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <tuple<str, int64>> (1, 2);`,
-      [
-            ["1", 2],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <tuple<a: str, b: int64>> ('foo', 42);`,
-      [
-            {
-              "a": "foo",
-              "b": 42,
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <tuple<__std__::str, int64>> ('foo', 42);`,
-      [
-            ["foo", 42],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <__std__::int16>1;`,
-      [1]
-    );
+    assertQueryResult(h, `SELECT <tuple<str, int64>> ('foo', 42);`, [["foo", 42]]);
+    assertQueryResult(h, `SELECT <tuple<str, int64>> (1, 2);`, [["1", 2]]);
+    assertQueryResult(h, `SELECT <tuple<a: str, b: int64>> ('foo', 42);`, [
+      {
+        a: "foo",
+        b: 42,
+      },
+    ]);
+    assertQueryResult(h, `SELECT <tuple<__std__::str, int64>> ('foo', 42);`, [["foo", 42]]);
+    assertQueryResult(h, `SELECT <__std__::int16>1;`, [1]);
   });
 
   it("test_edgeql_expr_cast_10", () => {
@@ -14355,12 +13892,7 @@ describe("TestExpressions", () => {
                 SELECT <array<tuple<EmulatedEnum>>>
                   (SELECT [('v1',)] ++ [('v2',)])
             `,
-      [
-            [
-              ["v1"],
-              ["v2"],
-            ],
-          ]
+      [[["v1"], ["v2"]]],
     );
     assertQueryResult(
       h,
@@ -14368,264 +13900,140 @@ describe("TestExpressions", () => {
                 SELECT <tuple<array<EmulatedEnum>>>
                   (SELECT (['v1'] ++ ['v2'],))
             `,
-      [
-            [
-              ["v1", "v2"],
-            ],
-          ]
+      [[["v1", "v2"]]],
     );
   });
 
   it("test_edgeql_expr_implicit_cast_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<int32>1 + 3)).name;`,
-      ["std::int64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<int16>1 + 3)).name;`,
-      ["std::int64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<int16>1 + <int32>3)).name;`,
-      ["std::int32"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(1 + <float32>3.1)).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<int16>1 + <float32>3.1)).name;`,
-      ["std::float32"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<int16>1 + <float64>3.1)).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF({1, <float32>2.1})).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF({1, 2.1})).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(-2.1)).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF({1, <decimal>2.1})).name;`,
-      ["std::decimal"]
-    );
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<int32>1 + 3)).name;`, ["std::int64"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<int16>1 + 3)).name;`, ["std::int64"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<int16>1 + <int32>3)).name;`, ["std::int32"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(1 + <float32>3.1)).name;`, ["std::float64"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<int16>1 + <float32>3.1)).name;`, [
+      "std::float32",
+    ]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<int16>1 + <float64>3.1)).name;`, [
+      "std::float64",
+    ]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF({1, <float32>2.1})).name;`, ["std::float64"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF({1, 2.1})).name;`, ["std::float64"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(-2.1)).name;`, ["std::float64"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF({1, <decimal>2.1})).name;`, ["std::decimal"]);
   });
 
   it("test_edgeql_expr_implicit_cast_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<float32>1 + <float64>2)).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<int32>1 + <float32>2)).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(<int64>1 + <float32>2)).name;`,
-      ["std::float64"]
-    );
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<float32>1 + <float64>2)).name;`, [
+      "std::float64",
+    ]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<int32>1 + <float32>2)).name;`, [
+      "std::float64",
+    ]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(<int64>1 + <float32>2)).name;`, [
+      "std::float64",
+    ]);
   });
 
   it("test_edgeql_expr_implicit_cast_03", () => {
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(3 // 2)).name;`,
-      ["std::int64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF((3 // 2) ?? <float64>{})).name;`,
-      ["std::float64"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(3 / 2 ?? <decimal>{})).name;`,
-      ["std::decimal"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF(3 // 2 ?? sum({1, 2.0}))).name;`,
-      ["std::float64"]
-    );
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(3 // 2)).name;`, ["std::int64"]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF((3 // 2) ?? <float64>{})).name;`, [
+      "std::float64",
+    ]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(3 / 2 ?? <decimal>{})).name;`, [
+      "std::decimal",
+    ]);
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF(3 // 2 ?? sum({1, 2.0}))).name;`, [
+      "std::float64",
+    ]);
   });
 
   it("test_edgeql_expr_implicit_cast_04", () => {
-    assertQueryResult(
-      h,
-      `SELECT 3 / (2 IF TRUE ELSE 2.0);`,
-      [1.5]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 3 / (2 IF random() > -1 ELSE 2.0);`,
-      [1.5]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 3 / (2 IF FALSE ELSE 2.0);`,
-      [1.5]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 3 / (2 IF random() < -1 ELSE 2.0);`,
-      [1.5]
-    );
+    assertQueryResult(h, `SELECT 3 / (2 IF TRUE ELSE 2.0);`, [1.5]);
+    assertQueryResult(h, `SELECT 3 / (2 IF random() > -1 ELSE 2.0);`, [1.5]);
+    assertQueryResult(h, `SELECT 3 / (2 IF FALSE ELSE 2.0);`, [1.5]);
+    assertQueryResult(h, `SELECT 3 / (2 IF random() < -1 ELSE 2.0);`, [1.5]);
     expect(() => {
       h.query(
         `
                 SELECT 3 / (2 IF FALSE ELSE '1');
-            `
+            `,
       );
     }).toThrow(new RegExp("operator.*IF.*cannot.*'std::int64'.*'std::str'"));
   });
 
   it("test_edgeql_expr_implicit_cast_05", () => {
-    assertQueryResult(
-      h,
-      `SELECT {[1, 2.0], [3, 4.5]};`,
-      [
-            [1, 2],
-            [3, 4.5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {[1, 2], [3, 4.5]};`,
-      [
-            [1, 2],
-            [3, 4.5],
-          ]
-    );
+    assertQueryResult(h, `SELECT {[1, 2.0], [3, 4.5]};`, [
+      [1, 2],
+      [3, 4.5],
+    ]);
+    assertQueryResult(h, `SELECT {[1, 2], [3, 4.5]};`, [
+      [1, 2],
+      [3, 4.5],
+    ]);
   });
 
   it("test_edgeql_expr_implicit_cast_06", () => {
-    assertQueryResult(
-      h,
-      `SELECT {(1, 2.0), (3, 4.5)};`,
-      [
-            [1, 2],
-            [3, 4.5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(1, 2), (3, 4.5)};`,
-      [
-            [1, 2],
-            [3, 4.5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(1, 2), (3, 4.5)} FILTER true;`,
-      [
-            [1, 2],
-            [3, 4.5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(3, 4.5), (1, 2.0)};`,
-      [
-            [3, 4.5],
-            [1, 2],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(x := 1, y := 2.0), (x := 3, y := 4.5)};`,
-      [
-            {
-              "x": 1,
-              "y": 2,
-            },
-            {
-              "x": 3,
-              "y": 4.5,
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(x := 1, y := 2), (x := 3, y := 4.5)};`,
-      [
-            {
-              "x": 1,
-              "y": 2,
-            },
-            {
-              "x": 3,
-              "y": 4.5,
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(x := 3, y := 4.5), (x := 1, y := 2)};`,
-      [
-            {
-              "x": 3,
-              "y": 4.5,
-            },
-            {
-              "x": 1,
-              "y": 2,
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(x := 1, y := 2), (a := 3, b := 4.5)};`,
-      [
-            [1, 2],
-            [3, 4.5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(a := 3, b := 4.5), (x := 1, y := 2)};`,
-      [
-            [3, 4.5],
-            [1, 2],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(1, 2), (a := 3, b := 4.5)};`,
-      [
-            [1, 2],
-            [3, 4.5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {(a := 3, b := 4.5), (1, 2)};`,
-      [
-            [3, 4.5],
-            [1, 2],
-          ]
-    );
+    assertQueryResult(h, `SELECT {(1, 2.0), (3, 4.5)};`, [
+      [1, 2],
+      [3, 4.5],
+    ]);
+    assertQueryResult(h, `SELECT {(1, 2), (3, 4.5)};`, [
+      [1, 2],
+      [3, 4.5],
+    ]);
+    assertQueryResult(h, `SELECT {(1, 2), (3, 4.5)} FILTER true;`, [
+      [1, 2],
+      [3, 4.5],
+    ]);
+    assertQueryResult(h, `SELECT {(3, 4.5), (1, 2.0)};`, [
+      [3, 4.5],
+      [1, 2],
+    ]);
+    assertQueryResult(h, `SELECT {(x := 1, y := 2.0), (x := 3, y := 4.5)};`, [
+      {
+        x: 1,
+        y: 2,
+      },
+      {
+        x: 3,
+        y: 4.5,
+      },
+    ]);
+    assertQueryResult(h, `SELECT {(x := 1, y := 2), (x := 3, y := 4.5)};`, [
+      {
+        x: 1,
+        y: 2,
+      },
+      {
+        x: 3,
+        y: 4.5,
+      },
+    ]);
+    assertQueryResult(h, `SELECT {(x := 3, y := 4.5), (x := 1, y := 2)};`, [
+      {
+        x: 3,
+        y: 4.5,
+      },
+      {
+        x: 1,
+        y: 2,
+      },
+    ]);
+    assertQueryResult(h, `SELECT {(x := 1, y := 2), (a := 3, b := 4.5)};`, [
+      [1, 2],
+      [3, 4.5],
+    ]);
+    assertQueryResult(h, `SELECT {(a := 3, b := 4.5), (x := 1, y := 2)};`, [
+      [3, 4.5],
+      [1, 2],
+    ]);
+    assertQueryResult(h, `SELECT {(1, 2), (a := 3, b := 4.5)};`, [
+      [1, 2],
+      [3, 4.5],
+    ]);
+    assertQueryResult(h, `SELECT {(a := 3, b := 4.5), (1, 2)};`, [
+      [3, 4.5],
+      [1, 2],
+    ]);
   });
 
   it("test_edgeql_expr_implicit_cast_07", () => {
@@ -14642,9 +14050,7 @@ describe("TestExpressions", () => {
                         })
                 SELECT (3 / (A.a + A.b), 3 / (A.a + A.c)) LIMIT 1;
             `,
-      [
-            [1.5, 1.5],
-          ]
+      [[1.5, 1.5]],
     );
   });
 
@@ -14653,7 +14059,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT 1.0 UNION <decimal>2.0;
-            `
+            `,
       );
     }).toThrow(new RegExp("operator 'UNION' cannot be applied"));
   });
@@ -14664,7 +14070,7 @@ describe("TestExpressions", () => {
       `
                 SELECT (INTROSPECT TYPEOF 'foo').name;
             `,
-      ["std::str"]
+      ["std::str"],
     );
   });
 
@@ -14674,7 +14080,7 @@ describe("TestExpressions", () => {
       `
                 SELECT (INTROSPECT std::float64).name;
             `,
-      ["std::float64"]
+      ["std::float64"],
     );
   });
 
@@ -14684,7 +14090,7 @@ describe("TestExpressions", () => {
       `
                 SELECT (INTROSPECT TYPEOF schema::ObjectType).name;
             `,
-      ["schema::ObjectType"]
+      ["schema::ObjectType"],
     );
   });
 
@@ -14695,9 +14101,7 @@ describe("TestExpressions", () => {
                 WITH A := {1.0, 2.0}
                 SELECT (count(A), (INTROSPECT TYPEOF A).name);
             `,
-      [
-            [2, "std::float64"],
-          ]
+      [[2, "std::float64"]],
     );
   });
 
@@ -14708,7 +14112,7 @@ describe("TestExpressions", () => {
         `
                     SELECT (INTROSPECT (tuple<int64>)).name;
                 `,
-        ["tuple<std::int64>"]
+        ["tuple<std::int64>"],
       );
     }).toThrow(new RegExp("cannot introspect collection types"));
   });
@@ -14721,32 +14125,16 @@ describe("TestExpressions", () => {
                     WITH A := (SELECT schema::Type { foo := 'bar' })
                     SELECT 'foo' IN (INTROSPECT A).pointers.name;
                 `,
-        [true]
+        [true],
       );
     }).toThrow(new RegExp("type 'A' does not exist"));
   });
 
   it("test_edgeql_expr_set_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT <int64>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT {1};`,
-      unorderedSet([1])
-    );
-    assertQueryResult(
-      h,
-      `SELECT {'foo'};`,
-      ["foo"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {1} = 1;`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT <int64>{};`, []);
+    assertQueryResult(h, `SELECT {1};`, unorderedSet([1]));
+    assertQueryResult(h, `SELECT {'foo'};`, ["foo"]);
+    assertQueryResult(h, `SELECT {1} = 1;`, [true]);
   });
 
   it("test_edgeql_expr_set_02", () => {
@@ -14771,17 +14159,17 @@ describe("TestExpressions", () => {
                 ORDER BY _;
             `,
       [
-            "schema::AccessPolicy",
-            "schema::Alias",
-            "schema::Annotation",
-            "schema::AnnotationSubject",
-            "schema::Array",
-            "schema::ArrayExprAlias",
-            "schema::Delta",
-            "schema::Object",
-            "schema::ObjectType",
-            "schema::Operator",
-          ]
+        "schema::AccessPolicy",
+        "schema::Alias",
+        "schema::Annotation",
+        "schema::AnnotationSubject",
+        "schema::Array",
+        "schema::ArrayExprAlias",
+        "schema::Delta",
+        "schema::Object",
+        "schema::ObjectType",
+        "schema::Operator",
+      ],
     );
   });
 
@@ -14793,15 +14181,7 @@ describe("TestExpressions", () => {
                 SELECT _ := {{2, 3, {1, 4}, 4}, {4, 1}}
                 ORDER BY _;
             `,
-      [
-            1,
-            1,
-            2,
-            3,
-            4,
-            4,
-            4,
-          ]
+      [1, 1, 2, 3, 4, 4, 4],
     );
   });
 
@@ -14812,7 +14192,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} except 2
                 order by _;
             `,
-      [1, 3, 4]
+      [1, 3, 4],
     );
     assertQueryResult(
       h,
@@ -14820,7 +14200,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} except 2 except 4
                 order by _;
             `,
-      [1, 3]
+      [1, 3],
     );
     assertQueryResult(
       h,
@@ -14828,7 +14208,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} except {1, 2}
                 order by _;
             `,
-      [3, 4]
+      [3, 4],
     );
     assertQueryResult(
       h,
@@ -14836,7 +14216,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} except {4, 5}
                 order by _;
             `,
-      [1, 2, 3]
+      [1, 2, 3],
     );
     assertQueryResult(
       h,
@@ -14844,7 +14224,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} except {5, 6}
                 order by _;
             `,
-      [1, 2, 3, 4]
+      [1, 2, 3, 4],
     );
     assertQueryResult(
       h,
@@ -14852,7 +14232,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 1, 1, 2, 2, 3} except {1, 3, 3, 2}
                 order by _;
             `,
-      [1, 1, 2]
+      [1, 1, 2],
     );
   });
 
@@ -14863,7 +14243,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} intersect 2
                 order by _;
             `,
-      [2]
+      [2],
     );
     assertQueryResult(
       h,
@@ -14872,7 +14252,7 @@ describe("TestExpressions", () => {
                     {1, 2, 3, 4} intersect {2, 3, 4} intersect {2, 4}
                 order by _;
             `,
-      [2, 4]
+      [2, 4],
     );
     assertQueryResult(
       h,
@@ -14880,7 +14260,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} intersect {5, 6}
                 order by _;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -14888,7 +14268,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 2, 3, 4} intersect 4
                 order by _;
             `,
-      [4]
+      [4],
     );
     assertQueryResult(
       h,
@@ -14896,7 +14276,7 @@ describe("TestExpressions", () => {
                 select _ := {1, 1, 1, 2, 2, 3} intersect {1, 3, 3, 2, 2, 5}
                 order by _;
             `,
-      [1, 2, 2, 3]
+      [1, 2, 2, 3],
     );
   });
 
@@ -14906,101 +14286,25 @@ describe("TestExpressions", () => {
       `
                 select {<optional int64>$0, <optional int64>$0};
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_expr_array_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT [1];`,
-      [
-            [1],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5];`,
-      [
-            [1, 2, 3, 4, 5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][2];`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][-2];`,
-      [4]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][2:4];`,
-      [
-            [3, 4],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][2:];`,
-      [
-            [3, 4, 5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][:2];`,
-      [
-            [1, 2],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][2:-1];`,
-      [
-            [3, 4],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][-2:];`,
-      [
-            [4, 5],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][:-2];`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2][10:11];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <array<int64>>[];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][<int16>2];`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [1, 2, 3, 4, 5][<int32>2];`,
-      [3]
-    );
+    assertQueryResult(h, `SELECT [1];`, [[1]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5];`, [[1, 2, 3, 4, 5]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][2];`, [3]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][-2];`, [4]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][2:4];`, [[3, 4]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][2:];`, [[3, 4, 5]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][:2];`, [[1, 2]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][2:-1];`, [[3, 4]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][-2:];`, [[4, 5]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][:-2];`, [[1, 2, 3]]);
+    assertQueryResult(h, `SELECT [1, 2][10:11];`, [[]]);
+    assertQueryResult(h, `SELECT <array<int64>>[];`, [[]]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][<int16>2];`, [3]);
+    assertQueryResult(h, `SELECT [1, 2, 3, 4, 5][<int32>2];`, [3]);
   });
 
   it("test_edgeql_expr_array_02", () => {
@@ -15008,7 +14312,7 @@ describe("TestExpressions", () => {
       h.query(
         `
                 SELECT [1, '1'];
-            `
+            `,
       );
     }).toThrow(new RegExp("could not determine array type"));
   });
@@ -15018,7 +14322,7 @@ describe("TestExpressions", () => {
       h.query(
         `
                 SELECT [1, 2]['1'];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot index array by.*str"));
   });
@@ -15041,9 +14345,7 @@ describe("TestExpressions", () => {
       `
                 SELECT [1, 2] ++ [3, 4];
             `,
-      [
-            [1, 2, 3, 4],
-          ]
+      [[1, 2, 3, 4]],
     );
   });
 
@@ -15052,7 +14354,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT [1, 2] ++ ['a'];
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '\\+\\+' cannot.*int64.*str"));
   });
@@ -15064,12 +14366,12 @@ describe("TestExpressions", () => {
                 SELECT [(1, 'a')] ++ [(2.0, $$\\$$), (3.0, r'\\n')];
             `,
       [
-            [
-              [1, "a"],
-              [2, "\\"],
-              [3, "\\n"],
-            ],
-          ]
+        [
+          [1, "a"],
+          [2, "\\"],
+          [3, "\\n"],
+        ],
+      ],
     );
   });
 
@@ -15079,7 +14381,7 @@ describe("TestExpressions", () => {
       `
                 SELECT [1, <int64>{}];
             `,
-      []
+      [],
     );
   });
 
@@ -15092,7 +14394,7 @@ describe("TestExpressions", () => {
                     B := <int64>{}
                 SELECT [A, B];
             `,
-      []
+      [],
     );
   });
 
@@ -15107,7 +14409,7 @@ describe("TestExpressions", () => {
                     B := (SELECT Type FILTER Type.name = 'n/a').name
                 SELECT [A, B];
             `,
-      []
+      [],
     );
   });
 
@@ -15121,74 +14423,18 @@ describe("TestExpressions", () => {
                           FILTER .name = 'default::issue_num_t')
                 SELECT [A.name, A.default];
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_expr_array_10", () => {
-    assertQueryResult(
-      h,
-      `select <array<array<int64>>>{}`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select <array<array<int64>>>[]`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [[1]]`,
-      [
-            [
-              [1],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [[[1]]]`,
-      [
-            [
-              [
-                [1],
-              ],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [[[[1]]]]`,
-      [
-            [
-              [
-                [
-                  [1],
-                ],
-              ],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [[1], [2, 3], [4, 5, 6, 7]]`,
-      [
-            [
-              [1],
-              [2, 3],
-              [4, 5, 6, 7],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [[1, 2], [3, 4], [5, 6]][1]`,
-      [
-            [3, 4],
-          ]
-    );
+    assertQueryResult(h, `select <array<array<int64>>>{}`, []);
+    assertQueryResult(h, `select <array<array<int64>>>[]`, [[]]);
+    assertQueryResult(h, `select [[1]]`, [[[1]]]);
+    assertQueryResult(h, `select [[[1]]]`, [[[[1]]]]);
+    assertQueryResult(h, `select [[[[1]]]]`, [[[[[1]]]]]);
+    assertQueryResult(h, `select [[1], [2, 3], [4, 5, 6, 7]]`, [[[1], [2, 3], [4, 5, 6, 7]]]);
+    assertQueryResult(h, `select [[1, 2], [3, 4], [5, 6]][1]`, [[3, 4]]);
     assertQueryResult(
       h,
       `
@@ -15197,80 +14443,45 @@ describe("TestExpressions", () => {
                 [[21, 22], [23, 24, 25], [26]],
             }[1][2]
             `,
-      [15, 25]
+      [15, 25],
     );
-    assertQueryResult(
-      h,
-      `select [[1], [2], [3], [4], [5]][1:4]`,
-      [
-            [
-              [2],
-              [3],
-              [4],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [[1], [2]] ++ {[[3]], [[4], [5]]}`,
-      [
-            [
-              [1],
-              [2],
-              [3],
-            ],
-            [
-              [1],
-              [2],
-              [4],
-              [5],
-            ],
-          ]
-    );
+    assertQueryResult(h, `select [[1], [2], [3], [4], [5]][1:4]`, [[[2], [3], [4]]]);
+    assertQueryResult(h, `select [[1], [2]] ++ {[[3]], [[4], [5]]}`, [
+      [[1], [2], [3]],
+      [[1], [2], [4], [5]],
+    ]);
     assertQueryResult(
       h,
       `
                 SELECT [[1, 2], [3, 4]];
             `,
       [
-            [
-              [1, 2],
-              [3, 4],
-            ],
-          ]
+        [
+          [1, 2],
+          [3, 4],
+        ],
+      ],
     );
     assertQueryResult(
       h,
       `
                 SELECT [array_agg({1, 2})];
             `,
-      [
-            [
-              [1, 2],
-            ],
-          ]
+      [[[1, 2]]],
     );
     assertQueryResult(
       h,
       `
                 SELECT array_agg([1, 2, 3]);
             `,
-      [
-            [
-              [1, 2, 3],
-            ],
-          ]
+      [[[1, 2, 3]]],
     );
     assertQueryResult(
       h,
       `
                 SELECT array_agg(array_agg({1, 2 ,3}));
             `,
-      [
-            [
-              [1, 2, 3],
-            ],
-          ]
+      [[[1, 2, 3]]],
     );
   });
 
@@ -15280,7 +14491,7 @@ describe("TestExpressions", () => {
       `
             create global foo -> tuple<array<int64>>;
             create global bar -> tuple<array<tuple<array<int64>>>>;
-        `
+        `,
     );
     _check();
   });
@@ -15290,7 +14501,7 @@ describe("TestExpressions", () => {
     h.script(
       `
             create global foo -> tuple<array<tuple<int64>>>;
-        `
+        `,
     );
     _check();
   });
@@ -15305,7 +14516,7 @@ describe("TestExpressions", () => {
                 array<tuple<array<int64>>>,
                 array<tuple<array<str>>>,
             >>>;
-        `
+        `,
     );
     _check();
   });
@@ -15316,17 +14527,7 @@ describe("TestExpressions", () => {
       `
                 SELECT [([([1],)],)];
             `,
-      [
-            [
-              [
-                [
-                  [
-                    [1],
-                  ],
-                ],
-              ],
-            ],
-          ]
+      [[[[[[1]]]]]],
     );
   });
 
@@ -15335,7 +14536,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT [1, 2, 3][10];
-            `
+            `,
       );
     }).toThrow(new RegExp("array index 10 is out of bounds"));
   });
@@ -15345,7 +14546,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT [1, 2, 3][-10];
-            `
+            `,
       );
     }).toThrow(new RegExp("array index -10 is out of bounds"));
   });
@@ -15355,7 +14556,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT [1, 2][1.0];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot index array by.*float"));
   });
@@ -15365,7 +14566,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT [1, 2][1.0:3];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot slice array by.*float"));
   });
@@ -15375,7 +14576,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT [1, 2][1:'3'];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot slice array by.*str"));
   });
@@ -15385,7 +14586,7 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT [1, 2][2^40];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot index array by std::float64"));
   });
@@ -15396,10 +14597,7 @@ describe("TestExpressions", () => {
       `
                 SELECT [1, 2] UNION [];
             `,
-      [
-            [1, 2],
-            [],
-          ]
+      [[1, 2], []],
     );
   });
 
@@ -15416,24 +14614,24 @@ describe("TestExpressions", () => {
                 } LIMIT 1
             `,
       [
-            {
-              "foo": [
-                [
-                  {
-                    "a": 1,
-                    "b": 2,
-                  },
-                ],
-                [
-                  {
-                    "a": 3,
-                    "b": 4,
-                  },
-                ],
-                [],
-              ],
-            },
-          ]
+        {
+          foo: [
+            [
+              {
+                a: 1,
+                b: 2,
+              },
+            ],
+            [
+              {
+                a: 3,
+                b: 4,
+              },
+            ],
+            [],
+          ],
+        },
+      ],
     );
   });
 
@@ -15444,11 +14642,7 @@ describe("TestExpressions", () => {
             WITH X := [(1, 2)],
             SELECT X FILTER X[0].0 = 1;
             `,
-      [
-            [
-              [1, 2],
-            ],
-          ]
+      [[[1, 2]]],
     );
   });
 
@@ -15460,13 +14654,13 @@ describe("TestExpressions", () => {
             SELECT X FILTER X[0].foo = 1;
             `,
       [
-            [
-              {
-                "bar": 2,
-                "foo": 1,
-              },
-            ],
-          ]
+        [
+          {
+            bar: 2,
+            foo: 1,
+          },
+        ],
+      ],
     );
   });
 
@@ -15477,13 +14671,13 @@ describe("TestExpressions", () => {
             SELECT X := [(foo := 1, bar := 2)] FILTER X[0].foo = 1;
             `,
       [
-            [
-              {
-                "bar": 2,
-                "foo": 1,
-              },
-            ],
-          ]
+        [
+          {
+            bar: 2,
+            foo: 1,
+          },
+        ],
+      ],
     );
   });
 
@@ -15494,9 +14688,7 @@ describe("TestExpressions", () => {
             with x := [1]
             select <array<int64>>x;
             `,
-      [
-            [1],
-          ]
+      [[1]],
     );
   });
 
@@ -15505,481 +14697,51 @@ describe("TestExpressions", () => {
       h,
       `select [0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, 0+1, ]`,
       [
-            [
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-              1,
-            ],
-          ]
+        [
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        ],
+      ],
     );
   });
 
   it("test_edgeql_expr_coalesce_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} ?? 4 ?? 5;`,
-      [4]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <str>{} ?? 'foo' ?? 'bar';`,
-      ["foo"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 4 ?? <int64>{} ?? 5;`,
-      [4]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'foo' ?? <str>{} ?? 'bar';`,
-      ["foo"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <str>{} ?? 'bar' = 'bar';`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 4^<int64>{} ?? 2;`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 4+<int64>{} ?? 2;`,
-      [6]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 4*<int64>{} ?? 2;`,
-      [8]
-    );
-    assertQueryResult(
-      h,
-      `SELECT -<int64>{} ?? 2;`,
-      [2]
-    );
-    assertQueryResult(
-      h,
-      `SELECT -<int64>{} ?? -2 + 1;`,
-      [-1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} ?? <int64>{};`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT <int64>{} ?? <int64>{} ?? <int64>{};`,
-      []
-    );
+    assertQueryResult(h, `SELECT <int64>{} ?? 4 ?? 5;`, [4]);
+    assertQueryResult(h, `SELECT <str>{} ?? 'foo' ?? 'bar';`, ["foo"]);
+    assertQueryResult(h, `SELECT 4 ?? <int64>{} ?? 5;`, [4]);
+    assertQueryResult(h, `SELECT 'foo' ?? <str>{} ?? 'bar';`, ["foo"]);
+    assertQueryResult(h, `SELECT <str>{} ?? 'bar' = 'bar';`, [true]);
+    assertQueryResult(h, `SELECT 4^<int64>{} ?? 2;`, [2]);
+    assertQueryResult(h, `SELECT 4+<int64>{} ?? 2;`, [6]);
+    assertQueryResult(h, `SELECT 4*<int64>{} ?? 2;`, [8]);
+    assertQueryResult(h, `SELECT -<int64>{} ?? 2;`, [2]);
+    assertQueryResult(h, `SELECT -<int64>{} ?? -2 + 1;`, [-1]);
+    assertQueryResult(h, `SELECT <int64>{} ?? <int64>{};`, []);
+    assertQueryResult(h, `SELECT <int64>{} ?? <int64>{} ?? <int64>{};`, []);
   });
 
   it("test_edgeql_expr_string_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty';`,
-      ["qwerty"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[2];`,
-      ["e"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[-2];`,
-      ["t"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[2:4];`,
-      ["er"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[2:];`,
-      ["erty"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[:2];`,
-      ["qw"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[2:-1];`,
-      ["ert"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[-2:];`,
-      ["ty"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[:-2];`,
-      ["qwer"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[<int16>2];`,
-      ["e"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'qwerty'[<int32>2];`,
-      ["e"]
-    );
+    assertQueryResult(h, `SELECT 'qwerty';`, ["qwerty"]);
+    assertQueryResult(h, `SELECT 'qwerty'[2];`, ["e"]);
+    assertQueryResult(h, `SELECT 'qwerty'[-2];`, ["t"]);
+    assertQueryResult(h, `SELECT 'qwerty'[2:4];`, ["er"]);
+    assertQueryResult(h, `SELECT 'qwerty'[2:];`, ["erty"]);
+    assertQueryResult(h, `SELECT 'qwerty'[:2];`, ["qw"]);
+    assertQueryResult(h, `SELECT 'qwerty'[2:-1];`, ["ert"]);
+    assertQueryResult(h, `SELECT 'qwerty'[-2:];`, ["ty"]);
+    assertQueryResult(h, `SELECT 'qwerty'[:-2];`, ["qwer"]);
+    assertQueryResult(h, `SELECT 'qwerty'[<int16>2];`, ["e"]);
+    assertQueryResult(h, `SELECT 'qwerty'[<int32>2];`, ["e"]);
   });
 
   it("test_edgeql_expr_string_02", () => {
@@ -15987,7 +14749,7 @@ describe("TestExpressions", () => {
       h.query(
         `
                 SELECT '123'['1'];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot index string by.*str"));
   });
@@ -16003,7 +14765,7 @@ describe("TestExpressions", () => {
       h.query(
         `
                 SELECT '123'[-10];
-            `
+            `,
       );
     }).toThrow(new RegExp("string index -10 is out of bounds"));
   });
@@ -16013,7 +14775,7 @@ describe("TestExpressions", () => {
       h.query(
         `
                 SELECT '123'[-1.0];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot index string by.*float"));
   });
@@ -16029,32 +14791,18 @@ describe("TestExpressions", () => {
       h.script(
         `
                 SELECT '123'[:'1'];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot slice string by.*str"));
   });
 
   it("test_edgeql_expr_string_08", () => {
-    assertQueryResult(
-      h,
-      `SELECT ':\\x62:\\u2665:\\U000025C6:☎️:';`,
-      [":b:\u2665:\u25c6:\u260e\ufe0f:"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT '\\'"\\\\\\'\\""\\\\x\\\\u';`,
-      ["'\"\\'\"\"\\x\\u"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT "'\\"\\\\\\'\\"\\\\x\\\\u";`,
-      ["'\"\\'\"\\x\\u"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT r'\\n';`,
-      ["\\n"]
-    );
+    assertQueryResult(h, `SELECT ':\\x62:\\u2665:\\U000025C6:☎️:';`, [
+      ":b:\u2665:\u25c6:\u260e\ufe0f:",
+    ]);
+    assertQueryResult(h, `SELECT '\\'"\\\\\\'\\""\\\\x\\\\u';`, ['\'"\\\'""\\x\\u']);
+    assertQueryResult(h, `SELECT "'\\"\\\\\\'\\"\\\\x\\\\u";`, ["'\"\\'\"\\x\\u"]);
+    assertQueryResult(h, `SELECT r'\\n';`, ["\\n"]);
   });
 
   it("test_edgeql_expr_string_09", () => {
@@ -16064,7 +14812,7 @@ describe("TestExpressions", () => {
             aa \\
             bb';
             `,
-      ["bbaa bb"]
+      ["bbaa bb"],
     );
     assertQueryResult(
       h,
@@ -16074,14 +14822,14 @@ describe("TestExpressions", () => {
 
             bb';
             `,
-      ["bbaa bb"]
+      ["bbaa bb"],
     );
     assertQueryResult(
       h,
       `SELECT r'aa\\
             bb \\
             aa';`,
-      ["aa\\\n            bb \\\n            aa"]
+      ["aa\\\n            bb \\\n            aa"],
     );
   });
 
@@ -16089,16 +14837,14 @@ describe("TestExpressions", () => {
     expect(() => {
       h.script(
         `SELECT 'bb\\   
-aa';`
+aa';`,
       );
     }).toThrow(new RegExp("invalid string literal: invalid escape sequence '\\\\ '"));
   });
 
   it("test_edgeql_expr_string_11", () => {
     expect(() => {
-      h.script(
-        `SELECT 'bb\\   aa';`
-      );
+      h.script(`SELECT 'bb\\   aa';`);
     }).toThrow(new RegExp("invalid string literal: invalid escape sequence '\\\\ '"));
   });
 
@@ -16109,26 +14855,14 @@ aa';`
 aa \\
             bb';
             `,
-      ["bbaa bb"]
+      ["bbaa bb"],
     );
   });
 
   it("test_edgeql_expr_string_13", () => {
-    assertQueryResult(
-      h,
-      `SELECT 'bb\\\n   aa';`,
-      ["bbaa"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'bb\\\r   aa';`,
-      ["bbaa"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'bb\\\r\n   aa';`,
-      ["bbaa"]
-    );
+    assertQueryResult(h, `SELECT 'bb\\\n   aa';`, ["bbaa"]);
+    assertQueryResult(h, `SELECT 'bb\\\r   aa';`, ["bbaa"]);
+    assertQueryResult(h, `SELECT 'bb\\\r\n   aa';`, ["bbaa"]);
   });
 
   it("test_edgeql_expr_tuple_01", () => {
@@ -16137,48 +14871,18 @@ aa \\
       `
                 SELECT (1, 'foo');
             `,
-      [
-            [1, "foo"],
-          ]
+      [[1, "foo"]],
     );
   });
 
   it("test_edgeql_expr_tuple_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT (1, 'foo') = (1, 'foo');`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, 'foo') = (2, 'foo');`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, 'foo') != (1, 'foo');`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, 'foo') != (2, 'foo');`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, 2) = (1, 2.0);`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, 2.0) = (1, 2);`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, 2.1) != (1, 2);`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT (1, 'foo') = (1, 'foo');`, [true]);
+    assertQueryResult(h, `SELECT (1, 'foo') = (2, 'foo');`, [false]);
+    assertQueryResult(h, `SELECT (1, 'foo') != (1, 'foo');`, [false]);
+    assertQueryResult(h, `SELECT (1, 'foo') != (2, 'foo');`, [true]);
+    assertQueryResult(h, `SELECT (1, 2) = (1, 2.0);`, [true]);
+    assertQueryResult(h, `SELECT (1, 2.0) = (1, 2);`, [true]);
+    assertQueryResult(h, `SELECT (1, 2.1) != (1, 2);`, [true]);
   });
 
   it("test_edgeql_expr_tuple_03", () => {
@@ -16186,7 +14890,7 @@ aa \\
       h.query(
         `
                 SELECT (1, 'foo') = ('1', 'foo');
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '=' cannot"));
   });
@@ -16197,11 +14901,7 @@ aa \\
       `
                 SELECT array_agg((1, 'foo'));
             `,
-      [
-            [
-              [1, "foo"],
-            ],
-          ]
+      [[[1, "foo"]]],
     );
   });
 
@@ -16212,48 +14912,20 @@ aa \\
                 SELECT (1, 2) UNION (3, 4);
             `,
       [
-            [1, 2],
-            [3, 4],
-          ]
+        [1, 2],
+        [3, 4],
+      ],
     );
   });
 
   it("test_edgeql_expr_tuple_06", () => {
-    assertQueryResult(
-      h,
-      `SELECT (1, 'foo') = (a := 1, b := 'foo');`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a := 1, b := 'foo') = (a := 1, b := 'foo');`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a := 1, b := 'foo') = (c := 1, d := 'foo');`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a := 1, b := 'foo') = (b := 1, a := 'foo');`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a := 1, b := 9001) != (b := 9001, a := 1);`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a := 1, b := 9001).a = (b := 9001, a := 1).a;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a := 1, b := 9001).b = (b := 9001, a := 1).b;`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT (1, 'foo') = (a := 1, b := 'foo');`, [true]);
+    assertQueryResult(h, `SELECT (a := 1, b := 'foo') = (a := 1, b := 'foo');`, [true]);
+    assertQueryResult(h, `SELECT (a := 1, b := 'foo') = (c := 1, d := 'foo');`, [true]);
+    assertQueryResult(h, `SELECT (a := 1, b := 'foo') = (b := 1, a := 'foo');`, [true]);
+    assertQueryResult(h, `SELECT (a := 1, b := 9001) != (b := 9001, a := 1);`, [true]);
+    assertQueryResult(h, `SELECT (a := 1, b := 9001).a = (b := 9001, a := 1).a;`, [true]);
+    assertQueryResult(h, `SELECT (a := 1, b := 9001).b = (b := 9001, a := 1).b;`, [true]);
   });
 
   it("test_edgeql_expr_tuple_07", () => {
@@ -16261,7 +14933,7 @@ aa \\
       h.query(
         `
                 SELECT (a := 1, b := 'foo') != (b := 'foo', a := 1);
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '!=' cannot"));
   });
@@ -16272,9 +14944,7 @@ aa \\
       `
                 SELECT ();
             `,
-      [
-            [],
-          ]
+      [[]],
     );
   });
 
@@ -16283,7 +14953,7 @@ aa \\
       h.script(
         `
                 SELECT (spam := 1, ham := 2) + 1;
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '\\+'.*cannot.*tuple<.*>' and 'std::int64'"));
   });
@@ -16295,47 +14965,33 @@ aa \\
                 ORDER BY _.spam THEN _.ham;
             `,
       [
-            {
-              "ham": 3,
-              "spam": 1,
-            },
-            {
-              "ham": 4,
-              "spam": 1,
-            },
-            {
-              "ham": 3,
-              "spam": 2,
-            },
-            {
-              "ham": 4,
-              "spam": 2,
-            },
-          ]
+        {
+          ham: 3,
+          spam: 1,
+        },
+        {
+          ham: 4,
+          spam: 1,
+        },
+        {
+          ham: 3,
+          spam: 2,
+        },
+        {
+          ham: 4,
+          spam: 2,
+        },
+      ],
     );
   });
 
   it("test_edgeql_expr_tuple_11", () => {
-    assertQueryResult(
-      h,
-      `SELECT (1, 2) = (1, 2);`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, 2) UNION (1, 2);`,
-      [
-            [1, 2],
-            [1, 2],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT DISTINCT ((1, 2) UNION (1, 2));`,
-      [
-            [1, 2],
-          ]
-    );
+    assertQueryResult(h, `SELECT (1, 2) = (1, 2);`, [true]);
+    assertQueryResult(h, `SELECT (1, 2) UNION (1, 2);`, [
+      [1, 2],
+      [1, 2],
+    ]);
+    assertQueryResult(h, `SELECT DISTINCT ((1, 2) UNION (1, 2));`, [[1, 2]]);
   });
 
   it("test_edgeql_expr_tuple_12", () => {
@@ -16347,13 +15003,13 @@ aa \\
                 ORDER BY _;
             `,
       [
-            ["a", 1],
-            ["a", 2],
-            ["a", 3],
-            ["b", 1],
-            ["b", 2],
-            ["b", 3],
-          ]
+        ["a", 1],
+        ["a", 2],
+        ["a", 3],
+        ["b", 1],
+        ["b", 2],
+        ["b", 3],
+      ],
     );
   });
 
@@ -16363,18 +15019,7 @@ aa \\
       `
                 SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3);
             `,
-      [
-            [
-              1,
-              [
-                "a",
-                "b",
-                [0.1, 0.2],
-              ],
-              2,
-              3,
-            ],
-          ]
+      [[1, ["a", "b", [0.1, 0.2]], 2, 3]],
     );
     assertQueryResult(
       h,
@@ -16383,18 +15028,7 @@ aa \\
                 WITH _ := (1, ('a', 'b', (0.1, 0.2)), 2, 3)
                 SELECT _;
             `,
-      [
-            [
-              1,
-              [
-                "a",
-                "b",
-                [0.1, 0.2],
-              ],
-              2,
-              3,
-            ],
-          ]
+      [[1, ["a", "b", [0.1, 0.2]], 2, 3]],
     );
   });
 
@@ -16404,7 +15038,7 @@ aa \\
       `
                 SELECT (1, <int64>{});
             `,
-      []
+      [],
     );
   });
 
@@ -16417,7 +15051,7 @@ aa \\
                     B := <int64>{}
                 SELECT (A, B);
             `,
-      []
+      [],
     );
   });
 
@@ -16432,88 +15066,28 @@ aa \\
                     B := (SELECT Type FILTER Type.name = 'n/a').name
                 SELECT (A, B);
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_expr_tuple_17", () => {
-    assertQueryResult(
-      h,
-      `SELECT (1, (2,)) ?= (1, (2,))`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (0, (2,)) ?= enumerate((2,))`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `WITH A := enumerate((2,)) SELECT (0, (2,)) ?= A`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <tuple<int64, tuple<int64>>>{} ?? (1, (2,));`,
-      [
-            [
-              1,
-              [2],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, (2,)) ?? <tuple<int64, tuple<int64>>>{};`,
-      [
-            [
-              1,
-              [2],
-            ],
-          ]
-    );
+    assertQueryResult(h, `SELECT (1, (2,)) ?= (1, (2,))`, [true]);
+    assertQueryResult(h, `SELECT (0, (2,)) ?= enumerate((2,))`, [true]);
+    assertQueryResult(h, `WITH A := enumerate((2,)) SELECT (0, (2,)) ?= A`, [true]);
+    assertQueryResult(h, `SELECT <tuple<int64, tuple<int64>>>{} ?? (1, (2,));`, [[1, [2]]]);
+    assertQueryResult(h, `SELECT (1, (2,)) ?? <tuple<int64, tuple<int64>>>{};`, [[1, [2]]]);
     h.script(
       `
                     CREATE TYPE Foo {
                         CREATE PROPERTY x -> tuple<int64, tuple<int64>>;
                     }
-                `
+                `,
     );
-    assertQueryResult(
-      h,
-      `SELECT (1, (2,)) ?= (1, (2,))`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (0, (2,)) ?= enumerate((2,))`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `WITH A := enumerate((2,)) SELECT (0, (2,)) ?= A`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT <tuple<int64, tuple<int64>>>{} ?? (1, (2,));`,
-      [
-            [
-              1,
-              [2],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, (2,)) ?? <tuple<int64, tuple<int64>>>{};`,
-      [
-            [
-              1,
-              [2],
-            ],
-          ]
-    );
+    assertQueryResult(h, `SELECT (1, (2,)) ?= (1, (2,))`, [true]);
+    assertQueryResult(h, `SELECT (0, (2,)) ?= enumerate((2,))`, [true]);
+    assertQueryResult(h, `WITH A := enumerate((2,)) SELECT (0, (2,)) ?= A`, [true]);
+    assertQueryResult(h, `SELECT <tuple<int64, tuple<int64>>>{} ?? (1, (2,));`, [[1, [2]]]);
+    assertQueryResult(h, `SELECT (1, (2,)) ?? <tuple<int64, tuple<int64>>>{};`, [[1, [2]]]);
   });
 
   it("test_edgeql_expr_tuple_18", () => {
@@ -16523,7 +15097,7 @@ aa \\
                 WITH TUP := (1, (2, 3))
                 SELECT TUP.1.1;
             `,
-      [3]
+      [3],
     );
   });
 
@@ -16533,28 +15107,20 @@ aa \\
       `
                 SELECT ('foo', 42).0;
             `,
-      ["foo"]
+      ["foo"],
     );
     assertQueryResult(
       h,
       `
                 SELECT ('foo', 42).1;
             `,
-      [42]
+      [42],
     );
   });
 
   it("test_edgeql_expr_tuple_indirection_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT (name := 'foo', val := 42).name;`,
-      ["foo"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (name := 'foo', val := 42).val;`,
-      [42]
-    );
+    assertQueryResult(h, `SELECT (name := 'foo', val := 42).name;`, ["foo"]);
+    assertQueryResult(h, `SELECT (name := 'foo', val := 42).val;`, [42]);
   });
 
   it("test_edgeql_expr_tuple_indirection_03", () => {
@@ -16563,7 +15129,7 @@ aa \\
       `
                 WITH _ := (SELECT ('foo', 42)) SELECT _.1;
             `,
-      [42]
+      [42],
     );
   });
 
@@ -16573,7 +15139,7 @@ aa \\
       `
                 WITH _ := (SELECT (name := 'foo', val := 42)) SELECT _.name;
             `,
-      ["foo"]
+      ["foo"],
     );
   });
 
@@ -16583,70 +15149,24 @@ aa \\
       `
                 WITH _ := (SELECT (1,2) UNION (3,4)) SELECT _.0;
             `,
-      [1, 3]
+      [1, 3],
     );
   });
 
   it("test_edgeql_expr_tuple_indirection_06", () => {
-    assertQueryResult(
-      h,
-      `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).0;`,
-      [1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).1;`,
-      [
-            [
-              "a",
-              "b",
-              [0.1, 0.2],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).1.2;`,
-      [
-            [0.1, 0.2],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).1.2.0;`,
-      [0.1]
-    );
+    assertQueryResult(h, `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).0;`, [1]);
+    assertQueryResult(h, `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).1;`, [["a", "b", [0.1, 0.2]]]);
+    assertQueryResult(h, `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).1.2;`, [[0.1, 0.2]]);
+    assertQueryResult(h, `SELECT (1, ('a', 'b', (0.1, 0.2)), 2, 3).1.2.0;`, [0.1]);
   });
 
   it("test_edgeql_expr_tuple_indirection_07", () => {
-    assertQueryResult(
-      h,
-      `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.0;`,
-      [1]
-    );
-    assertQueryResult(
-      h,
-      `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.1;`,
-      [
-            [
-              "a",
-              "b",
-              [0.1, 0.2],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.1.2;`,
-      [
-            [0.1, 0.2],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.1.2.0;`,
-      [0.1]
-    );
+    assertQueryResult(h, `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.0;`, [1]);
+    assertQueryResult(h, `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.1;`, [
+      ["a", "b", [0.1, 0.2]],
+    ]);
+    assertQueryResult(h, `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.1.2;`, [[0.1, 0.2]]);
+    assertQueryResult(h, `WITH A := (1, ('a', 'b', (0.1, 0.2)), 2, 3) SELECT A.1.2.0;`, [0.1]);
   });
 
   it("test_edgeql_expr_tuple_indirection_08", () => {
@@ -16657,27 +15177,11 @@ aa \\
                 ORDER BY _.1 DESC;
             `,
       [
-            [
-              1,
-              [66, 88],
-              2,
-            ],
-            [
-              1,
-              [66, 77],
-              2,
-            ],
-            [
-              1,
-              [55, 88],
-              2,
-            ],
-            [
-              1,
-              [55, 77],
-              2,
-            ],
-          ]
+        [1, [66, 88], 2],
+        [1, [66, 77], 2],
+        [1, [55, 88], 2],
+        [1, [55, 77], 2],
+      ],
     );
   });
 
@@ -16689,27 +15193,11 @@ aa \\
                 ORDER BY _.1.1 THEN _.1.0;
             `,
       [
-            [
-              1,
-              [55, 77],
-              2,
-            ],
-            [
-              1,
-              [66, 77],
-              2,
-            ],
-            [
-              1,
-              [55, 88],
-              2,
-            ],
-            [
-              1,
-              [66, 88],
-              2,
-            ],
-          ]
+        [1, [55, 77], 2],
+        [1, [66, 77], 2],
+        [1, [55, 88], 2],
+        [1, [66, 88], 2],
+      ],
     );
   });
 
@@ -16719,7 +15207,7 @@ aa \\
       `
                 SELECT [(0, 1)][0].1;
             `,
-      [1]
+      [1],
     );
   });
 
@@ -16729,165 +15217,101 @@ aa \\
       `
                 SELECT [(a := 1, b := 2)][0].b;
             `,
-      [2]
+      [2],
     );
   });
 
   it("test_edgeql_expr_tuple_indirection_12", () => {
-    assertQueryResult(
-      h,
-      `SELECT (name := 'foo', val := 42).0;`,
-      ["foo"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (name := 'foo', val := 42).1;`,
-      [42]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [(name := 'foo', val := 42)][0].name;`,
-      ["foo"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [(name := 'foo', val := 42)][0].1;`,
-      [42]
-    );
+    assertQueryResult(h, `SELECT (name := 'foo', val := 42).0;`, ["foo"]);
+    assertQueryResult(h, `SELECT (name := 'foo', val := 42).1;`, [42]);
+    assertQueryResult(h, `SELECT [(name := 'foo', val := 42)][0].name;`, ["foo"]);
+    assertQueryResult(h, `SELECT [(name := 'foo', val := 42)][0].1;`, [42]);
   });
 
   it("test_edgeql_expr_tuple_indirection_13", () => {
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1))));`,
-      [
-            {
-              "a": {
-                "b": {
-                  "c": {
-                    "e": 1,
-                  },
-                },
-              },
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1))));`, [
+      {
+        a: {
+          b: {
+            c: {
+              e: 1,
             },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).a;`,
-      [
-            {
-              "b": {
-                "c": {
-                  "e": 1,
-                },
-              },
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).0;`,
-      [
-            {
-              "b": {
-                "c": {
-                  "e": 1,
-                },
-              },
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).a.b;`,
-      [
-            {
-              "c": {
-                "e": 1,
-              },
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).0.0;`,
-      [
-            {
-              "c": {
-                "e": 1,
-              },
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).a.b.c;`,
-      [
-            {
-              "e": 1,
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).0.0.0;`,
-      [
-            {
-              "e": 1,
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).a.b.c.e;`,
-      [1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (a:=(b:=(c:=(e:=1)))).0.b.c.0;`,
-      [1]
-    );
+          },
+        },
+      },
+    ]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).a;`, [
+      {
+        b: {
+          c: {
+            e: 1,
+          },
+        },
+      },
+    ]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).0;`, [
+      {
+        b: {
+          c: {
+            e: 1,
+          },
+        },
+      },
+    ]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).a.b;`, [
+      {
+        c: {
+          e: 1,
+        },
+      },
+    ]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).0.0;`, [
+      {
+        c: {
+          e: 1,
+        },
+      },
+    ]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).a.b.c;`, [
+      {
+        e: 1,
+      },
+    ]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).0.0.0;`, [
+      {
+        e: 1,
+      },
+    ]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).a.b.c.e;`, [1]);
+    assertQueryResult(h, `SELECT (a:=(b:=(c:=(e:=1)))).0.b.c.0;`, [1]);
   });
 
   it("test_edgeql_expr_tuple_indirection_14", () => {
-    assertQueryResult(
-      h,
-      `SELECT [(a:=(b:=(c:=(e:=1))))][0].a;`,
-      [
-            {
-              "b": {
-                "c": {
-                  "e": 1,
-                },
-              },
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [(a:=(b:=(c:=(e:=1))))][0].0;`,
-      [
-            {
-              "b": {
-                "c": {
-                  "e": 1,
-                },
-              },
-            },
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT [(a:=(b:=(c:=(1,))))][0].0;`,
-      [
-            {
-              "b": {
-                "c": [1],
-              },
-            },
-          ]
-    );
+    assertQueryResult(h, `SELECT [(a:=(b:=(c:=(e:=1))))][0].a;`, [
+      {
+        b: {
+          c: {
+            e: 1,
+          },
+        },
+      },
+    ]);
+    assertQueryResult(h, `SELECT [(a:=(b:=(c:=(e:=1))))][0].0;`, [
+      {
+        b: {
+          c: {
+            e: 1,
+          },
+        },
+      },
+    ]);
+    assertQueryResult(h, `SELECT [(a:=(b:=(c:=(1,))))][0].0;`, [
+      {
+        b: {
+          c: [1],
+        },
+      },
+    ]);
   });
 
   it("test_edgeql_expr_range_empty_01", () => {
@@ -16899,7 +15323,7 @@ aa \\
                           <int32>1, <int32>1
                         ) = range(<int32>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -16912,7 +15336,7 @@ aa \\
                           inc_upper := true,
                       ) = range(<int32>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -16921,7 +15345,7 @@ aa \\
                       range(<int32>1, <int32>1, inc_upper := true)
                         = range(<int32>{}, empty := true);
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -16934,7 +15358,7 @@ aa \\
                         )
                       )
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -16947,7 +15371,7 @@ aa \\
                         )
                       )
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -16957,7 +15381,7 @@ aa \\
                           <int64>1, <int64>1
                         ) = range(<int64>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -16970,7 +15394,7 @@ aa \\
                           inc_upper := true,
                       ) = range(<int64>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -16979,7 +15403,7 @@ aa \\
                       range(<int64>1, <int64>1, inc_upper := true)
                         = range(<int64>{}, empty := true);
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -16992,7 +15416,7 @@ aa \\
                         )
                       )
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17005,7 +15429,7 @@ aa \\
                         )
                       )
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -17015,7 +15439,7 @@ aa \\
                           <float32>1, <float32>1
                         ) = range(<float32>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17028,7 +15452,7 @@ aa \\
                           inc_upper := true,
                       ) = range(<float32>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17037,7 +15461,7 @@ aa \\
                       range(<float32>1, <float32>1, inc_upper := true)
                         = range(<float32>{}, empty := true);
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -17050,7 +15474,7 @@ aa \\
                         )
                       )
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17063,7 +15487,7 @@ aa \\
                         )
                       )
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -17073,7 +15497,7 @@ aa \\
                           <float64>1, <float64>1
                         ) = range(<float64>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17086,7 +15510,7 @@ aa \\
                           inc_upper := true,
                       ) = range(<float64>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17095,7 +15519,7 @@ aa \\
                       range(<float64>1, <float64>1, inc_upper := true)
                         = range(<float64>{}, empty := true);
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -17108,7 +15532,7 @@ aa \\
                         )
                       )
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17121,7 +15545,7 @@ aa \\
                         )
                       )
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -17131,7 +15555,7 @@ aa \\
                           <decimal>1, <decimal>1
                         ) = range(<decimal>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17144,7 +15568,7 @@ aa \\
                           inc_upper := true,
                       ) = range(<decimal>{}, empty := true);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17153,7 +15577,7 @@ aa \\
                       range(<decimal>1, <decimal>1, inc_upper := true)
                         = range(<decimal>{}, empty := true);
                 `,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -17166,7 +15590,7 @@ aa \\
                         )
                       )
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17179,7 +15603,7 @@ aa \\
                         )
                       )
                 `,
-      [false]
+      [false],
     );
   });
 
@@ -17190,7 +15614,7 @@ aa \\
         `
                         select range(<int32>1, <int32>2, empty := true)
                     `,
-        [true]
+        [true],
       );
     }).toThrow(new RegExp("conflicting arguments in range constructor"));
     expect(() => {
@@ -17199,7 +15623,7 @@ aa \\
         `
                         select range(<int64>1, <int64>2, empty := true)
                     `,
-        [true]
+        [true],
       );
     }).toThrow(new RegExp("conflicting arguments in range constructor"));
     expect(() => {
@@ -17208,7 +15632,7 @@ aa \\
         `
                         select range(<float32>1, <float32>2, empty := true)
                     `,
-        [true]
+        [true],
       );
     }).toThrow(new RegExp("conflicting arguments in range constructor"));
     expect(() => {
@@ -17217,7 +15641,7 @@ aa \\
         `
                         select range(<float64>1, <float64>2, empty := true)
                     `,
-        [true]
+        [true],
       );
     }).toThrow(new RegExp("conflicting arguments in range constructor"));
     expect(() => {
@@ -17226,7 +15650,7 @@ aa \\
         `
                         select range(<decimal>1, <decimal>2, empty := true)
                     `,
-        [true]
+        [true],
       );
     }).toThrow(new RegExp("conflicting arguments in range constructor"));
   });
@@ -17239,7 +15663,7 @@ aa \\
                       multirange(<array<range<int32>>>[]) =
                         multirange([range(<int32>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17248,7 +15672,7 @@ aa \\
                       multirange(<array<range<int64>>>[]) =
                         multirange([range(<int64>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17257,7 +15681,7 @@ aa \\
                       multirange(<array<range<float32>>>[]) =
                         multirange([range(<float32>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17266,7 +15690,7 @@ aa \\
                       multirange(<array<range<float64>>>[]) =
                         multirange([range(<float64>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17275,7 +15699,7 @@ aa \\
                       multirange(<array<range<decimal>>>[]) =
                         multirange([range(<decimal>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17284,7 +15708,7 @@ aa \\
                       multirange(<array<range<datetime>>>[]) =
                         multirange([range(<datetime>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17293,7 +15717,7 @@ aa \\
                       multirange(<array<range<cal::local_datetime>>>[]) =
                         multirange([range(<cal::local_datetime>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -17302,7 +15726,7 @@ aa \\
                       multirange(<array<range<cal::local_date>>>[]) =
                         multirange([range(<cal::local_date>{}, empty := true)]);
                 `,
-      [true]
+      [true],
     );
   });
 
@@ -17613,638 +16037,420 @@ aa \\
   });
 
   it("test_edgeql_expr_range_03", () => {
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<int32>1, <int32>5));`,
-      [5]
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(multirange([range(<int32>1, <int32>5)]));`,
-      [5]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<int32>1, <int32>5));`, [5]);
+    assertQueryResult(h, `select range_get_upper(multirange([range(<int32>1, <int32>5)]));`, [5]);
     assertQueryResult(
       h,
       `select range_get_upper(range(<int32>1, <int32>5, inc_upper := true));`,
-      [6]
+      [6],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<int32>1, <int32>5, inc_upper := true)]));`,
-      [6]
+      [6],
     );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<int32>1));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(multirange([range(<int32>1)]));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<int32>1, <int32>5));`,
-      [1]
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(multirange([range(<int32>1, <int32>5)]));`,
-      [1]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<int32>1));`, []);
+    assertQueryResult(h, `select range_get_upper(multirange([range(<int32>1)]));`, []);
+    assertQueryResult(h, `select range_get_lower(range(<int32>1, <int32>5));`, [1]);
+    assertQueryResult(h, `select range_get_lower(multirange([range(<int32>1, <int32>5)]));`, [1]);
     assertQueryResult(
       h,
       `select range_get_lower(range(<int32>1, <int32>5, inc_lower := false));`,
-      [2]
+      [2],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<int32>1, <int32>5, inc_lower := false)]));`,
-      [2]
+      [2],
     );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<int32>{}, <int32>5));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(multirange([range(<int32>{}, <int32>5)]));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<int64>1, <int64>5));`,
-      [5]
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(multirange([range(<int64>1, <int64>5)]));`,
-      [5]
-    );
+    assertQueryResult(h, `select range_get_lower(range(<int32>{}, <int32>5));`, []);
+    assertQueryResult(h, `select range_get_lower(multirange([range(<int32>{}, <int32>5)]));`, []);
+    assertQueryResult(h, `select range_get_upper(range(<int64>1, <int64>5));`, [5]);
+    assertQueryResult(h, `select range_get_upper(multirange([range(<int64>1, <int64>5)]));`, [5]);
     assertQueryResult(
       h,
       `select range_get_upper(range(<int64>1, <int64>5, inc_upper := true));`,
-      [6]
+      [6],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<int64>1, <int64>5, inc_upper := true)]));`,
-      [6]
+      [6],
     );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<int64>1));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(multirange([range(<int64>1)]));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<int64>1, <int64>5));`,
-      [1]
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(multirange([range(<int64>1, <int64>5)]));`,
-      [1]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<int64>1));`, []);
+    assertQueryResult(h, `select range_get_upper(multirange([range(<int64>1)]));`, []);
+    assertQueryResult(h, `select range_get_lower(range(<int64>1, <int64>5));`, [1]);
+    assertQueryResult(h, `select range_get_lower(multirange([range(<int64>1, <int64>5)]));`, [1]);
     assertQueryResult(
       h,
       `select range_get_lower(range(<int64>1, <int64>5, inc_lower := false));`,
-      [2]
+      [2],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<int64>1, <int64>5, inc_lower := false)]));`,
-      [2]
+      [2],
     );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<int64>{}, <int64>5));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(multirange([range(<int64>{}, <int64>5)]));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<float32>1, <float32>5));`,
-      [5]
-    );
+    assertQueryResult(h, `select range_get_lower(range(<int64>{}, <int64>5));`, []);
+    assertQueryResult(h, `select range_get_lower(multirange([range(<int64>{}, <int64>5)]));`, []);
+    assertQueryResult(h, `select range_get_upper(range(<float32>1, <float32>5));`, [5]);
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<float32>1, <float32>5)]));`,
-      [5]
+      [5],
     );
     assertQueryResult(
       h,
       `select range_get_upper(range(<float32>1, <float32>5, inc_upper := true));`,
-      [5]
+      [5],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<float32>1, <float32>5, inc_upper := true)]));`,
-      [5]
+      [5],
     );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<float32>1));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(multirange([range(<float32>1)]));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<float32>1, <float32>5));`,
-      [1]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<float32>1));`, []);
+    assertQueryResult(h, `select range_get_upper(multirange([range(<float32>1)]));`, []);
+    assertQueryResult(h, `select range_get_lower(range(<float32>1, <float32>5));`, [1]);
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<float32>1, <float32>5)]));`,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `select range_get_lower(range(<float32>1, <float32>5, inc_lower := false));`,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<float32>1, <float32>5, inc_lower := false)]));`,
-      [1]
+      [1],
     );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<float32>{}, <float32>5));`,
-      []
-    );
+    assertQueryResult(h, `select range_get_lower(range(<float32>{}, <float32>5));`, []);
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<float32>{}, <float32>5)]));`,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<float64>1, <float64>5));`,
-      [5]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<float64>1, <float64>5));`, [5]);
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<float64>1, <float64>5)]));`,
-      [5]
+      [5],
     );
     assertQueryResult(
       h,
       `select range_get_upper(range(<float64>1, <float64>5, inc_upper := true));`,
-      [5]
+      [5],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<float64>1, <float64>5, inc_upper := true)]));`,
-      [5]
+      [5],
     );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<float64>1));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(multirange([range(<float64>1)]));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<float64>1, <float64>5));`,
-      [1]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<float64>1));`, []);
+    assertQueryResult(h, `select range_get_upper(multirange([range(<float64>1)]));`, []);
+    assertQueryResult(h, `select range_get_lower(range(<float64>1, <float64>5));`, [1]);
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<float64>1, <float64>5)]));`,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `select range_get_lower(range(<float64>1, <float64>5, inc_lower := false));`,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<float64>1, <float64>5, inc_lower := false)]));`,
-      [1]
+      [1],
     );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<float64>{}, <float64>5));`,
-      []
-    );
+    assertQueryResult(h, `select range_get_lower(range(<float64>{}, <float64>5));`, []);
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<float64>{}, <float64>5)]));`,
-      []
+      [],
     );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<decimal>1, <decimal>5));`,
-      [5]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<decimal>1, <decimal>5));`, [5]);
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<decimal>1, <decimal>5)]));`,
-      [5]
+      [5],
     );
     assertQueryResult(
       h,
       `select range_get_upper(range(<decimal>1, <decimal>5, inc_upper := true));`,
-      [5]
+      [5],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([range(<decimal>1, <decimal>5, inc_upper := true)]));`,
-      [5]
+      [5],
     );
-    assertQueryResult(
-      h,
-      `select range_get_upper(range(<decimal>1));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_upper(multirange([range(<decimal>1)]));`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<decimal>1, <decimal>5));`,
-      [1]
-    );
+    assertQueryResult(h, `select range_get_upper(range(<decimal>1));`, []);
+    assertQueryResult(h, `select range_get_upper(multirange([range(<decimal>1)]));`, []);
+    assertQueryResult(h, `select range_get_lower(range(<decimal>1, <decimal>5));`, [1]);
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<decimal>1, <decimal>5)]));`,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `select range_get_lower(range(<decimal>1, <decimal>5, inc_lower := false));`,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<decimal>1, <decimal>5, inc_lower := false)]));`,
-      [1]
+      [1],
     );
-    assertQueryResult(
-      h,
-      `select range_get_lower(range(<decimal>{}, <decimal>5));`,
-      []
-    );
+    assertQueryResult(h, `select range_get_lower(range(<decimal>{}, <decimal>5));`, []);
     assertQueryResult(
       h,
       `select range_get_lower(multirange([range(<decimal>{}, <decimal>5)]));`,
-      []
+      [],
     );
   });
 
   it("test_edgeql_expr_range_04", () => {
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<int32>1, <int32>5));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<int32>1, <int32>5));`, [false]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<int32>1, <int32>5)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(range(<int32>1, <int32>5, inc_upper := true));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<int32>1, <int32>5, inc_upper := true)]));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<int32>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(multirange([range(<int32>{})]));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<int32>1, <int32>5));`,
-      [true]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<int32>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_upper(multirange([range(<int32>{})]));`, [
+      false,
+    ]);
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<int32>1, <int32>5));`, [true]);
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<int32>1, <int32>5)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(range(<int32>1, <int32>5, inc_lower := false));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<int32>1, <int32>5, inc_lower := false)]));`,
-      [true]
+      [true],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<int32>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(multirange([range(<int32>{})]));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<int32>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_lower(multirange([range(<int32>{})]));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                         range(<int32>1, <int32>5));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<int64>1, <int64>5));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<int64>1, <int64>5));`, [false]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<int64>1, <int64>5)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(range(<int64>1, <int64>5, inc_upper := true));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<int64>1, <int64>5, inc_upper := true)]));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<int64>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(multirange([range(<int64>{})]));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<int64>1, <int64>5));`,
-      [true]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<int64>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_upper(multirange([range(<int64>{})]));`, [
+      false,
+    ]);
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<int64>1, <int64>5));`, [true]);
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<int64>1, <int64>5)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(range(<int64>1, <int64>5, inc_lower := false));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<int64>1, <int64>5, inc_lower := false)]));`,
-      [true]
+      [true],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<int64>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(multirange([range(<int64>{})]));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<int64>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_lower(multirange([range(<int64>{})]));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                         range(<int64>1, <int64>5));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<float32>1, <float32>5));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<float32>1, <float32>5));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<float32>1, <float32>5)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(range(<float32>1, <float32>5, inc_upper := true));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<float32>1, <float32>5, inc_upper := true)]));`,
-      [true]
+      [true],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<float32>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(multirange([range(<float32>{})]));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<float32>1, <float32>5));`,
-      [true]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<float32>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_upper(multirange([range(<float32>{})]));`, [
+      false,
+    ]);
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<float32>1, <float32>5));`, [true]);
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<float32>1, <float32>5)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(range(<float32>1, <float32>5, inc_lower := false));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<float32>1, <float32>5, inc_lower := false)]));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<float32>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(multirange([range(<float32>{})]));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<float32>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_lower(multirange([range(<float32>{})]));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                         range(<float32>1, <float32>5));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<float64>1, <float64>5));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<float64>1, <float64>5));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<float64>1, <float64>5)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(range(<float64>1, <float64>5, inc_upper := true));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<float64>1, <float64>5, inc_upper := true)]));`,
-      [true]
+      [true],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<float64>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(multirange([range(<float64>{})]));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<float64>1, <float64>5));`,
-      [true]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<float64>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_upper(multirange([range(<float64>{})]));`, [
+      false,
+    ]);
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<float64>1, <float64>5));`, [true]);
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<float64>1, <float64>5)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(range(<float64>1, <float64>5, inc_lower := false));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<float64>1, <float64>5, inc_lower := false)]));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<float64>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(multirange([range(<float64>{})]));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<float64>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_lower(multirange([range(<float64>{})]));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                         range(<float64>1, <float64>5));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<decimal>1, <decimal>5));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<decimal>1, <decimal>5));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<decimal>1, <decimal>5)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(range(<decimal>1, <decimal>5, inc_upper := true));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([range(<decimal>1, <decimal>5, inc_upper := true)]));`,
-      [true]
+      [true],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(range(<decimal>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_upper(multirange([range(<decimal>{})]));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<decimal>1, <decimal>5));`,
-      [true]
-    );
+    assertQueryResult(h, `select range_is_inclusive_upper(range(<decimal>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_upper(multirange([range(<decimal>{})]));`, [
+      false,
+    ]);
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<decimal>1, <decimal>5));`, [true]);
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<decimal>1, <decimal>5)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(range(<decimal>1, <decimal>5, inc_lower := false));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([range(<decimal>1, <decimal>5, inc_lower := false)]));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<decimal>{}));`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(multirange([range(<decimal>{})]));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<decimal>{}));`, [false]);
+    assertQueryResult(h, `select range_is_inclusive_lower(multirange([range(<decimal>{})]));`, [
+      false,
+    ]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                         range(<decimal>1, <decimal>5));`,
-      [false]
+      [false],
     );
   });
 
@@ -18255,7 +16461,7 @@ aa \\
                     select range(<int32>1, <int32>5) + range(<int32>2, <int32>7) =
                         range(<int32>1, <int32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18264,7 +16470,7 @@ aa \\
                         range(<int32>{}, <int32>5) + range(<int32>2, <int32>7) =
                         range(<int32>{}, <int32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18272,7 +16478,7 @@ aa \\
                     select range(<int32>2) + range(<int32>1, <int32>7) =
                         range(<int32>1);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18280,7 +16486,7 @@ aa \\
                     select range(<int64>1, <int64>5) + range(<int64>2, <int64>7) =
                         range(<int64>1, <int64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18289,7 +16495,7 @@ aa \\
                         range(<int64>{}, <int64>5) + range(<int64>2, <int64>7) =
                         range(<int64>{}, <int64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18297,7 +16503,7 @@ aa \\
                     select range(<int64>2) + range(<int64>1, <int64>7) =
                         range(<int64>1);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18305,7 +16511,7 @@ aa \\
                     select range(<float32>1, <float32>5) + range(<float32>2, <float32>7) =
                         range(<float32>1, <float32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18314,7 +16520,7 @@ aa \\
                         range(<float32>{}, <float32>5) + range(<float32>2, <float32>7) =
                         range(<float32>{}, <float32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18322,7 +16528,7 @@ aa \\
                     select range(<float32>2) + range(<float32>1, <float32>7) =
                         range(<float32>1);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18330,7 +16536,7 @@ aa \\
                     select range(<float64>1, <float64>5) + range(<float64>2, <float64>7) =
                         range(<float64>1, <float64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18339,7 +16545,7 @@ aa \\
                         range(<float64>{}, <float64>5) + range(<float64>2, <float64>7) =
                         range(<float64>{}, <float64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18347,7 +16553,7 @@ aa \\
                     select range(<float64>2) + range(<float64>1, <float64>7) =
                         range(<float64>1);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18355,7 +16561,7 @@ aa \\
                     select range(<decimal>1, <decimal>5) + range(<decimal>2, <decimal>7) =
                         range(<decimal>1, <decimal>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18364,7 +16570,7 @@ aa \\
                         range(<decimal>{}, <decimal>5) + range(<decimal>2, <decimal>7) =
                         range(<decimal>{}, <decimal>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18372,7 +16578,7 @@ aa \\
                     select range(<decimal>2) + range(<decimal>1, <decimal>7) =
                         range(<decimal>1);
                 `,
-      [true]
+      [true],
     );
   });
 
@@ -18383,7 +16589,7 @@ aa \\
                     select range(<int32>1, <int32>5) * range(<int32>2, <int32>7) =
                         range(<int32>2, <int32>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18392,7 +16598,7 @@ aa \\
                         range(<int32>{}, <int32>5) * range(<int32>2, <int32>7) =
                         range(<int32>2, <int32>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18400,7 +16606,7 @@ aa \\
                     select range(<int32>2) * range(<int32>1, <int32>7) =
                         range(<int32>2, <int32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18408,7 +16614,7 @@ aa \\
                     select range(<int64>1, <int64>5) * range(<int64>2, <int64>7) =
                         range(<int64>2, <int64>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18417,7 +16623,7 @@ aa \\
                         range(<int64>{}, <int64>5) * range(<int64>2, <int64>7) =
                         range(<int64>2, <int64>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18425,7 +16631,7 @@ aa \\
                     select range(<int64>2) * range(<int64>1, <int64>7) =
                         range(<int64>2, <int64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18433,7 +16639,7 @@ aa \\
                     select range(<float32>1, <float32>5) * range(<float32>2, <float32>7) =
                         range(<float32>2, <float32>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18442,7 +16648,7 @@ aa \\
                         range(<float32>{}, <float32>5) * range(<float32>2, <float32>7) =
                         range(<float32>2, <float32>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18450,7 +16656,7 @@ aa \\
                     select range(<float32>2) * range(<float32>1, <float32>7) =
                         range(<float32>2, <float32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18458,7 +16664,7 @@ aa \\
                     select range(<float64>1, <float64>5) * range(<float64>2, <float64>7) =
                         range(<float64>2, <float64>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18467,7 +16673,7 @@ aa \\
                         range(<float64>{}, <float64>5) * range(<float64>2, <float64>7) =
                         range(<float64>2, <float64>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18475,7 +16681,7 @@ aa \\
                     select range(<float64>2) * range(<float64>1, <float64>7) =
                         range(<float64>2, <float64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18483,7 +16689,7 @@ aa \\
                     select range(<decimal>1, <decimal>5) * range(<decimal>2, <decimal>7) =
                         range(<decimal>2, <decimal>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18492,7 +16698,7 @@ aa \\
                         range(<decimal>{}, <decimal>5) * range(<decimal>2, <decimal>7) =
                         range(<decimal>2, <decimal>5);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18500,7 +16706,7 @@ aa \\
                     select range(<decimal>2) * range(<decimal>1, <decimal>7) =
                         range(<decimal>2, <decimal>7);
                 `,
-      [true]
+      [true],
     );
   });
 
@@ -18511,7 +16717,7 @@ aa \\
                     select range(<int32>1, <int32>5) - range(<int32>2, <int32>7) =
                         range(<int32>1, <int32>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18520,7 +16726,7 @@ aa \\
                         range(<int32>{}, <int32>5) - range(<int32>2, <int32>7) =
                         range(<int32>{}, <int32>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18528,7 +16734,7 @@ aa \\
                     select range(<int32>2) - range(<int32>1, <int32>7) =
                         range(<int32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18536,7 +16742,7 @@ aa \\
                     select range(<int64>1, <int64>5) - range(<int64>2, <int64>7) =
                         range(<int64>1, <int64>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18545,7 +16751,7 @@ aa \\
                         range(<int64>{}, <int64>5) - range(<int64>2, <int64>7) =
                         range(<int64>{}, <int64>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18553,7 +16759,7 @@ aa \\
                     select range(<int64>2) - range(<int64>1, <int64>7) =
                         range(<int64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18561,7 +16767,7 @@ aa \\
                     select range(<float32>1, <float32>5) - range(<float32>2, <float32>7) =
                         range(<float32>1, <float32>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18570,7 +16776,7 @@ aa \\
                         range(<float32>{}, <float32>5) - range(<float32>2, <float32>7) =
                         range(<float32>{}, <float32>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18578,7 +16784,7 @@ aa \\
                     select range(<float32>2) - range(<float32>1, <float32>7) =
                         range(<float32>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18586,7 +16792,7 @@ aa \\
                     select range(<float64>1, <float64>5) - range(<float64>2, <float64>7) =
                         range(<float64>1, <float64>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18595,7 +16801,7 @@ aa \\
                         range(<float64>{}, <float64>5) - range(<float64>2, <float64>7) =
                         range(<float64>{}, <float64>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18603,7 +16809,7 @@ aa \\
                     select range(<float64>2) - range(<float64>1, <float64>7) =
                         range(<float64>7);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18611,7 +16817,7 @@ aa \\
                     select range(<decimal>1, <decimal>5) - range(<decimal>2, <decimal>7) =
                         range(<decimal>1, <decimal>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18620,7 +16826,7 @@ aa \\
                         range(<decimal>{}, <decimal>5) - range(<decimal>2, <decimal>7) =
                         range(<decimal>{}, <decimal>2);
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18628,7 +16834,7 @@ aa \\
                     select range(<decimal>2) - range(<decimal>1, <decimal>7) =
                         range(<decimal>7);
                 `,
-      [true]
+      [true],
     );
   });
 
@@ -18704,7 +16910,7 @@ aa \\
       `select <str>range_get_upper(
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z'));`,
-      ["2022-06-15T00:00:00+00:00"]
+      ["2022-06-15T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
@@ -18712,20 +16918,20 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_upper := true));`,
-      ["2022-06-15T00:00:00+00:00"]
+      ["2022-06-15T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_upper(
                     range(<datetime>'2022-06-06T00:00:00Z'));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_lower(
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z'));`,
-      ["2022-06-06T00:00:00+00:00"]
+      ["2022-06-06T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
@@ -18733,21 +16939,21 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_lower := false));`,
-      ["2022-06-06T00:00:00+00:00"]
+      ["2022-06-06T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_lower(
                     range(<datetime>{},
                           <datetime>'2022-06-15T00:00:00Z'));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_upper(multirange([
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z')]));`,
-      ["2022-06-15T00:00:00+00:00"]
+      ["2022-06-15T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
@@ -18755,20 +16961,20 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_upper := true)]));`,
-      ["2022-06-15T00:00:00+00:00"]
+      ["2022-06-15T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([
                     range(<datetime>'2022-06-06T00:00:00Z')]));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_lower(multirange([
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z')]));`,
-      ["2022-06-06T00:00:00+00:00"]
+      ["2022-06-06T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
@@ -18776,14 +16982,14 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_lower := false)]));`,
-      ["2022-06-06T00:00:00+00:00"]
+      ["2022-06-06T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([
                     range(<datetime>{},
                           <datetime>'2022-06-15T00:00:00Z')]));`,
-      []
+      [],
     );
   });
 
@@ -18793,7 +16999,7 @@ aa \\
       `select range_is_inclusive_upper(
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z'));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -18801,20 +17007,20 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_upper := true));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                     range(<datetime>{}));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z'));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18822,19 +17028,15 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_lower := false));`,
-      [false]
+      [false],
     );
-    assertQueryResult(
-      h,
-      `select range_is_inclusive_lower(range(<datetime>{}));`,
-      [false]
-    );
+    assertQueryResult(h, `select range_is_inclusive_lower(range(<datetime>{}));`, [false]);
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z')]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -18842,20 +17044,20 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_upper := true)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([
                     range(<datetime>{})]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z')]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18863,13 +17065,13 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z',
                           inc_lower := false)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([
                     range(<datetime>{})]));`,
-      [false]
+      [false],
     );
   });
 
@@ -18884,7 +17086,7 @@ aa \\
                     range(<datetime>'2022-06-06T00:00:00Z',
                           <datetime>'2022-06-17T00:00:00Z');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18897,7 +17099,7 @@ aa \\
                     range(<datetime>{},
                           <datetime>'2022-06-17T00:00:00Z');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18907,7 +17109,7 @@ aa \\
                              <datetime>'2022-06-17T00:00:00Z') =
                        range(<datetime>'2022-06-06T00:00:00Z');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -18922,7 +17124,7 @@ aa \\
                        range(<datetime>'2022-06-10T00:00:00Z',
                              <datetime>'2022-06-15T00:00:00Z');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18935,7 +17137,7 @@ aa \\
                     range(<datetime>'2022-06-10T00:00:00Z',
                           <datetime>'2022-06-15T00:00:00Z');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18946,7 +17148,7 @@ aa \\
                     range(<datetime>'2022-06-10T00:00:00Z',
                           <datetime>'2022-06-17T00:00:00Z');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -18961,7 +17163,7 @@ aa \\
                        range(<datetime>'2022-06-06T00:00:00Z',
                              <datetime>'2022-06-10T00:00:00Z');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18972,7 +17174,7 @@ aa \\
                           <datetime>'2022-06-17T00:00:00Z') =
                     range(<datetime>{}, <datetime>'2022-06-10T00:00:00Z');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -18982,7 +17184,7 @@ aa \\
                              <datetime>'2022-06-17T00:00:00Z') =
                        range(<datetime>'2022-06-17T00:00:00Z');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -19058,7 +17260,7 @@ aa \\
       `select <str>range_get_upper(
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00'));`,
-      ["2022-06-15T00:00:00"]
+      ["2022-06-15T00:00:00"],
     );
     assertQueryResult(
       h,
@@ -19066,20 +17268,20 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_upper := true));`,
-      ["2022-06-15T00:00:00"]
+      ["2022-06-15T00:00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_upper(
                     range(<cal::local_datetime>'2022-06-06T00:00:00'));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_lower(
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00'));`,
-      ["2022-06-06T00:00:00"]
+      ["2022-06-06T00:00:00"],
     );
     assertQueryResult(
       h,
@@ -19087,21 +17289,21 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_lower := false));`,
-      ["2022-06-06T00:00:00"]
+      ["2022-06-06T00:00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_lower(
                     range(<cal::local_datetime>{},
                           <cal::local_datetime>'2022-06-15T00:00:00'));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_upper(multirange([
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00')]));`,
-      ["2022-06-15T00:00:00"]
+      ["2022-06-15T00:00:00"],
     );
     assertQueryResult(
       h,
@@ -19109,20 +17311,20 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_upper := true)]));`,
-      ["2022-06-15T00:00:00"]
+      ["2022-06-15T00:00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([
                     range(<cal::local_datetime>'2022-06-06T00:00:00')]));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_lower(multirange([
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00')]));`,
-      ["2022-06-06T00:00:00"]
+      ["2022-06-06T00:00:00"],
     );
     assertQueryResult(
       h,
@@ -19130,14 +17332,14 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_lower := false)]));`,
-      ["2022-06-06T00:00:00"]
+      ["2022-06-06T00:00:00"],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([
                     range(<cal::local_datetime>{},
                           <cal::local_datetime>'2022-06-15T00:00:00')]));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -19147,7 +17349,7 @@ aa \\
                         <cal::local_datetime>'2025-01-11T00:00:00'
                     )
                 ) - <cal::date_duration>"1 day");`,
-      ["2025-01-10T00:00:00"]
+      ["2025-01-10T00:00:00"],
     );
     assertQueryResult(
       h,
@@ -19157,7 +17359,7 @@ aa \\
                         <cal::local_datetime>'2025-01-11T00:00:00'
                     )
                 ) - <cal::date_duration>"1 day");`,
-      ["2024-01-10T00:00:00"]
+      ["2024-01-10T00:00:00"],
     );
     assertQueryResult(
       h,
@@ -19167,7 +17369,7 @@ aa \\
                         <cal::local_datetime>'2025-01-11T00:00:00'
                     )])
                 ) - <cal::date_duration>"1 day");`,
-      ["2025-01-10T00:00:00"]
+      ["2025-01-10T00:00:00"],
     );
     assertQueryResult(
       h,
@@ -19177,7 +17379,7 @@ aa \\
                         <cal::local_datetime>'2025-01-11T00:00:00'
                     )])
                 ) - <cal::date_duration>"1 day");`,
-      ["2024-01-10T00:00:00"]
+      ["2024-01-10T00:00:00"],
     );
   });
 
@@ -19187,7 +17389,7 @@ aa \\
       `select range_is_inclusive_upper(
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00'));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -19195,20 +17397,20 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_upper := true));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                     range(<cal::local_datetime>{}));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00'));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19216,20 +17418,20 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_lower := false));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(
                     range(<cal::local_datetime>{}));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00')]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -19237,20 +17439,20 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_upper := true)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([
                     range(<cal::local_datetime>{})]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00')]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19258,13 +17460,13 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00',
                           inc_lower := false)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([
                     range(<cal::local_datetime>{})]));`,
-      [false]
+      [false],
     );
   });
 
@@ -19280,7 +17482,7 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-17T00:00:00');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19293,7 +17495,7 @@ aa \\
                     range(<cal::local_datetime>{},
                           <cal::local_datetime>'2022-06-17T00:00:00');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19304,7 +17506,7 @@ aa \\
                           <cal::local_datetime>'2022-06-17T00:00:00') =
                     range(<cal::local_datetime>'2022-06-06T00:00:00');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -19320,7 +17522,7 @@ aa \\
                     range(<cal::local_datetime>'2022-06-10T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19333,7 +17535,7 @@ aa \\
                     range(<cal::local_datetime>'2022-06-10T00:00:00',
                           <cal::local_datetime>'2022-06-15T00:00:00');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19345,7 +17547,7 @@ aa \\
                     range(<cal::local_datetime>'2022-06-10T00:00:00',
                           <cal::local_datetime>'2022-06-17T00:00:00');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -19361,7 +17563,7 @@ aa \\
                     range(<cal::local_datetime>'2022-06-06T00:00:00',
                           <cal::local_datetime>'2022-06-10T00:00:00');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19374,7 +17576,7 @@ aa \\
                     range(<cal::local_datetime>{},
                           <cal::local_datetime>'2022-06-10T00:00:00');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19385,7 +17587,7 @@ aa \\
                           <cal::local_datetime>'2022-06-17T00:00:00') =
                     range(<cal::local_datetime>'2022-06-17T00:00:00');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -19461,7 +17663,7 @@ aa \\
       `select <str>range_get_upper(
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15'));`,
-      ["2022-06-15"]
+      ["2022-06-15"],
     );
     assertQueryResult(
       h,
@@ -19469,20 +17671,20 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_upper := true));`,
-      ["2022-06-16"]
+      ["2022-06-16"],
     );
     assertQueryResult(
       h,
       `select range_get_upper(
                     range(<cal::local_date>'2022-06-06'));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_lower(
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15'));`,
-      ["2022-06-06"]
+      ["2022-06-06"],
     );
     assertQueryResult(
       h,
@@ -19490,21 +17692,21 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_lower := false));`,
-      ["2022-06-07"]
+      ["2022-06-07"],
     );
     assertQueryResult(
       h,
       `select range_get_lower(
                     range(<cal::local_date>{},
                           <cal::local_date>'2022-06-15'));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_upper(multirange([
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15')]));`,
-      ["2022-06-15"]
+      ["2022-06-15"],
     );
     assertQueryResult(
       h,
@@ -19512,20 +17714,20 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_upper := true)]));`,
-      ["2022-06-16"]
+      ["2022-06-16"],
     );
     assertQueryResult(
       h,
       `select range_get_upper(multirange([
                     range(<cal::local_date>'2022-06-06')]));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `select <str>range_get_lower(multirange([
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15')]));`,
-      ["2022-06-06"]
+      ["2022-06-06"],
     );
     assertQueryResult(
       h,
@@ -19533,14 +17735,14 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_lower := false)]));`,
-      ["2022-06-07"]
+      ["2022-06-07"],
     );
     assertQueryResult(
       h,
       `select range_get_lower(multirange([
                     range(<cal::local_date>{},
                           <cal::local_date>'2022-06-15')]));`,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -19550,7 +17752,7 @@ aa \\
                         <cal::local_date>'2025-01-11'
                     )
                 ) - <cal::date_duration>"1 day");`,
-      ["2025-01-10"]
+      ["2025-01-10"],
     );
     assertQueryResult(
       h,
@@ -19560,7 +17762,7 @@ aa \\
                         <cal::local_date>'2025-01-11'
                     )
                 ) - <cal::date_duration>"1 day");`,
-      ["2024-01-10"]
+      ["2024-01-10"],
     );
     assertQueryResult(
       h,
@@ -19570,7 +17772,7 @@ aa \\
                         <cal::local_date>'2025-01-11'
                     )])
                 ) - <cal::date_duration>"1 day");`,
-      ["2025-01-10"]
+      ["2025-01-10"],
     );
     assertQueryResult(
       h,
@@ -19580,7 +17782,7 @@ aa \\
                         <cal::local_date>'2025-01-11'
                     )])
                 ) - <cal::date_duration>"1 day");`,
-      ["2024-01-10"]
+      ["2024-01-10"],
     );
   });
 
@@ -19590,7 +17792,7 @@ aa \\
       `select range_is_inclusive_upper(
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15'));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -19598,20 +17800,20 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_upper := true));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(
                     range(<cal::local_date>{}));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15'));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19619,20 +17821,20 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_lower := false));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(
                     range(<cal::local_date>{}));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15')]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
@@ -19640,20 +17842,20 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_upper := true)]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_upper(multirange([
                     range(<cal::local_date>{})]));`,
-      [false]
+      [false],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15')]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19661,13 +17863,13 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-15',
                           inc_lower := false)]));`,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `select range_is_inclusive_lower(multirange([
                     range(<cal::local_date>{})]));`,
-      [false]
+      [false],
     );
   });
 
@@ -19683,7 +17885,7 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-17');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19696,7 +17898,7 @@ aa \\
                     range(<cal::local_date>{},
                           <cal::local_date>'2022-06-17');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19707,7 +17909,7 @@ aa \\
                           <cal::local_date>'2022-06-17') =
                     range(<cal::local_date>'2022-06-06');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -19723,7 +17925,7 @@ aa \\
                     range(<cal::local_date>'2022-06-10',
                           <cal::local_date>'2022-06-15');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19736,7 +17938,7 @@ aa \\
                     range(<cal::local_date>'2022-06-10',
                           <cal::local_date>'2022-06-15');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19748,7 +17950,7 @@ aa \\
                     range(<cal::local_date>'2022-06-10',
                           <cal::local_date>'2022-06-17');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -19764,7 +17966,7 @@ aa \\
                     range(<cal::local_date>'2022-06-06',
                           <cal::local_date>'2022-06-10');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19777,7 +17979,7 @@ aa \\
                     range(<cal::local_date>{},
                           <cal::local_date>'2022-06-10');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -19788,14 +17990,14 @@ aa \\
                           <cal::local_date>'2022-06-17') =
                     range(<cal::local_date>'2022-06-17');
             `,
-      [true]
+      [true],
     );
   });
 
   it("test_edgeql_expr_range_29", () => {
-    for (const [_, desc0] of (get_test_items({anyreal: true}) as any)) {
+    for (const [_, desc0] of get_test_items({ anyreal: true }) as any) {
       let t0 = desc0.typename;
-      for (const [_, desc1] of (get_test_items({anyreal: true}) as any)) {
+      for (const [_, desc1] of get_test_items({ anyreal: true }) as any) {
         let t1 = desc1.typename;
         let query = `
                     with r := range(2, 9)
@@ -19808,12 +18010,10 @@ aa \\
                         )
                     );
                 `;
-        if ([t0, t1].every((t) => ["decimal", "float32", "float64", "int32", "int64"].includes(t))) {
-          assertQueryResult(
-            h,
-            query,
-            [1]
-          );
+        if (
+          [t0, t1].every((t) => ["decimal", "float32", "float64", "int32", "int64"].includes(t))
+        ) {
+          assertQueryResult(h, query, [1]);
           query = `
                         with r := range(<${t1}>{}, empty := true)
                         select (
@@ -19830,18 +18030,10 @@ aa \\
                             ),
                         );
                     `;
-          assertQueryResult(
-            h,
-            query,
-            [
-                  [true, true, true],
-                ]
-          );
+          assertQueryResult(h, query, [[true, true, true]]);
         } else {
           expect(() => {
-            h.query(
-              query
-            );
+            h.query(query);
           }).toThrow(new RegExp("unsupported range subtype"));
         }
       }
@@ -19860,9 +18052,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19875,9 +18065,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19890,9 +18078,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19905,9 +18091,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19920,9 +18104,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19935,9 +18117,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19950,9 +18130,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19965,9 +18143,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19980,9 +18156,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -19995,9 +18169,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20010,9 +18182,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20025,9 +18195,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20040,9 +18208,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20055,9 +18221,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     expect(() => {
       h.query(
@@ -20069,7 +18233,7 @@ aa \\
                         r0 = r1,
                         multirange([r0]) = multirange([r1]),
                     );
-                `
+                `,
       );
     }).toThrow(new RegExp("cannot be applied to operands of type"));
     assertQueryResult(
@@ -20083,9 +18247,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20098,9 +18260,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20113,9 +18273,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20128,9 +18286,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     expect(() => {
       h.query(
@@ -20142,7 +18298,7 @@ aa \\
                         r0 = r1,
                         multirange([r0]) = multirange([r1]),
                     );
-                `
+                `,
       );
     }).toThrow(new RegExp("cannot be applied to operands of type"));
     assertQueryResult(
@@ -20156,9 +18312,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     assertQueryResult(
       h,
@@ -20171,9 +18325,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     expect(() => {
       h.query(
@@ -20185,7 +18337,7 @@ aa \\
                         r0 = r1,
                         multirange([r0]) = multirange([r1]),
                     );
-                `
+                `,
       );
     }).toThrow(new RegExp("cannot be applied to operands of type"));
     expect(() => {
@@ -20198,7 +18350,7 @@ aa \\
                         r0 = r1,
                         multirange([r0]) = multirange([r1]),
                     );
-                `
+                `,
       );
     }).toThrow(new RegExp("cannot be applied to operands of type"));
     assertQueryResult(
@@ -20212,9 +18364,7 @@ aa \\
                         multirange([r0]) = multirange([r1]),
                     );
                 `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
   });
 
@@ -20233,7 +18383,7 @@ aa \\
                     <multirange<cal::local_date>>r,
                 ))
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -20249,7 +18399,7 @@ aa \\
                     <multirange<cal::local_datetime>>r,
                 ))
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -20268,9 +18418,7 @@ aa \\
                     multirange([r0]) = multirange([r1])
                 )
             `,
-      [
-            [true, true],
-          ]
+      [[true, true]],
     );
     expect(() => {
       h.query(
@@ -20279,7 +18427,7 @@ aa \\
                     <cal::local_datetime>'2022-06-10T00:00:00',
                     <cal::local_datetime>'2022-06-17T00:00:00'
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
     expect(() => {
@@ -20289,7 +18437,7 @@ aa \\
                     <cal::local_date>'2022-06-10',
                     <cal::local_date>'2022-06-17'
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
     expect(() => {
@@ -20299,7 +18447,7 @@ aa \\
                     <datetime>'2022-06-10T00:00:00Z',
                     <datetime>'2022-06-17T00:00:00Z'
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
     expect(() => {
@@ -20309,7 +18457,7 @@ aa \\
                     <datetime>'2022-06-10T00:00:00Z',
                     <datetime>'2022-06-17T00:00:00Z'
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
     expect(() => {
@@ -20319,7 +18467,7 @@ aa \\
                     <cal::local_datetime>'2022-06-10T00:00:00',
                     <cal::local_datetime>'2022-06-17T00:00:00'
                 )])
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
     expect(() => {
@@ -20329,7 +18477,7 @@ aa \\
                     <cal::local_date>'2022-06-10',
                     <cal::local_date>'2022-06-17'
                 )])
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
     expect(() => {
@@ -20339,7 +18487,7 @@ aa \\
                     <datetime>'2022-06-10T00:00:00Z',
                     <datetime>'2022-06-17T00:00:00Z'
                 )])
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
     expect(() => {
@@ -20349,7 +18497,7 @@ aa \\
                     <datetime>'2022-06-10T00:00:00Z',
                     <datetime>'2022-06-17T00:00:00Z'
                 )])
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot cast"));
   });
@@ -20361,13 +18509,13 @@ aa \\
                 select <json>range(<int32>2, <int32>10);
             `,
       [
-            {
-              "lower": 2,
-              "inc_lower": true,
-              "upper": 10,
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: 2,
+          inc_lower: true,
+          upper: 10,
+          inc_upper: false,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -20375,13 +18523,13 @@ aa \\
                 select <json>range(<int64>2, <int64>10);
             `,
       [
-            {
-              "lower": 2,
-              "inc_lower": true,
-              "upper": 10,
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: 2,
+          inc_lower: true,
+          upper: 10,
+          inc_upper: false,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -20389,13 +18537,13 @@ aa \\
                 select <json>range(<float32>2.5, <float32>10.5);
             `,
       [
-            {
-              "lower": 2.5,
-              "inc_lower": true,
-              "upper": 10.5,
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: 2.5,
+          inc_lower: true,
+          upper: 10.5,
+          inc_upper: false,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -20403,13 +18551,13 @@ aa \\
                 select <json>range(<float64>2.5, <float64>10.5);
             `,
       [
-            {
-              "lower": 2.5,
-              "inc_lower": true,
-              "upper": 10.5,
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: 2.5,
+          inc_lower: true,
+          upper: 10.5,
+          inc_upper: false,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -20417,13 +18565,13 @@ aa \\
                 select <json>range(2.5n, 10.5n);
             `,
       [
-            {
-              "lower": 2.5,
-              "inc_lower": true,
-              "upper": 10.5,
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: 2.5,
+          inc_lower: true,
+          upper: 10.5,
+          inc_upper: false,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -20434,13 +18582,13 @@ aa \\
                 );
             `,
       [
-            {
-              "lower": "2022-06-10T13:00:00+00:00",
-              "inc_lower": true,
-              "upper": "2022-06-17T12:00:00+00:00",
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: "2022-06-10T13:00:00+00:00",
+          inc_lower: true,
+          upper: "2022-06-17T12:00:00+00:00",
+          inc_upper: false,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -20451,13 +18599,13 @@ aa \\
                 );
             `,
       [
-            {
-              "lower": "2022-06-10T13:00:00",
-              "inc_lower": true,
-              "upper": "2022-06-17T12:00:00",
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: "2022-06-10T13:00:00",
+          inc_lower: true,
+          upper: "2022-06-17T12:00:00",
+          inc_upper: false,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -20468,13 +18616,13 @@ aa \\
                 );
             `,
       [
-            {
-              "lower": "2022-06-10",
-              "inc_lower": true,
-              "upper": "2022-06-17",
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: "2022-06-10",
+          inc_lower: true,
+          upper: "2022-06-17",
+          inc_upper: false,
+        },
+      ],
     );
   });
 
@@ -20489,7 +18637,7 @@ aa \\
                     "inc_upper": false
                 }') = range(<int32>2, <int32>10);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20501,7 +18649,7 @@ aa \\
                     "inc_upper": false
                 }') = range(<int64>2, <int64>10);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20513,7 +18661,7 @@ aa \\
                     "inc_upper": false
                 }') = range(<float32>2.5, <float32>10.5);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20525,7 +18673,7 @@ aa \\
                     "inc_upper": false
                 }') = range(<float64>2.5, <float64>10.5);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20537,7 +18685,7 @@ aa \\
                     "inc_upper": false
                 }') = range(2.5n, 10.5n);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20552,7 +18700,7 @@ aa \\
                     <datetime>'2022-06-17T12:00:00Z'
                 );
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20567,7 +18715,7 @@ aa \\
                     <cal::local_datetime>'2022-06-17T12:00:00'
                 );
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20582,7 +18730,7 @@ aa \\
                     <cal::local_date>'2022-06-17'
                 );
             `,
-      [true]
+      [true],
     );
     expect(() => {
       h.query(
@@ -20594,7 +18742,7 @@ aa \\
                     "inc_upper": false,
                     "empty": true
                 }')
-            `
+            `,
       );
     }).toThrow(new RegExp("conflicting arguments in range constructor"));
     expect(() => {
@@ -20608,7 +18756,7 @@ aa \\
                     "foo": "junk",
                     "bar": "huh?"
                 }')
-            `
+            `,
       );
     }).toThrow(new RegExp("unexpected keys: bar, foo"));
   });
@@ -20624,7 +18772,7 @@ aa \\
                     "inc_upper": true
                 }') = range(2, 11);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20636,7 +18784,7 @@ aa \\
                     "inc_upper": false
                 }') = range(<int64>{}, 10);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -20647,7 +18795,7 @@ aa \\
                     "inc_upper": false
                 }') = range(2);
             `,
-      [true]
+      [true],
     );
     expect(() => {
       h.script(
@@ -20658,9 +18806,9 @@ aa \\
                     "upper": 2147483648,
                     "inc_upper": false
                 }');
-            `
+            `,
       );
-    }).toThrow(new RegExp("\"2147483648\" is out of range for type std::int32"));
+    }).toThrow(new RegExp('"2147483648" is out of range for type std::int32'));
     expect(() => {
       h.script(
         `
@@ -20670,9 +18818,9 @@ aa \\
                     "upper": 9223372036854775808,
                     "inc_upper": false
                 }');
-            `
+            `,
       );
-    }).toThrow(new RegExp("\"9223372036854775808\" is out of range for type std::int64"));
+    }).toThrow(new RegExp('"9223372036854775808" is out of range for type std::int64'));
     expect(() => {
       h.script(
         `
@@ -20682,7 +18830,7 @@ aa \\
                     "upper": 1e100,
                     "inc_upper": false
                 }');
-            `
+            `,
       );
     }).toThrow(new RegExp(".+ is out of range for type std::float32"));
     expect(() => {
@@ -20694,7 +18842,7 @@ aa \\
                     "upper": 1e500,
                     "inc_upper": false
                 }');
-            `
+            `,
       );
     }).toThrow(new RegExp(".+ is out of range for type std::float64"));
     expect(() => {
@@ -20706,7 +18854,7 @@ aa \\
                     "upper": 10,
                     "inc_upper": false
                 }');
-            `
+            `,
       );
     }).toThrow(new RegExp("expected JSON number or null; got JSON string"));
     expect(() => {
@@ -20718,9 +18866,9 @@ aa \\
                     "upper": 10,
                     "inc_upper": false
                 }');
-            `
+            `,
       );
-    }).toThrow(new RegExp("invalid input syntax for type std::int64: \"2.5\""));
+    }).toThrow(new RegExp('invalid input syntax for type std::int64: "2.5"'));
     expect(() => {
       h.script(
         `
@@ -20730,9 +18878,11 @@ aa \\
                     "upper": 10,
                     "inc_upper": null
                 }');
-            `
+            `,
       );
-    }).toThrow(new RegExp("JSON object representing a range must include an 'inc_upper' boolean property"));
+    }).toThrow(
+      new RegExp("JSON object representing a range must include an 'inc_upper' boolean property"),
+    );
     expect(() => {
       h.script(
         `
@@ -20741,42 +18891,46 @@ aa \\
                     "upper": 10,
                     "inc_upper": false
                 }');
-            `
+            `,
       );
-    }).toThrow(new RegExp("JSON object representing a range must include an 'inc_lower' boolean property"));
+    }).toThrow(
+      new RegExp("JSON object representing a range must include an 'inc_lower' boolean property"),
+    );
     expect(() => {
       h.script(
         `
                 select <range<int64>>to_json('["bad", null]');
-            `
+            `,
       );
     }).toThrow(new RegExp("expected JSON object or null; got JSON array"));
     expect(() => {
       h.script(
         `
                 select <range<int64>>to_json('{"bad": null}');
-            `
+            `,
       );
-    }).toThrow(new RegExp("JSON object representing a range must include an 'inc_lower' boolean property"));
+    }).toThrow(
+      new RegExp("JSON object representing a range must include an 'inc_lower' boolean property"),
+    );
     expect(() => {
       h.script(
         `
                 select <range<int64>>to_json('"bad"');
-            `
+            `,
       );
     }).toThrow(new RegExp("expected JSON object or null; got JSON string"));
     expect(() => {
       h.script(
         `
                 select <range<int64>>to_json('1312');
-            `
+            `,
       );
     }).toThrow(new RegExp("expected JSON object or null; got JSON number"));
     expect(() => {
       h.script(
         `
                 select <range<int64>>to_json('true');
-            `
+            `,
       );
     }).toThrow(new RegExp("expected JSON object or null; got JSON boolean"));
     expect(() => {
@@ -20788,7 +18942,7 @@ aa \\
                     "upper": "2022-06-17",
                     "inc_upper": false
                 }');
-            `
+            `,
       );
     }).toThrow(new RegExp("invalid input syntax for type std::cal::local_date: '2022.06.10'"));
     expect(() => {
@@ -20800,7 +18954,7 @@ aa \\
                     "upper": "12022-06-17",
                     "inc_upper": false
                 }');
-            `
+            `,
       );
     }).toThrow(new RegExp("invalid input syntax for type std::cal::local_date: '12022-06-17'"));
     assertQueryResult(
@@ -20810,7 +18964,7 @@ aa \\
                     "empty": true
                 }'))
             `,
-      [true]
+      [true],
     );
   });
 
@@ -20827,24 +18981,24 @@ aa \\
                 };
             `,
       [
-            {
-              "int": 42,
-              "range0": {
-                "lower": 2,
-                "inc_lower": true,
-                "upper": 10,
-                "inc_upper": false,
-              },
-              "nested": {
-                "range1": {
-                  "lower": 5,
-                  "inc_lower": true,
-                  "upper": null,
-                  "inc_upper": false,
-                },
-              },
+        {
+          int: 42,
+          range0: {
+            lower: 2,
+            inc_lower: true,
+            upper: 10,
+            inc_upper: false,
+          },
+          nested: {
+            range1: {
+              lower: 5,
+              inc_lower: true,
+              upper: null,
+              inc_upper: false,
             },
-          ]
+          },
+        },
+      ],
     );
   });
 
@@ -20853,35 +19007,35 @@ aa \\
       h.script(
         `
                     select range(<int32>5, <int32>1);
-                `
+                `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
     expect(() => {
       h.script(
         `
                     select range(<int64>5, <int64>1);
-                `
+                `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
     expect(() => {
       h.script(
         `
                     select range(<float32>5, <float32>1);
-                `
+                `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
     expect(() => {
       h.script(
         `
                     select range(<float64>5, <float64>1);
-                `
+                `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
     expect(() => {
       h.script(
         `
                     select range(<decimal>5, <decimal>1);
-                `
+                `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
     expect(() => {
@@ -20889,7 +19043,7 @@ aa \\
         `
                 select range(<datetime>'2022-07-09T23:56:17Z',
                              <datetime>'2022-07-08T23:56:17Z');
-            `
+            `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
     expect(() => {
@@ -20897,7 +19051,7 @@ aa \\
         `
                 select range(<cal::local_datetime>'2022-07-09T23:56:17',
                              <cal::local_datetime>'2022-07-08T23:56:17');
-            `
+            `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
     expect(() => {
@@ -20905,7 +19059,7 @@ aa \\
         `
                 select range(<cal::local_date>'2022-07-09',
                              <cal::local_date>'2022-07-08');
-            `
+            `,
       );
     }).toThrow(new RegExp("range lower bound must be"));
   });
@@ -20916,21 +19070,21 @@ aa \\
       `
                 select range(<int64>{}, empty:=<optional bool>$0);
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select range(<int64>{}, inc_lower:=<optional bool>$0);
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select range(<int64>{}, inc_upper:=<optional bool>$0);
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -20938,7 +19092,7 @@ aa \\
                 select range(
                     <int64>{}, inc_upper:=<optional bool>$0, empty := true);
             `,
-      []
+      [],
     );
   });
 
@@ -20958,13 +19112,13 @@ aa \\
             select <range<int64>>x
             `,
       [
-            {
-              "lower": 1,
-              "inc_lower": true,
-              "upper": 2,
-              "inc_upper": false,
-            },
-          ]
+        {
+          lower: 1,
+          inc_lower: true,
+          upper: 2,
+          inc_upper: false,
+        },
+      ],
     );
   });
 
@@ -20978,21 +19132,21 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": 2,
-                "inc_lower": true,
-                "upper": 10,
-                "inc_upper": false,
-              },
-              {
-                "lower": 12,
-                "inc_lower": true,
-                "upper": 20,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: 2,
+            inc_lower: true,
+            upper: 10,
+            inc_upper: false,
+          },
+          {
+            lower: 12,
+            inc_lower: true,
+            upper: 20,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21003,21 +19157,21 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": 2,
-                "inc_lower": true,
-                "upper": 10,
-                "inc_upper": false,
-              },
-              {
-                "lower": 12,
-                "inc_lower": true,
-                "upper": 20,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: 2,
+            inc_lower: true,
+            upper: 10,
+            inc_upper: false,
+          },
+          {
+            lower: 12,
+            inc_lower: true,
+            upper: 20,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21028,21 +19182,21 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": -2.5,
-                "inc_lower": true,
-                "upper": 0.5,
-                "inc_upper": false,
-              },
-              {
-                "lower": 2.5,
-                "inc_lower": true,
-                "upper": 10.5,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: -2.5,
+            inc_lower: true,
+            upper: 0.5,
+            inc_upper: false,
+          },
+          {
+            lower: 2.5,
+            inc_lower: true,
+            upper: 10.5,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21053,21 +19207,21 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": -2.5,
-                "inc_lower": true,
-                "upper": 0.5,
-                "inc_upper": false,
-              },
-              {
-                "lower": 2.5,
-                "inc_lower": true,
-                "upper": 10.5,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: -2.5,
+            inc_lower: true,
+            upper: 0.5,
+            inc_upper: false,
+          },
+          {
+            lower: 2.5,
+            inc_lower: true,
+            upper: 10.5,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21078,21 +19232,21 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": -2.5,
-                "inc_lower": true,
-                "upper": 0.5,
-                "inc_upper": false,
-              },
-              {
-                "lower": 2.5,
-                "inc_lower": true,
-                "upper": 10.5,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: -2.5,
+            inc_lower: true,
+            upper: 0.5,
+            inc_upper: false,
+          },
+          {
+            lower: 2.5,
+            inc_lower: true,
+            upper: 10.5,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21109,21 +19263,21 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": "2021-06-10T13:00:00+00:00",
-                "inc_lower": true,
-                "upper": "2021-06-17T12:00:00+00:00",
-                "inc_upper": false,
-              },
-              {
-                "lower": "2022-06-10T13:00:00+00:00",
-                "inc_lower": true,
-                "upper": "2022-06-17T12:00:00+00:00",
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: "2021-06-10T13:00:00+00:00",
+            inc_lower: true,
+            upper: "2021-06-17T12:00:00+00:00",
+            inc_upper: false,
+          },
+          {
+            lower: "2022-06-10T13:00:00+00:00",
+            inc_lower: true,
+            upper: "2022-06-17T12:00:00+00:00",
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21140,21 +19294,21 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": "2021-06-10T13:00:00",
-                "inc_lower": true,
-                "upper": "2021-06-17T12:00:00",
-                "inc_upper": false,
-              },
-              {
-                "lower": "2022-06-10T13:00:00",
-                "inc_lower": true,
-                "upper": "2022-06-17T12:00:00",
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: "2021-06-10T13:00:00",
+            inc_lower: true,
+            upper: "2021-06-17T12:00:00",
+            inc_upper: false,
+          },
+          {
+            lower: "2022-06-10T13:00:00",
+            inc_lower: true,
+            upper: "2022-06-17T12:00:00",
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21171,30 +19325,28 @@ aa \\
                 ]);
             `,
       [
-            [
-              {
-                "lower": "2021-06-10",
-                "inc_lower": true,
-                "upper": "2021-06-17",
-                "inc_upper": false,
-              },
-              {
-                "lower": "2022-06-10",
-                "inc_lower": true,
-                "upper": "2022-06-17",
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: "2021-06-10",
+            inc_lower: true,
+            upper: "2021-06-17",
+            inc_upper: false,
+          },
+          {
+            lower: "2022-06-10",
+            inc_lower: true,
+            upper: "2022-06-17",
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
       `
                 select <json>multirange(<array<range<int64>>>[]);
             `,
-      [
-            [],
-          ]
+      [[]],
     );
   });
 
@@ -21220,21 +19372,21 @@ aa \\
                 ');
             `,
       [
-            [
-              {
-                "lower": 2,
-                "inc_lower": true,
-                "upper": 10,
-                "inc_upper": false,
-              },
-              {
-                "lower": 12,
-                "inc_lower": true,
-                "upper": 20,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: 2,
+            inc_lower: true,
+            upper: 10,
+            inc_upper: false,
+          },
+          {
+            lower: 12,
+            inc_lower: true,
+            upper: 20,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21246,21 +19398,21 @@ aa \\
                 select <multirange<float64>>x;
             `,
       [
-            [
-              {
-                "lower": 2,
-                "inc_lower": true,
-                "upper": 10,
-                "inc_upper": false,
-              },
-              {
-                "lower": 12,
-                "inc_lower": true,
-                "upper": 20,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: 2,
+            inc_lower: true,
+            upper: 10,
+            inc_upper: false,
+          },
+          {
+            lower: 12,
+            inc_lower: true,
+            upper: 20,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -21268,14 +19420,14 @@ aa \\
                 with x := <json>[range(<int64>{}, empty:=True)]
                 select range_is_empty(<multirange<int64>>x);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `
                 select range_is_empty(<multirange<int64>>to_json('[]'));
             `,
-      [true]
+      [true],
     );
   });
 
@@ -21296,40 +19448,40 @@ aa \\
                 };
             `,
       [
+        {
+          int: 42,
+          multirange0: [
             {
-              "int": 42,
-              "multirange0": [
-                {
-                  "lower": 2,
-                  "inc_lower": true,
-                  "upper": 10,
-                  "inc_upper": false,
-                },
-                {
-                  "lower": 12,
-                  "inc_lower": true,
-                  "upper": 20,
-                  "inc_upper": false,
-                },
-              ],
-              "nested": {
-                "multirange1": [
-                  {
-                    "lower": 0,
-                    "inc_lower": true,
-                    "upper": 1,
-                    "inc_upper": false,
-                  },
-                  {
-                    "lower": 5,
-                    "inc_lower": true,
-                    "upper": null,
-                    "inc_upper": false,
-                  },
-                ],
-              },
+              lower: 2,
+              inc_lower: true,
+              upper: 10,
+              inc_upper: false,
             },
-          ]
+            {
+              lower: 12,
+              inc_lower: true,
+              upper: 20,
+              inc_upper: false,
+            },
+          ],
+          nested: {
+            multirange1: [
+              {
+                lower: 0,
+                inc_lower: true,
+                upper: 1,
+                inc_upper: false,
+              },
+              {
+                lower: 5,
+                inc_lower: true,
+                upper: null,
+                inc_upper: false,
+              },
+            ],
+          },
+        },
+      ],
     );
   });
 
@@ -21347,7 +19499,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) + r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21362,7 +19514,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) + r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21377,7 +19529,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) + r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21392,7 +19544,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) + r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21407,7 +19559,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) + r3
                 `,
-      [true]
+      [true],
     );
   });
 
@@ -21428,7 +19580,7 @@ aa \\
                             range(<int32>6, <int32>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21445,7 +19597,7 @@ aa \\
                             range(<int32>5, <int32>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21463,7 +19615,7 @@ aa \\
                             range(<int64>6, <int64>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21480,7 +19632,7 @@ aa \\
                             range(<int64>5, <int64>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21498,7 +19650,7 @@ aa \\
                             range(<float32>6, <float32>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21515,7 +19667,7 @@ aa \\
                             range(<float32>5, <float32>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21533,7 +19685,7 @@ aa \\
                             range(<float64>6, <float64>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21550,7 +19702,7 @@ aa \\
                             range(<float64>5, <float64>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21568,7 +19720,7 @@ aa \\
                             range(<decimal>6, <decimal>7),
                         ])
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21585,7 +19737,7 @@ aa \\
                             range(<decimal>5, <decimal>7),
                         ])
                 `,
-      [true]
+      [true],
     );
   });
 
@@ -21603,7 +19755,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) - r2 - r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21618,7 +19770,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) - r2 - r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21633,7 +19785,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) - r2 - r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21648,7 +19800,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) - r2 - r3
                 `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21663,7 +19815,7 @@ aa \\
                         =
                         multirange([r0, r1, r2]) - r2 - r3
                 `,
-      [true]
+      [true],
     );
   });
 
@@ -21684,7 +19836,7 @@ aa \\
                     =
                     multirange([r0, r1, r2]) + r3
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21702,7 +19854,7 @@ aa \\
                     =
                     multirange([r0, r1, r2]) + r3
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21720,7 +19872,7 @@ aa \\
                     =
                     multirange([r0, r1, r2]) + r3
             `,
-      [true]
+      [true],
     );
   });
 
@@ -21746,7 +19898,7 @@ aa \\
                               <datetime>'2022-06-17T00:00:00Z'),
                     ])
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21768,7 +19920,7 @@ aa \\
                               <datetime>'2022-06-15T00:00:00Z'),
                     ])
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21791,7 +19943,7 @@ aa \\
                               <cal::local_datetime>'2022-06-17T00:00:00'),
                     ])
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21813,7 +19965,7 @@ aa \\
                               <cal::local_datetime>'2022-06-15T00:00:00'),
                     ])
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21836,7 +19988,7 @@ aa \\
                               <cal::local_date>'2022-06-17'),
                     ])
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21858,7 +20010,7 @@ aa \\
                               <cal::local_date>'2022-06-15'),
                     ])
             `,
-      [true]
+      [true],
     );
   });
 
@@ -21879,7 +20031,7 @@ aa \\
                     =
                     multirange([r0, r1]) - r2 - r3
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21897,7 +20049,7 @@ aa \\
                     =
                     multirange([r0, r1]) - r2 - r3
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -21915,7 +20067,7 @@ aa \\
                     =
                     multirange([r0, r1]) - r2 - r3
             `,
-      [true]
+      [true],
     );
   });
 
@@ -21929,30 +20081,30 @@ aa \\
                 range(1),
             );`,
       [
-            [
-              {
-                "empty": true,
-              },
-              {
-                "lower": 1,
-                "inc_lower": true,
-                "upper": 4,
-                "inc_upper": false,
-              },
-              {
-                "lower": null,
-                "inc_lower": false,
-                "upper": 4,
-                "inc_upper": false,
-              },
-              {
-                "lower": 1,
-                "inc_lower": true,
-                "upper": null,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            empty: true,
+          },
+          {
+            lower: 1,
+            inc_lower: true,
+            upper: 4,
+            inc_upper: false,
+          },
+          {
+            lower: null,
+            inc_lower: false,
+            upper: 4,
+            inc_upper: false,
+          },
+          {
+            lower: 1,
+            inc_lower: true,
+            upper: null,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
   });
 
@@ -21966,30 +20118,30 @@ aa \\
                 range(1.1, inc_lower := false),
             );`,
       [
-            [
-              {
-                "empty": true,
-              },
-              {
-                "lower": 1.1,
-                "inc_lower": true,
-                "upper": 4.2,
-                "inc_upper": false,
-              },
-              {
-                "lower": null,
-                "inc_lower": false,
-                "upper": 4.2,
-                "inc_upper": true,
-              },
-              {
-                "lower": 1.1,
-                "inc_lower": false,
-                "upper": null,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            empty: true,
+          },
+          {
+            lower: 1.1,
+            inc_lower: true,
+            upper: 4.2,
+            inc_upper: false,
+          },
+          {
+            lower: null,
+            inc_lower: false,
+            upper: 4.2,
+            inc_upper: true,
+          },
+          {
+            lower: 1.1,
+            inc_lower: false,
+            upper: null,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
   });
 
@@ -22007,30 +20159,30 @@ aa \\
                       inc_lower := false),
             );`,
       [
-            [
-              {
-                "empty": true,
-              },
-              {
-                "lower": "2022-06-06",
-                "inc_lower": true,
-                "upper": "2022-06-10",
-                "inc_upper": false,
-              },
-              {
-                "lower": null,
-                "inc_lower": false,
-                "upper": "2022-06-08T00:00:00",
-                "inc_upper": true,
-              },
-              {
-                "lower": "2022-06-10T00:00:00+00:00",
-                "inc_lower": false,
-                "upper": null,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            empty: true,
+          },
+          {
+            lower: "2022-06-06",
+            inc_lower: true,
+            upper: "2022-06-10",
+            inc_upper: false,
+          },
+          {
+            lower: null,
+            inc_lower: false,
+            upper: "2022-06-08T00:00:00",
+            inc_upper: true,
+          },
+          {
+            lower: "2022-06-10T00:00:00+00:00",
+            inc_lower: false,
+            upper: null,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
   });
 
@@ -22043,27 +20195,27 @@ aa \\
                 range(10),
             ]);`,
       [
-            [
-              {
-                "lower": null,
-                "inc_lower": false,
-                "upper": 0,
-                "inc_upper": false,
-              },
-              {
-                "lower": 2,
-                "inc_lower": true,
-                "upper": 5,
-                "inc_upper": false,
-              },
-              {
-                "lower": 10,
-                "inc_lower": true,
-                "upper": null,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: null,
+            inc_lower: false,
+            upper: 0,
+            inc_upper: false,
+          },
+          {
+            lower: 2,
+            inc_lower: true,
+            upper: 5,
+            inc_upper: false,
+          },
+          {
+            lower: 10,
+            inc_lower: true,
+            upper: null,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
   });
 
@@ -22076,27 +20228,27 @@ aa \\
                 range(10.5, inc_lower := false),
             ]);`,
       [
-            [
-              {
-                "lower": null,
-                "inc_lower": false,
-                "upper": 0,
-                "inc_upper": true,
-              },
-              {
-                "lower": 2.1,
-                "inc_lower": true,
-                "upper": 5,
-                "inc_upper": false,
-              },
-              {
-                "lower": 10.5,
-                "inc_lower": false,
-                "upper": null,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: null,
+            inc_lower: false,
+            upper: 0,
+            inc_upper: true,
+          },
+          {
+            lower: 2.1,
+            inc_lower: true,
+            upper: 5,
+            inc_upper: false,
+          },
+          {
+            lower: 10.5,
+            inc_lower: false,
+            upper: null,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
   });
 
@@ -22111,27 +20263,27 @@ aa \\
                 range(<cal::local_date>'2022-06-10'),
             ]);`,
       [
-            [
-              {
-                "lower": null,
-                "inc_lower": false,
-                "upper": "2022-06-01",
-                "inc_upper": false,
-              },
-              {
-                "lower": "2022-06-02",
-                "inc_lower": true,
-                "upper": "2022-06-05",
-                "inc_upper": false,
-              },
-              {
-                "lower": "2022-06-10",
-                "inc_lower": true,
-                "upper": null,
-                "inc_upper": false,
-              },
-            ],
-          ]
+        [
+          {
+            lower: null,
+            inc_lower: false,
+            upper: "2022-06-01",
+            inc_upper: false,
+          },
+          {
+            lower: "2022-06-02",
+            inc_lower: true,
+            upper: "2022-06-05",
+            inc_upper: false,
+          },
+          {
+            lower: "2022-06-10",
+            inc_lower: true,
+            upper: null,
+            inc_upper: false,
+          },
+        ],
+      ],
     );
   });
 
@@ -22142,143 +20294,67 @@ aa \\
                 SELECT Text {
                     id := <uuid>'77841036-8e35-49ce-b509-2cafa0c25c4f'
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot assign to property 'id'"));
   });
 
   it("test_edgeql_expr_if_else_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT IF true THEN 'yes' ELSE 'no';`,
-      ["yes"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT IF false THEN 'yes' ELSE 'no';`,
-      ["no"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'yes' IF True ELSE 'no';`,
-      ["yes"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'yes' IF 1=1 ELSE 'no';`,
-      ["yes"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'yes' IF 1=0 ELSE 'no';`,
-      ["no"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 's1' IF 1=0 ELSE 's2' IF 2=2 ELSE 's3';`,
-      ["s2"]
-    );
+    assertQueryResult(h, `SELECT IF true THEN 'yes' ELSE 'no';`, ["yes"]);
+    assertQueryResult(h, `SELECT IF false THEN 'yes' ELSE 'no';`, ["no"]);
+    assertQueryResult(h, `SELECT 'yes' IF True ELSE 'no';`, ["yes"]);
+    assertQueryResult(h, `SELECT 'yes' IF 1=1 ELSE 'no';`, ["yes"]);
+    assertQueryResult(h, `SELECT 'yes' IF 1=0 ELSE 'no';`, ["no"]);
+    assertQueryResult(h, `SELECT 's1' IF 1=0 ELSE 's2' IF 2=2 ELSE 's3';`, ["s2"]);
   });
 
   it("test_edgeql_expr_if_else_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT 'yes' IF True ELSE {'no', 'or', 'maybe'};`,
-      ["yes"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'yes' IF False ELSE {'no', 'or', 'maybe'};`,
-      ["no", "or", "maybe"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {'maybe', 'yes'} IF True ELSE {'no', 'or'};`,
-      ["maybe", "yes"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {'maybe', 'yes'} IF False ELSE {'no', 'or'};`,
-      ["no", "or"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {'maybe', 'yes'} IF True ELSE 'no';`,
-      ["maybe", "yes"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {'maybe', 'yes'} IF False ELSE 'no';`,
-      ["no"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'yes' IF {True, False} ELSE 'no';`,
-      ["yes", "no"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 'yes' IF {True, False} ELSE {'no', 'or', 'maybe'};`,
-      ["yes", "no", "or", "maybe"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {'maybe', 'yes'} IF {True, False} ELSE {'no', 'or'};`,
-      ["maybe", "yes", "no", "or"]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {'maybe', 'yes'} IF {True, False} ELSE 'no';`,
-      ["maybe", "yes", "no"]
-    );
+    assertQueryResult(h, `SELECT 'yes' IF True ELSE {'no', 'or', 'maybe'};`, ["yes"]);
+    assertQueryResult(h, `SELECT 'yes' IF False ELSE {'no', 'or', 'maybe'};`, [
+      "no",
+      "or",
+      "maybe",
+    ]);
+    assertQueryResult(h, `SELECT {'maybe', 'yes'} IF True ELSE {'no', 'or'};`, ["maybe", "yes"]);
+    assertQueryResult(h, `SELECT {'maybe', 'yes'} IF False ELSE {'no', 'or'};`, ["no", "or"]);
+    assertQueryResult(h, `SELECT {'maybe', 'yes'} IF True ELSE 'no';`, ["maybe", "yes"]);
+    assertQueryResult(h, `SELECT {'maybe', 'yes'} IF False ELSE 'no';`, ["no"]);
+    assertQueryResult(h, `SELECT 'yes' IF {True, False} ELSE 'no';`, ["yes", "no"]);
+    assertQueryResult(h, `SELECT 'yes' IF {True, False} ELSE {'no', 'or', 'maybe'};`, [
+      "yes",
+      "no",
+      "or",
+      "maybe",
+    ]);
+    assertQueryResult(h, `SELECT {'maybe', 'yes'} IF {True, False} ELSE {'no', 'or'};`, [
+      "maybe",
+      "yes",
+      "no",
+      "or",
+    ]);
+    assertQueryResult(h, `SELECT {'maybe', 'yes'} IF {True, False} ELSE 'no';`, [
+      "maybe",
+      "yes",
+      "no",
+    ]);
   });
 
   it("test_edgeql_expr_if_else_03", () => {
     assertQueryResult(
       h,
       `SELECT 1 IF {1, 2, 3} < {2, 3, 4} ELSE 100;`,
-      unorderedBag([
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            100,
-            100,
-            100,
-          ])
+      unorderedBag([1, 1, 1, 1, 1, 1, 100, 100, 100]),
     );
     assertQueryResult(
       h,
       `SELECT {1, 10} IF {1, 2, 3} < {2, 3, 4} ELSE 100;`,
-      unorderedBag([
-            1,
-            1,
-            1,
-            1,
-            1,
-            1,
-            10,
-            10,
-            10,
-            10,
-            10,
-            10,
-            100,
-            100,
-            100,
-          ])
+      unorderedBag([1, 1, 1, 1, 1, 1, 10, 10, 10, 10, 10, 10, 100, 100, 100]),
     );
-    assertQueryResult(
-      h,
-      `SELECT sum(1 IF {1, 2, 3} < {2, 3, 4} ELSE 100);`,
-      unorderedBag([306])
-    );
+    assertQueryResult(h, `SELECT sum(1 IF {1, 2, 3} < {2, 3, 4} ELSE 100);`, unorderedBag([306]));
     assertQueryResult(
       h,
       `SELECT sum({1, 10} IF {1, 2, 3} < {2, 3, 4} ELSE 100);`,
-      unorderedBag([366])
+      unorderedBag([366]),
     );
   });
 
@@ -22293,7 +20369,7 @@ aa \\
                     100 IF x = 'c' ELSE
                     0;
             `,
-      unorderedBag([])
+      unorderedBag([]),
     );
     assertQueryResult(
       h,
@@ -22305,7 +20381,7 @@ aa \\
                     100 IF x = 'c' ELSE
                     0;
             `,
-      unorderedBag([0, 1, 100])
+      unorderedBag([0, 1, 100]),
     );
     assertQueryResult(
       h,
@@ -22317,7 +20393,7 @@ aa \\
                     100 IF x = 'c' ELSE
                     0;
             `,
-      unorderedBag([0, 1, 10])
+      unorderedBag([0, 1, 10]),
     );
     assertQueryResult(
       h,
@@ -22329,7 +20405,7 @@ aa \\
                     IF x = 'c' THEN 100 ELSE
                     0;
             `,
-      unorderedBag([0, 1, 10])
+      unorderedBag([0, 1, 10]),
     );
     assertQueryResult(
       h,
@@ -22345,7 +20421,7 @@ aa \\
                     )
                 );
             `,
-      unorderedBag([0, 11, 101])
+      unorderedBag([0, 11, 101]),
     );
   });
 
@@ -22360,27 +20436,7 @@ aa \\
                     100 IF {'c', 'a', 't'} = 'c' ELSE
                     0;
             `,
-      unorderedBag([
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            1,
-            100,
-            100,
-            100,
-            100,
-            100,
-            100,
-          ])
+      unorderedBag([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 100, 100, 100, 100, 100, 100]),
     );
     assertQueryResult(
       h,
@@ -22392,27 +20448,7 @@ aa \\
                     IF {'c', 'a', 't'} = 'c' THEN 100 ELSE
                     0;
             `,
-      unorderedBag([
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            1,
-            100,
-            100,
-            100,
-            100,
-            100,
-            100,
-          ])
+      unorderedBag([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 100, 100, 100, 100, 100, 100]),
     );
     assertQueryResult(
       h,
@@ -22427,27 +20463,7 @@ aa \\
                       ELSE 10
                     ELSE 1;
             `,
-      unorderedBag([
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            1,
-            100,
-            100,
-            100,
-            100,
-            100,
-            100,
-          ])
+      unorderedBag([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 100, 100, 100, 100, 100, 100]),
     );
   });
 
@@ -22461,10 +20477,10 @@ aa \\
                 ORDER BY .0;
             `,
       [
-            ["a", "miss"],
-            ["c", "hit"],
-            ["t", "miss"],
-          ]
+        ["a", "miss"],
+        ["c", "hit"],
+        ["t", "miss"],
+      ],
     );
     assertQueryResult(
       h,
@@ -22475,10 +20491,10 @@ aa \\
                 ORDER BY .0;
             `,
       [
-            ["a", "miss"],
-            ["c", "hit"],
-            ["t", "miss"],
-          ]
+        ["a", "miss"],
+        ["c", "hit"],
+        ["t", "miss"],
+      ],
     );
   });
 
@@ -22489,7 +20505,7 @@ aa \\
                 FOR x IN {<str>{} IF false ELSE <str>{'1'}}
                 UNION (SELECT x);
             `,
-      ["1"]
+      ["1"],
     );
   });
 
@@ -22499,7 +20515,7 @@ aa \\
       `
                 SELECT <str>{} IF true ELSE '';
             `,
-      []
+      [],
     );
   });
 
@@ -22510,7 +20526,7 @@ aa \\
                 FOR _ IN {<str>{'1'} IF false ELSE <str>{}}
                 UNION ();
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -22518,9 +20534,7 @@ aa \\
                 with test := ['']
                 select test if false else <array<str>>[];
             `,
-      [
-            [],
-          ]
+      [[]],
     );
   });
 
@@ -22530,32 +20544,28 @@ aa \\
       `
                 select if true then 10 else {}
             `,
-      [10]
+      [10],
     );
     assertQueryResult(
       h,
       `
                 select if false then 10 else {}
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select if true then [10] else []
             `,
-      [
-            [10],
-          ]
+      [[10]],
     );
     assertQueryResult(
       h,
       `
                 select if false then [10] else []
             `,
-      [
-            [],
-          ]
+      [[]],
     );
     assertQueryResult(
       h,
@@ -22563,9 +20573,7 @@ aa \\
                 with test := ['']
                 select test if false else [];
             `,
-      [
-            [],
-          ]
+      [[]],
     );
   });
 
@@ -22575,28 +20583,28 @@ aa \\
       `
                 select if 1 = <int64>$x then 2 else 3
             `,
-      [2]
+      [2],
     );
     assertQueryResult(
       h,
       `
                 select if 1 = <int64>$x then 2 else 3
             `,
-      [3]
+      [3],
     );
     assertQueryResult(
       h,
       `
                 select 2 if 1 = <int64>$x else 3
             `,
-      [2]
+      [2],
     );
     assertQueryResult(
       h,
       `
                 select 2 if 1 = <int64>$x else 3
             `,
-      [3]
+      [3],
     );
   });
 
@@ -22606,44 +20614,20 @@ aa \\
       `
                 if true then 10 else 11
             `,
-      [10]
+      [10],
     );
   });
 
   it("test_edgeql_expr_setop_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT EXISTS <str>{};`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT NOT EXISTS <str>{};`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT EXISTS <str>{};`, [false]);
+    assertQueryResult(h, `SELECT NOT EXISTS <str>{};`, [true]);
   });
 
   it("test_edgeql_expr_setop_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT 2 * ((SELECT 1) UNION (SELECT 2));`,
-      [2, 4]
-    );
-    assertQueryResult(
-      h,
-      `SELECT (SELECT 2) * (1 UNION 2);`,
-      [2, 4]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 * DISTINCT (1 UNION 2 UNION 1);`,
-      [2, 4]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 2 * (1 UNION 2 UNION 1);`,
-      [2, 4, 2]
-    );
+    assertQueryResult(h, `SELECT 2 * ((SELECT 1) UNION (SELECT 2));`, [2, 4]);
+    assertQueryResult(h, `SELECT (SELECT 2) * (1 UNION 2);`, [2, 4]);
+    assertQueryResult(h, `SELECT 2 * DISTINCT (1 UNION 2 UNION 1);`, [2, 4]);
+    assertQueryResult(h, `SELECT 2 * (1 UNION 2 UNION 1);`, [2, 4, 2]);
     assertQueryResult(
       h,
       `
@@ -22651,32 +20635,14 @@ aa \\
                     a := (SELECT 1 UNION 2)
                 SELECT (SELECT 2) * a;
             `,
-      [2, 4]
+      [2, 4],
     );
   });
 
   it("test_edgeql_expr_setop_03", () => {
-    assertQueryResult(
-      h,
-      `SELECT array_agg(1 UNION 2 UNION 3);`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT array_agg(3 UNION 2 UNION 3);`,
-      [
-            [3, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT array_agg(3 UNION 3 UNION 2);`,
-      [
-            [3, 3, 2],
-          ]
-    );
+    assertQueryResult(h, `SELECT array_agg(1 UNION 2 UNION 3);`, [[1, 2, 3]]);
+    assertQueryResult(h, `SELECT array_agg(3 UNION 2 UNION 3);`, [[3, 2, 3]]);
+    assertQueryResult(h, `SELECT array_agg(3 UNION 3 UNION 2);`, [[3, 3, 2]]);
   });
 
   it("test_edgeql_expr_setop_04", () => {
@@ -22685,7 +20651,7 @@ aa \\
       `
                 SELECT DISTINCT {1, 2, 2, 3};
             `,
-      unorderedSet([1, 2, 3])
+      unorderedSet([1, 2, 3]),
     );
   });
 
@@ -22695,7 +20661,7 @@ aa \\
       `
                 SELECT (2 UNION 2 UNION 2);
             `,
-      [2, 2, 2]
+      [2, 2, 2],
     );
   });
 
@@ -22705,7 +20671,7 @@ aa \\
       `
                 SELECT DISTINCT (2 UNION 2 UNION 2);
             `,
-      [2]
+      [2],
     );
   });
 
@@ -22715,21 +20681,23 @@ aa \\
       `
                 SELECT DISTINCT (2 UNION 2) UNION 2;
             `,
-      [2, 2]
+      [2, 2],
     );
   });
 
   it("test_edgeql_expr_setop_08", () => {
     let obj = queryRows(h, "\n            SELECT schema::ObjectType;\n        ");
     let attr = queryRows(h, "\n            SELECT schema::Annotation;\n        ");
-    let union = [...obj, ...attr].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    let union = [...obj, ...attr].sort((a, b) =>
+      JSON.stringify(a).localeCompare(JSON.stringify(b)),
+    );
     assertQueryResult(
       h,
       `
                 WITH MODULE schema
                 SELECT ObjectType UNION Annotation;
             `,
-      union
+      union,
     );
   });
 
@@ -22740,21 +20708,17 @@ aa \\
                 SELECT _ := DISTINCT {[1, 2], [1, 2], [2, 3]} ORDER BY _;
             `,
       [
-            [1, 2],
-            [2, 3],
-          ]
+        [1, 2],
+        [2, 3],
+      ],
     );
   });
 
   it("test_edgeql_expr_setop_10", () => {
-    assertQueryResult(
-      h,
-      `SELECT _ := DISTINCT {(1, 2), (2, 3), (1, 2)} ORDER BY _;`,
-      [
-            [1, 2],
-            [2, 3],
-          ]
-    );
+    assertQueryResult(h, `SELECT _ := DISTINCT {(1, 2), (2, 3), (1, 2)} ORDER BY _;`, [
+      [1, 2],
+      [2, 3],
+    ]);
     assertQueryResult(
       h,
       `
@@ -22764,64 +20728,39 @@ aa \\
                 ORDER BY _;
             `,
       [
-            {
-              "a": 1,
-              "b": 2,
-            },
-            {
-              "a": 2,
-              "b": 3,
-            },
-          ]
+        {
+          a: 1,
+          b: 2,
+        },
+        {
+          a: 2,
+          b: 3,
+        },
+      ],
     );
   });
 
   it("test_edgeql_expr_setop_11", () => {
-    let everything = queryRows(h, "\n            WITH\n                MODULE schema,\n                C := (SELECT ObjectType\n                      FILTER ObjectType.name LIKE 'schema::%')\n            SELECT _ := len(C.name)\n            ORDER BY _;\n        ");
-    let distinct = queryRows(h, "\n            WITH\n                MODULE schema,\n                C := (SELECT ObjectType\n                      FILTER ObjectType.name LIKE 'schema::%')\n            SELECT _ := DISTINCT len(C.name)\n            ORDER BY _;\n        ");
-    expect((everything).length).toBeGreaterThan((distinct).length);
+    let everything = queryRows(
+      h,
+      "\n            WITH\n                MODULE schema,\n                C := (SELECT ObjectType\n                      FILTER ObjectType.name LIKE 'schema::%')\n            SELECT _ := len(C.name)\n            ORDER BY _;\n        ",
+    );
+    let distinct = queryRows(
+      h,
+      "\n            WITH\n                MODULE schema,\n                C := (SELECT ObjectType\n                      FILTER ObjectType.name LIKE 'schema::%')\n            SELECT _ := DISTINCT len(C.name)\n            ORDER BY _;\n        ",
+    );
+    expect(everything.length).toBeGreaterThan(distinct.length);
   });
 
   it("test_edgeql_expr_setop_12", () => {
-    assertQueryResult(
-      h,
-      `SELECT DISTINCT {(), ()};`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT DISTINCT (SELECT ({1,2,3}, ()) FILTER .0 > 1).1;`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `SELECT DISTINCT (SELECT ({1,2,3}, ()) FILTER .0 > 3).1;`,
-      []
-    );
-    assertQueryResult(
-      h,
-      `SELECT DISTINCT {(1,(2,3)), (1,(2,3))};`,
-      [
-            [
-              1,
-              [2, 3],
-            ],
-          ]
-    );
+    assertQueryResult(h, `SELECT DISTINCT {(), ()};`, [[]]);
+    assertQueryResult(h, `SELECT DISTINCT (SELECT ({1,2,3}, ()) FILTER .0 > 1).1;`, [[]]);
+    assertQueryResult(h, `SELECT DISTINCT (SELECT ({1,2,3}, ()) FILTER .0 > 3).1;`, []);
+    assertQueryResult(h, `SELECT DISTINCT {(1,(2,3)), (1,(2,3))};`, [[1, [2, 3]]]);
   });
 
   it("test_edgeql_expr_setop_13", () => {
-    assertQueryResult(
-      h,
-      `SELECT <tuple<int64, int64>>{} UNION (1, 2);`,
-      [
-            [1, 2],
-          ]
-    );
+    assertQueryResult(h, `SELECT <tuple<int64, int64>>{} UNION (1, 2);`, [[1, 2]]);
   });
 
   it("test_edgeql_expr_setop_14", () => {
@@ -22829,123 +20768,179 @@ aa \\
       h.script(
         `
                 SELECT {1.0, <decimal>2.0};
-            `
+            `,
       );
-    }).toThrow(new RegExp("set constructor has arguments of incompatible types 'std::float64' and 'std::decimal'"));
+    }).toThrow(
+      new RegExp(
+        "set constructor has arguments of incompatible types 'std::float64' and 'std::decimal'",
+      ),
+    );
     expect(() => {
       h.script(
         `
                 SELECT {{1.0, 2.0}, {1.0, <decimal>2.0}};
-            `
+            `,
       );
-    }).toThrow(new RegExp("set constructor has arguments of incompatible types 'std::float64' and 'std::decimal'"));
+    }).toThrow(
+      new RegExp(
+        "set constructor has arguments of incompatible types 'std::float64' and 'std::decimal'",
+      ),
+    );
     expect(() => {
       h.script(
         `
                 SELECT {{1.0, <decimal>2.0}, {1.0, 2.0}};
-            `
+            `,
       );
-    }).toThrow(new RegExp("set constructor has arguments of incompatible types 'std::float64' and 'std::decimal'"));
+    }).toThrow(
+      new RegExp(
+        "set constructor has arguments of incompatible types 'std::float64' and 'std::decimal'",
+      ),
+    );
     expect(() => {
       h.script(
         `
                 SELECT {1.0, 2.0, 5.0, <decimal>2.0, 3.0, 4.0};
-            `
+            `,
       );
-    }).toThrow(new RegExp("set constructor has arguments of incompatible types 'std::decimal' and 'std::float64'"));
+    }).toThrow(
+      new RegExp(
+        "set constructor has arguments of incompatible types 'std::decimal' and 'std::float64'",
+      ),
+    );
     expect(() => {
       h.script(
         `
                 SELECT {1, 2, 3, 4 UNION 'a', 5, 6, 7};
-            `
+            `,
       );
-    }).toThrow(new RegExp("operator 'UNION' cannot be applied to operands of type 'std::int64' and 'std::str'"));
+    }).toThrow(
+      new RegExp(
+        "operator 'UNION' cannot be applied to operands of type 'std::int64' and 'std::str'",
+      ),
+    );
     expect(() => {
       h.script(
         `
                 SELECT {1, 2, 3, {{1, 4} UNION 'a'}, 5, 6, 7};
-            `
+            `,
       );
-    }).toThrow(new RegExp("operator 'UNION' cannot be applied to operands of type 'std::int64' and 'std::str'"));
+    }).toThrow(
+      new RegExp(
+        "operator 'UNION' cannot be applied to operands of type 'std::int64' and 'std::str'",
+      ),
+    );
   });
 
   it("test_edgeql_expr_cardinality_01", () => {
     expect(() => {
       h.script(
         `                SELECT Issue ORDER BY Issue.watchers.name;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_expr_cardinality_02", () => {
     expect(() => {
       h.script(
         `                SELECT Issue LIMIT LogEntry.spent_time;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_expr_cardinality_03", () => {
     expect(() => {
       h.script(
         `                SELECT Issue OFFSET LogEntry.spent_time;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_expr_cardinality_04", () => {
     expect(() => {
       h.script(
         `                SELECT EXISTS Issue ORDER BY Issue.name;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_expr_cardinality_05", () => {
     expect(() => {
       h.script(
         `                SELECT 'foo' IN Issue.name ORDER BY Issue.name;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_expr_cardinality_06", () => {
     expect(() => {
       h.script(
         `                SELECT Issue UNION Text ORDER BY Issue.name;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_expr_cardinality_07", () => {
     expect(() => {
       h.script(
         `                SELECT DISTINCT Issue ORDER BY Issue.name;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_expr_type_intersection_01", () => {
     expect(() => {
       h.script(
         `                SELECT 10[IS std::Object];
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot apply type intersection operator to scalar type 'std::int64': it is not an object type"));
+    }).toThrow(
+      new RegExp(
+        "cannot apply type intersection operator to scalar type 'std::int64': it is not an object type",
+      ),
+    );
   });
 
   it("test_edgeql_expr_type_intersection_02", () => {
     expect(() => {
       h.script(
         `                SELECT Object[IS str];
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot create an intersection of std::Object, std::str"));
   });
@@ -22954,16 +20949,20 @@ aa \\
     expect(() => {
       h.script(
         `                SELECT Object.id[IS uuid];
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot apply type intersection operator to scalar type 'std::uuid': it is not an object type"));
+    }).toThrow(
+      new RegExp(
+        "cannot apply type intersection operator to scalar type 'std::uuid': it is not an object type",
+      ),
+    );
   });
 
   it("test_edgeql_expr_type_intersection_04", () => {
     h.script(
       `            SELECT Named[IS Issue].id
                 ?? <uuid>'00000000-0000-0000-0000-000000000000';
-        `
+        `,
     );
   });
 
@@ -22972,7 +20971,7 @@ aa \\
       h.script(
         `
                 SELECT (1, 2) = [1, 2];
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '=' cannot.*tuple.*and.*array<std::int64>"));
   });
@@ -22982,7 +20981,7 @@ aa \\
       h.script(
         `
                 SELECT {1, 2} = [1, 2];
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '=' cannot.* 'std::int64' and.*array<std::int64>"));
   });
@@ -22992,42 +20991,18 @@ aa \\
       h.script(
         `
                 SELECT {1, 2} = (1, 2);
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '=' cannot.*'std::int64' and.*tuple.*"));
   });
 
   it("test_edgeql_expr_aggregate_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT {1, 1, 1});`,
-      [1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT {1, 2, 3});`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count(DISTINCT {1, 2, 3, 2, 3});`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count({1, 1, 1});`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count({1, 2, 3});`,
-      [3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT count({1, 2, 3, 2, 3});`,
-      [5]
-    );
+    assertQueryResult(h, `SELECT count(DISTINCT {1, 1, 1});`, [1]);
+    assertQueryResult(h, `SELECT count(DISTINCT {1, 2, 3});`, [3]);
+    assertQueryResult(h, `SELECT count(DISTINCT {1, 2, 3, 2, 3});`, [3]);
+    assertQueryResult(h, `SELECT count({1, 1, 1});`, [3]);
+    assertQueryResult(h, `SELECT count({1, 2, 3});`, [3]);
+    assertQueryResult(h, `SELECT count({1, 2, 3, 2, 3});`, [5]);
   });
 
   it("test_edgeql_expr_alias_01", () => {
@@ -23040,7 +21015,7 @@ aa \\
                 SELECT a
                 FILTER a = b;
             `,
-      [2]
+      [2],
     );
   });
 
@@ -23053,7 +21028,7 @@ aa \\
                 SELECT a := {1, 2}
                 FILTER a = b;
             `,
-      [2]
+      [2],
     );
   });
 
@@ -23070,15 +21045,15 @@ aa \\
                 );
             `,
       [
-            {
-              "name": "a",
-              "foo": 1,
-            },
-            {
-              "name": "a",
-              "foo": 2,
-            },
-          ]
+        {
+          name: "a",
+          foo: 1,
+        },
+        {
+          name: "a",
+          foo: 2,
+        },
+      ],
     );
   });
 
@@ -23096,11 +21071,11 @@ aa \\
                 );
             `,
       [
-            {
-              "name": "a",
-              "foo": 1,
-            },
-          ]
+        {
+          name: "a",
+          foo: 1,
+        },
+      ],
     );
   });
 
@@ -23120,11 +21095,11 @@ aa \\
                 ORDER BY .name LIMIT 1;
             `,
       [
-            {
-              "name": "schema::Array",
-              "foo": unorderedSet([1, 2]),
-            },
-          ]
+        {
+          name: "schema::Array",
+          foo: unorderedSet([1, 2]),
+        },
+      ],
     );
   });
 
@@ -23145,11 +21120,11 @@ aa \\
                 ORDER BY .name LIMIT 1;
             `,
       [
-            {
-              "name": "schema::Array",
-              "foo": unorderedSet([1]),
-            },
-          ]
+        {
+          name: "schema::Array",
+          foo: unorderedSet([1]),
+        },
+      ],
     );
   });
 
@@ -23163,7 +21138,7 @@ aa \\
                 )
                 SELECT x ORDER BY x;
             `,
-      [2, 3, 4, 4, 5]
+      [2, 3, 4, 4, 5],
     );
   });
 
@@ -23178,7 +21153,7 @@ aa \\
                 )
                 SELECT x ORDER BY x;
             `,
-      [4, 5]
+      [4, 5],
     );
   });
 
@@ -23195,7 +21170,7 @@ aa \\
                     x[0] = 1
                     AND y[0] = 2
             `,
-      ["OK"]
+      ["OK"],
     );
   });
 
@@ -23209,7 +21184,7 @@ aa \\
                 )
                 ORDER BY x;
             `,
-      [1, 3, 5, 7]
+      [1, 3, 5, 7],
     );
     assertQueryResult(
       h,
@@ -23220,7 +21195,7 @@ aa \\
                 )
                 ORDER BY x;
             `,
-      [2, 4, 6, 8]
+      [2, 4, 6, 8],
     );
   });
 
@@ -23231,7 +21206,7 @@ aa \\
                 FOR x IN {2, 3}
                 UNION {x, x + 2};
             `,
-      unorderedSet([2, 3, 4, 5])
+      unorderedSet([2, 3, 4, 5]),
     );
   });
 
@@ -23240,7 +21215,7 @@ aa \\
       h.script(
         `
                 SELECT 1[1:3];
-            `
+            `,
       );
     }).toThrow(new RegExp("scalar type 'std::int64' cannot be sliced"));
   });
@@ -23250,7 +21225,7 @@ aa \\
       h.script(
         `
                 SELECT 1[:3];
-            `
+            `,
       );
     }).toThrow(new RegExp("scalar type 'std::int64' cannot be sliced"));
   });
@@ -23260,7 +21235,7 @@ aa \\
       h.script(
         `
                 SELECT 1[1:];
-            `
+            `,
       );
     }).toThrow(new RegExp("scalar type 'std::int64' cannot be sliced"));
   });
@@ -23270,7 +21245,7 @@ aa \\
       h.script(
         `
                 SELECT 1[1];
-            `
+            `,
       );
     }).toThrow(new RegExp("index indirection cannot be applied to scalar type 'std::int64'"));
   });
@@ -23280,7 +21255,7 @@ aa \\
       h.query(
         `
                 SELECT '''1''';
-            `
+            `,
       );
     }).toThrow(new RegExp("Unexpected ''1''"));
   });
@@ -23290,9 +21265,13 @@ aa \\
       h.query(
         `
                 SELECT Object ?? '';
-            `
+            `,
       );
-    }).toThrow(new RegExp("operator '\\?\\?' cannot be applied to operands of type 'std::Object' and 'std::str'"));
+    }).toThrow(
+      new RegExp(
+        "operator '\\?\\?' cannot be applied to operands of type 'std::Object' and 'std::str'",
+      ),
+    );
   });
 
   it("test_edgeql_expr_static_eval_casts_01", () => {
@@ -23301,85 +21280,67 @@ aa \\
       `
                 WITH x := {1, 2}, SELECT ("wtf" ++ <str>x);
             `,
-      unorderedBag(["wtf1", "wtf2"])
+      unorderedBag(["wtf1", "wtf2"]),
     );
     assertQueryResult(
       h,
       `
                 FOR x in {1, 2} UNION (SELECT ("wtf" ++ <str>x));
             `,
-      unorderedBag(["wtf1", "wtf2"])
+      unorderedBag(["wtf1", "wtf2"]),
     );
     assertQueryResult(
       h,
       `
                 WITH x := <int64>{}, SELECT ("wtf" ++ <str>x);
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_normalization_mismatch_01", () => {
     expect(() => {
-      h.query(
-        `SELECT <tuple<"">>1;`
-      );
+      h.query(`SELECT <tuple<"">>1;`);
     }).toThrow(new RegExp("Unexpected type expression"));
   });
 
   it("test_edgeql_typeop_01", () => {
-    assertQueryResult(
-      h,
-      `select <Named & Owned>{};`,
-      []
-    );
+    assertQueryResult(h, `select <Named & Owned>{};`, []);
   });
 
   it("test_edgeql_typeop_02", () => {
     expect(() => {
-      h.query(
-        `select 1 is (int64 | float64);`
-      );
+      h.query(`select 1 is (int64 | float64);`);
     }).toThrow(new RegExp("cannot use type operator '|' with non-object type"));
   });
 
   it("test_edgeql_typeop_03", () => {
     expect(() => {
-      h.query(
-        `select 1 is (Object | float64);`
-      );
+      h.query(`select 1 is (Object | float64);`);
     }).toThrow(new RegExp("cannot use type operator '|' with non-object type"));
   });
 
   it("test_edgeql_typeop_04", () => {
     expect(() => {
-      h.query(
-        `select [1] is (array<int64> | array<float64>);`
-      );
+      h.query(`select [1] is (array<int64> | array<float64>);`);
     }).toThrow(new RegExp("cannot use type operator '|' with non-object type"));
   });
 
   it("test_edgeql_typeop_05", () => {
     expect(() => {
-      h.query(
-        `select (1,) is (tuple<int64> | tuple<float64>);`
-      );
+      h.query(`select (1,) is (tuple<int64> | tuple<float64>);`);
     }).toThrow(new RegExp("cannot use type operator '|' with non-object type"));
   });
 
   it("test_edgeql_typeop_06", () => {
     expect(() => {
-      h.query(
-        `select [1] is (typeof [2] | typeof [2.2]);`
-      );
+      h.query(`select [1] is (typeof [2] | typeof [2.2]);`);
     }).toThrow(new RegExp("cannot use type operator '|' with non-object type"));
   });
 
   it("test_edgeql_typeop_07", () => {
     expect(() => {
-      h.query(
-        `select (1,) is (typeof (2,) | typeof (2.2,));`
-      );
+      h.query(`select (1,) is (typeof (2,) | typeof (2.2,));`);
     }).toThrow(new RegExp("cannot use type operator '|' with non-object type"));
   });
 
@@ -23387,26 +21348,24 @@ aa \\
     assertQueryResult(
       h,
       `select {x := 1} is (typeof Issue.references | Object);`,
-      unorderedSet([false])
+      unorderedSet([false]),
     );
     assertQueryResult(
       h,
       `select {x := 1} is (typeof Issue.references | BaseObject);`,
-      unorderedSet([false])
+      unorderedSet([false]),
     );
     assertQueryResult(
       h,
       `select {x := 1} is (typeof Issue.references | FreeObject);`,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
   it("test_edgeql_typeop_09", () => {
-    assertQueryResult(
-      h,
-      `SELECT (INTROSPECT TYPEOF 1e100n).name ++ "!" ++ <str>$test`,
-      ["std::bigint!?"]
-    );
+    assertQueryResult(h, `SELECT (INTROSPECT TYPEOF 1e100n).name ++ "!" ++ <str>$test`, [
+      "std::bigint!?",
+    ]);
   });
 
   it("test_edgeql_assert_single_01", () => {
@@ -23415,7 +21374,7 @@ aa \\
             INSERT User {
                 name := "He Who Remains"
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -23425,17 +21384,17 @@ aa \\
             ))
         `,
       [
-            {
-              "name": "He Who Remains",
-            },
-          ]
+        {
+          name: "He Who Remains",
+        },
+      ],
     );
     h.query(
       `
             SELECT assert_single((
                 SELECT User { name } FILTER .name ILIKE "He Who%"
             ))
-        `
+        `,
     );
     h.query(
       `
@@ -23443,19 +21402,19 @@ aa \\
             UNION (
                 SELECT assert_single(x)
             );
-        `
+        `,
     );
     h.query(
       `
             select {
                 xy := assert_single({<optional str>$0, <optional str>$1}) };
-        `
+        `,
     );
     h.query(
       `
             select {
                 xy := assert_single({<optional str>$0, <optional str>$1}) };
-        `
+        `,
     );
   });
 
@@ -23468,13 +21427,13 @@ aa \\
                     name := name
                 }
             );
-        `
+        `,
     );
     expect(() => {
       h.query(
         `
                 SELECT assert_single({1, 2});
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_single violation"));
     expect(() => {
@@ -23483,7 +21442,7 @@ aa \\
                 SELECT assert_single(
                     (SELECT User FILTER .name ILIKE "Hunter B%")
                 );
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_single violation"));
     expect(() => {
@@ -23492,7 +21451,7 @@ aa \\
                 SELECT User {
                     single name := assert_single(.name ++ {"!", "?"})
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_single violation"));
     expect(() => {
@@ -23502,7 +21461,7 @@ aa \\
                     (SELECT User FILTER .name ILIKE "Hunter B%"),
                     message := "custom message",
                 );
-            `
+            `,
       );
     }).toThrow(new RegExp("custom message"));
   });
@@ -23511,20 +21470,20 @@ aa \\
     h.query(
       `
             SELECT assert_single(1)
-        `
+        `,
     );
     h.query(
       `
             FOR x IN {User}
             UNION assert_single(x.name)
-        `
+        `,
     );
     h.query(
       `
             SELECT User {
                 single foo := assert_single(.name) ++ "!"
             }
-        `
+        `,
     );
   });
 
@@ -23537,24 +21496,7 @@ aa \\
                     assert_distinct(1, message := {"uh", "oh"}) +
                     assert_exists({1, 2}, message := {"uh", "oh"});
             `,
-      unorderedBag([
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            3,
-            4,
-            4,
-            4,
-            4,
-            4,
-            4,
-            4,
-            4,
-          ])
+      unorderedBag([3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4]),
     );
   });
 
@@ -23567,7 +21509,7 @@ aa \\
             INSERT User {
                 name := "User 2",
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -23577,13 +21519,13 @@ aa \\
                 )) ORDER BY .name
             `,
       [
-            {
-              "name": "User 1",
-            },
-            {
-              "name": "User 2",
-            },
-          ]
+        {
+          name: "User 1",
+        },
+        {
+          name: "User 2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -23595,10 +21537,10 @@ aa \\
                 }
             `,
       [
-            {
-              "user": "User 1",
-            },
-          ]
+        {
+          user: "User 1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -23610,23 +21552,23 @@ aa \\
                 }
             `,
       [
-            {
-              "user": "User 1",
-            },
-          ]
+        {
+          user: "User 1",
+        },
+      ],
     );
     h.query(
       `
                 SELECT {
                     required all_users := assert_exists(User)
                 }
-            `
+            `,
     );
     expect(() => {
       h.query(
         `
                 SELECT assert_exists(<str>{});
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_exists violation"));
     expect(() => {
@@ -23635,7 +21577,7 @@ aa \\
                 SELECT assert_exists(
                     (SELECT User FILTER .name = "nonexistent")
                 );
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_exists violation"));
     expect(() => {
@@ -23646,11 +21588,13 @@ aa \\
                         SELECT User FILTER .name = "nonexistent"))
                 }
                 FILTER .name = "User 2";
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_exists violation"));
     expect(() => {
-      h.query("\n                SELECT assert_exists(\n                    (SELECT User { name } FILTER .name = \"nonexistent\")\n                );\n            ");
+      h.query(
+        '\n                SELECT assert_exists(\n                    (SELECT User { name } FILTER .name = "nonexistent")\n                );\n            ',
+      );
     }).toThrow(new RegExp("assert_exists violation"));
     expect(() => {
       h.query(
@@ -23658,7 +21602,7 @@ aa \\
                 SELECT assert_exists(
                     (SELECT User FILTER .name = "nonexistent")
                 ).name;
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_exists violation"));
     expect(() => {
@@ -23668,7 +21612,7 @@ aa \\
                     (SELECT User FILTER .name = "nonexistent"),
                     message := "custom message",
                 ).name;
-            `
+            `,
       );
     }).toThrow(new RegExp("custom message"));
     expect(() => {
@@ -23677,7 +21621,7 @@ aa \\
                 with x := assert_exists(
                     (select {(1, 2), (3, 4)} filter false)),
                 select x.0;
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_exists violation"));
   });
@@ -23686,10 +21630,12 @@ aa \\
     h.script(
       `
             insert BooleanTest { name := "" }
-        `
+        `,
     );
     expect(() => {
-      h.query("\n                select BooleanTest { name, val := assert_exists(.val) }\n            ");
+      h.query(
+        "\n                select BooleanTest { name, val := assert_exists(.val) }\n            ",
+      );
     }).toThrow(new RegExp("assert_exists violation"));
   });
 
@@ -23697,20 +21643,20 @@ aa \\
     h.query(
       `
             SELECT assert_exists(1)
-        `
+        `,
     );
     h.query(
       `
             FOR x IN {User}
             UNION assert_exists(x.name)
-        `
+        `,
     );
     h.query(
       `
             SELECT User {
                 single foo := assert_exists(.name) ++ "!"
             }
-        `
+        `,
     );
   });
 
@@ -23745,7 +21691,7 @@ aa \\
                 status := (SELECT Status FILTER .name = "Open"),
                 references := (SELECT File FILTER .name = "File 2"),
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -23760,29 +21706,21 @@ aa \\
                 ORDER BY .number
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+      ],
     );
-    assertQueryResult(
-      h,
-      `SELECT assert_distinct({2, 1, 3, 4})`,
-      [2, 1, 3, 4]
-    );
-    assertQueryResult(
-      h,
-      `SELECT assert_distinct(array_unpack([2, 1, 3, 4]))`,
-      [2, 1, 3, 4]
-    );
+    assertQueryResult(h, `SELECT assert_distinct({2, 1, 3, 4})`, [2, 1, 3, 4]);
+    assertQueryResult(h, `SELECT assert_distinct(array_unpack([2, 1, 3, 4]))`, [2, 1, 3, 4]);
     expect(() => {
       h.query(
         `
                 SELECT assert_distinct({1, 2, 1});
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_distinct violation"));
     expect(() => {
@@ -23793,7 +21731,7 @@ aa \\
                     UNION
                     (SELECT User FILTER .name = "User 1")
                 );
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_distinct violation"));
     assertQueryResult(
@@ -23803,10 +21741,7 @@ aa \\
                     {(0,), (1,)}
                 );
             `,
-      unorderedSet([
-            [0],
-            [1],
-          ])
+      unorderedSet([[0], [1]]),
     );
     expect(() => {
       h.query(
@@ -23814,21 +21749,21 @@ aa \\
                 SELECT assert_distinct(
                     {(0, 1, (0,)), (0, 1, (0,))}
                 );
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_distinct violation"));
     expect(() => {
       h.query(
         `
                 SELECT assert_distinct({(), ()});
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_distinct violation"));
     expect(() => {
       h.query(
         `
                 SELECT assert_distinct({(), ()}, message := "custom message");
-            `
+            `,
       );
     }).toThrow(new RegExp("custom message"));
   });
@@ -23837,20 +21772,20 @@ aa \\
     h.query(
       `
             SELECT assert_distinct(<int64>{})
-        `
+        `,
     );
     h.query(
       `
             FOR x IN {User}
             UNION assert_distinct(x.name)
-        `
+        `,
     );
     h.query(
       `
             SELECT User {
                 single foo := assert_distinct(.name)
             }
-        `
+        `,
     );
   });
 
@@ -23865,28 +21800,28 @@ aa \\
       h.query(
         `
                 SELECT assert(<bool>$0, message := "custom message")
-            `
+            `,
       );
     }).toThrow(new RegExp("custom message"));
     expect(() => {
       h.query(
         `
                 SELECT assert(<bool>$0)
-            `
+            `,
       );
     }).toThrow(new RegExp("assertion failed"));
     expect(() => {
       h.query(
         `
                 SELECT assert(<bool>$0, message := <optional str>$1)
-            `
+            `,
       );
     }).toThrow(new RegExp("assertion failed"));
     expect(() => {
       h.query(
         `
                 SELECT assert(<bool>$0, message := <optional str>$1)
-            `
+            `,
       );
     }).toThrow(new RegExp("test"));
     assertQueryResult(
@@ -23894,14 +21829,14 @@ aa \\
       `
                 SELECT assert(<bool>$0)
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `
                 SELECT assert(<optional bool>$0)
             `,
-      []
+      [],
     );
   });
 
@@ -23925,7 +21860,7 @@ aa \\
             };
 
             CREATE TYPE Dummy;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -23936,13 +21871,13 @@ aa \\
                 then assert(not .name like '%3', message := "bogus " ++ .name);
             `,
       [
-            {
-              "name": "File 1",
-            },
-            {
-              "name": "File 2",
-            },
-          ]
+        {
+          name: "File 1",
+        },
+        {
+          name: "File 2",
+        },
+      ],
     );
     expect(() => {
       h.query(
@@ -23951,7 +21886,7 @@ aa \\
                 filter .name like 'File%'
                 order by .name
                 then assert(not .name like '%2', message := "bogus " ++ .name);
-            `
+            `,
       );
     }).toThrow(new RegExp("bogus File 2"));
     expect(() => {
@@ -23960,7 +21895,7 @@ aa \\
                 for _ in assert(count(File) = 2) union (
                     select User filter .name = 'User 1'
                 )
-            `
+            `,
       );
     }).toThrow(new RegExp("assertion failed"));
     expect(() => {
@@ -23968,7 +21903,7 @@ aa \\
         `
             select { val := (select 1 filter <bool>$0) }
             filter assert(count(File) = <int64>$1);
-        `
+        `,
       );
     }).toThrow(new RegExp("assertion failed"));
     expect(() => {
@@ -23976,7 +21911,7 @@ aa \\
         `
             select { val := (select 1 filter <bool>$0) }
             filter assert(count(File) = <int64>$1);
-        `
+        `,
       );
     }).toThrow(new RegExp("assertion failed"));
     assertQueryResult(
@@ -23986,10 +21921,10 @@ aa \\
             filter assert(count(File) = <int64>$1);
         `,
       [
-            {
-              "val": 1,
-            },
-          ]
+        {
+          val: 1,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -23998,10 +21933,10 @@ aa \\
             filter assert(count(File) = <int64>$1);
         `,
       [
-            {
-              "val": null,
-            },
-          ]
+        {
+          val: null,
+        },
+      ],
     );
     expect(() => {
       h.query(
@@ -24009,7 +21944,7 @@ aa \\
         with cond := assert(count(File) = <int64>$1),
              _  := (for _ in (select 0 filter not cond) union (insert Dummy)),
         select 1 filter <bool>$0
-        `
+        `,
       );
     }).toThrow(new RegExp("assertion failed"));
     expect(() => {
@@ -24018,7 +21953,7 @@ aa \\
         with cond := assert(count(File) = <int64>$1),
              _  := (for _ in (select 0 filter not cond) union (insert Dummy)),
         select 1 filter <bool>$0
-        `
+        `,
       );
     }).toThrow(new RegExp("assertion failed"));
     assertQueryResult(
@@ -24028,7 +21963,7 @@ aa \\
              _  := (for _ in (select 0 filter not cond) union (insert Dummy)),
         select 1 filter <bool>$0
         `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -24037,7 +21972,7 @@ aa \\
              _  := (for _ in (select 0 filter not cond) union (insert Dummy)),
         select 1 filter <bool>$0
         `,
-      []
+      [],
     );
   });
 
@@ -24048,13 +21983,16 @@ aa \\
                 SELECT (INTROSPECT TYPEOF BaseObject)
             `,
       [
-            {
-              "id": "str",
-            },
-          ]
+        {
+          id: "str",
+        },
+      ],
     );
-    let res = queryRows<{ __tname__: string }>(h, "\n            SELECT (INTROSPECT TYPEOF BaseObject)\n        ");
-    expect((res).length).toEqual(1);
+    let res = queryRows<{ __tname__: string }>(
+      h,
+      "\n            SELECT (INTROSPECT TYPEOF BaseObject)\n        ",
+    );
+    expect(res.length).toEqual(1);
     expect(res[0].__tname__).toEqual("schema::ObjectType");
   });
 
@@ -24062,17 +22000,17 @@ aa \\
     h.query(
       `
             SELECT <Object>{}
-        `
+        `,
     );
     h.query(
       `
             WITH Z := (Object,), SELECT Z;
-        `
+        `,
     );
     h.query(
       `
             FOR Z IN {(Object,)} UNION Z;
-        `
+        `,
     );
   });
 
@@ -24082,14 +22020,14 @@ aa \\
       `
                 SELECT 'aaaa' ++ 'bbbb';
             `,
-      ["aaaabbbb"]
+      ["aaaabbbb"],
     );
     assertQueryResult(
       h,
       `
                 SELECT 'aaaa' ++ r'\\q' ++ $$\\n$$;
             `,
-      ["aaaa\\q\\n"]
+      ["aaaa\\q\\n"],
     );
   });
 
@@ -24098,7 +22036,7 @@ aa \\
       h.query(
         `
                 with x := 1337, select x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+0
-            `
+            `,
       );
     }).toThrow(new RegExp("caused the compiler stack to overflow"));
   });
@@ -24108,21 +22046,21 @@ aa \\
       h.script(
         `
                 select <to_str>1;
-            `
+            `,
       );
     }).toThrow(new RegExp("does not exist"));
     expect(() => {
       h.script(
         `
                 select <round>1;
-            `
+            `,
       );
     }).toThrow(new RegExp("does not exist"));
     expect(() => {
       h.script(
         `
                 select <cal::to_local_date>1;
-            `
+            `,
       );
     }).toThrow(new RegExp("does not exist"));
   });
@@ -24133,76 +22071,88 @@ aa \\
             create module dummy;
             create module A;
             create type A::Foo;
-        `
+        `,
     );
     let queries: any = [
-  [2, "SELECT <Foo>{}"],
-  [2, "SELECT <std::Foo>{}"],
-  [2, "SELECT <dummy::Foo>{}"],
-  [1, "SELECT <A::Foo>{}"],
-];
-    queries = queries + [
-  [2, "WITH MODULE dummy SELECT <Foo>{}"],
-  [2, "WITH MODULE dummy SELECT <std::Foo>{}"],
-  [2, "WITH MODULE dummy SELECT <dummy::Foo>{}"],
-  [1, "WITH MODULE dummy SELECT <A::Foo>{}"],
-];
-    queries = queries + [
-  [2, "WITH MODULE std SELECT <Foo>{}"],
-  [2, "WITH MODULE std SELECT <std::Foo>{}"],
-  [2, "WITH MODULE std SELECT <dummy::Foo>{}"],
-  [1, "WITH MODULE std SELECT <A::Foo>{}"],
-];
-    queries = queries + [
-  [1, "WITH MODULE A SELECT <Foo>{}"],
-  [2, "WITH MODULE A SELECT <std::Foo>{}"],
-  [2, "WITH MODULE A SELECT <dummy::Foo>{}"],
-  [1, "WITH MODULE A SELECT <A::Foo>{}"],
-];
-    queries = queries + [
-  [2, "WITH dum as MODULE dummy SELECT <Foo>{}"],
-  [2, "WITH dum as MODULE dummy SELECT <std::Foo>{}"],
-  [2, "WITH dum as MODULE dummy SELECT <dummy::Foo>{}"],
-  [1, "WITH dum as MODULE dummy SELECT <A::Foo>{}"],
-  [2, "WITH dum as MODULE dummy SELECT <dum::Foo>{}"],
-];
-    queries = queries + [
-  [2, "WITH AAA as MODULE A SELECT <Foo>{}"],
-  [2, "WITH AAA as MODULE A SELECT <std::Foo>{}"],
-  [2, "WITH AAA as MODULE A SELECT <dummy::Foo>{}"],
-  [1, "WITH AAA as MODULE A SELECT <A::Foo>{}"],
-  [1, "WITH AAA as MODULE A SELECT <AAA::Foo>{}"],
-];
-    queries = queries + [
-  [2, "WITH s as MODULE std SELECT <Foo>{}"],
-  [2, "WITH s as MODULE std SELECT <std::Foo>{}"],
-  [2, "WITH s as MODULE std SELECT <dummy::Foo>{}"],
-  [1, "WITH s as MODULE std SELECT <A::Foo>{}"],
-  [2, "WITH s as MODULE std SELECT <s::Foo>{}"],
-];
-    queries = queries + [
-  [2, "WITH std as MODULE A SELECT <Foo>{}"],
-  [1, "WITH std as MODULE A SELECT <std::Foo>{}"],
-  [2, "WITH std as MODULE A SELECT <dummy::Foo>{}"],
-  [1, "WITH std as MODULE A SELECT <A::Foo>{}"],
-];
-    queries = queries + [
-  [2, "WITH A as MODULE std SELECT <Foo>{}"],
-  [2, "WITH A as MODULE std SELECT <std::Foo>{}"],
-  [2, "WITH A as MODULE std SELECT <dummy::Foo>{}"],
-  [2, "WITH A as MODULE std SELECT <A::Foo>{}"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [2, "SELECT <Foo>{}"],
+      [2, "SELECT <std::Foo>{}"],
+      [2, "SELECT <dummy::Foo>{}"],
+      [1, "SELECT <A::Foo>{}"],
+    ];
+    queries =
+      queries +
+      [
+        [2, "WITH MODULE dummy SELECT <Foo>{}"],
+        [2, "WITH MODULE dummy SELECT <std::Foo>{}"],
+        [2, "WITH MODULE dummy SELECT <dummy::Foo>{}"],
+        [1, "WITH MODULE dummy SELECT <A::Foo>{}"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH MODULE std SELECT <Foo>{}"],
+        [2, "WITH MODULE std SELECT <std::Foo>{}"],
+        [2, "WITH MODULE std SELECT <dummy::Foo>{}"],
+        [1, "WITH MODULE std SELECT <A::Foo>{}"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH MODULE A SELECT <Foo>{}"],
+        [2, "WITH MODULE A SELECT <std::Foo>{}"],
+        [2, "WITH MODULE A SELECT <dummy::Foo>{}"],
+        [1, "WITH MODULE A SELECT <A::Foo>{}"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH dum as MODULE dummy SELECT <Foo>{}"],
+        [2, "WITH dum as MODULE dummy SELECT <std::Foo>{}"],
+        [2, "WITH dum as MODULE dummy SELECT <dummy::Foo>{}"],
+        [1, "WITH dum as MODULE dummy SELECT <A::Foo>{}"],
+        [2, "WITH dum as MODULE dummy SELECT <dum::Foo>{}"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH AAA as MODULE A SELECT <Foo>{}"],
+        [2, "WITH AAA as MODULE A SELECT <std::Foo>{}"],
+        [2, "WITH AAA as MODULE A SELECT <dummy::Foo>{}"],
+        [1, "WITH AAA as MODULE A SELECT <A::Foo>{}"],
+        [1, "WITH AAA as MODULE A SELECT <AAA::Foo>{}"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH s as MODULE std SELECT <Foo>{}"],
+        [2, "WITH s as MODULE std SELECT <std::Foo>{}"],
+        [2, "WITH s as MODULE std SELECT <dummy::Foo>{}"],
+        [1, "WITH s as MODULE std SELECT <A::Foo>{}"],
+        [2, "WITH s as MODULE std SELECT <s::Foo>{}"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH std as MODULE A SELECT <Foo>{}"],
+        [1, "WITH std as MODULE A SELECT <std::Foo>{}"],
+        [2, "WITH std as MODULE A SELECT <dummy::Foo>{}"],
+        [1, "WITH std as MODULE A SELECT <A::Foo>{}"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH A as MODULE std SELECT <Foo>{}"],
+        [2, "WITH A as MODULE std SELECT <std::Foo>{}"],
+        [2, "WITH A as MODULE std SELECT <dummy::Foo>{}"],
+        [2, "WITH A as MODULE std SELECT <A::Foo>{}"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("Foo' does not exist"));
         }
       }
@@ -24215,76 +22165,88 @@ aa \\
             create module dummy;
             create module A;
             create function A::abs(x: int64) -> int64 using (x);
-        `
+        `,
     );
     let queries: any = [
-  [2, "SELECT abs(1)"],
-  [2, "SELECT std::abs(1)"],
-  [2, "SELECT dummy::abs(1)"],
-  [1, "SELECT A::abs(1)"],
-];
-    queries = queries + [
-  [2, "WITH MODULE dummy SELECT abs(1)"],
-  [2, "WITH MODULE dummy SELECT std::abs(1)"],
-  [2, "WITH MODULE dummy SELECT dummy::abs(1)"],
-  [1, "WITH MODULE dummy SELECT A::abs(1)"],
-];
-    queries = queries + [
-  [2, "WITH MODULE std SELECT abs(1)"],
-  [2, "WITH MODULE std SELECT std::abs(1)"],
-  [2, "WITH MODULE std SELECT dummy::abs(1)"],
-  [1, "WITH MODULE std SELECT A::abs(1)"],
-];
-    queries = queries + [
-  [1, "WITH MODULE A SELECT abs(1)"],
-  [2, "WITH MODULE A SELECT std::abs(1)"],
-  [2, "WITH MODULE A SELECT dummy::abs(1)"],
-  [1, "WITH MODULE A SELECT A::abs(1)"],
-];
-    queries = queries + [
-  [2, "WITH dum as MODULE dummy SELECT abs(1)"],
-  [2, "WITH dum as MODULE dummy SELECT std::abs(1)"],
-  [2, "WITH dum as MODULE dummy SELECT dummy::abs(1)"],
-  [1, "WITH dum as MODULE dummy SELECT A::abs(1)"],
-  [2, "WITH dum as MODULE dummy SELECT dum::abs(1)"],
-];
-    queries = queries + [
-  [2, "WITH AAA as MODULE A SELECT abs(1)"],
-  [2, "WITH AAA as MODULE A SELECT std::abs(1)"],
-  [2, "WITH AAA as MODULE A SELECT dummy::abs(1)"],
-  [1, "WITH AAA as MODULE A SELECT A::abs(1)"],
-  [1, "WITH AAA as MODULE A SELECT AAA::abs(1)"],
-];
-    queries = queries + [
-  [2, "WITH s as MODULE std SELECT abs(1)"],
-  [2, "WITH s as MODULE std SELECT std::abs(1)"],
-  [2, "WITH s as MODULE std SELECT dummy::abs(1)"],
-  [1, "WITH s as MODULE std SELECT A::abs(1)"],
-  [2, "WITH s as MODULE std SELECT s::abs(1)"],
-];
-    queries = queries + [
-  [2, "WITH std as MODULE A SELECT abs(1)"],
-  [1, "WITH std as MODULE A SELECT std::abs(1)"],
-  [2, "WITH std as MODULE A SELECT dummy::abs(1)"],
-  [1, "WITH std as MODULE A SELECT A::abs(1)"],
-];
-    queries = queries + [
-  [2, "WITH A as MODULE std SELECT abs(1)"],
-  [2, "WITH A as MODULE std SELECT std::abs(1)"],
-  [2, "WITH A as MODULE std SELECT dummy::abs(1)"],
-  [2, "WITH A as MODULE std SELECT A::abs(1)"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [2, "SELECT abs(1)"],
+      [2, "SELECT std::abs(1)"],
+      [2, "SELECT dummy::abs(1)"],
+      [1, "SELECT A::abs(1)"],
+    ];
+    queries =
+      queries +
+      [
+        [2, "WITH MODULE dummy SELECT abs(1)"],
+        [2, "WITH MODULE dummy SELECT std::abs(1)"],
+        [2, "WITH MODULE dummy SELECT dummy::abs(1)"],
+        [1, "WITH MODULE dummy SELECT A::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH MODULE std SELECT abs(1)"],
+        [2, "WITH MODULE std SELECT std::abs(1)"],
+        [2, "WITH MODULE std SELECT dummy::abs(1)"],
+        [1, "WITH MODULE std SELECT A::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH MODULE A SELECT abs(1)"],
+        [2, "WITH MODULE A SELECT std::abs(1)"],
+        [2, "WITH MODULE A SELECT dummy::abs(1)"],
+        [1, "WITH MODULE A SELECT A::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH dum as MODULE dummy SELECT abs(1)"],
+        [2, "WITH dum as MODULE dummy SELECT std::abs(1)"],
+        [2, "WITH dum as MODULE dummy SELECT dummy::abs(1)"],
+        [1, "WITH dum as MODULE dummy SELECT A::abs(1)"],
+        [2, "WITH dum as MODULE dummy SELECT dum::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH AAA as MODULE A SELECT abs(1)"],
+        [2, "WITH AAA as MODULE A SELECT std::abs(1)"],
+        [2, "WITH AAA as MODULE A SELECT dummy::abs(1)"],
+        [1, "WITH AAA as MODULE A SELECT A::abs(1)"],
+        [1, "WITH AAA as MODULE A SELECT AAA::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH s as MODULE std SELECT abs(1)"],
+        [2, "WITH s as MODULE std SELECT std::abs(1)"],
+        [2, "WITH s as MODULE std SELECT dummy::abs(1)"],
+        [1, "WITH s as MODULE std SELECT A::abs(1)"],
+        [2, "WITH s as MODULE std SELECT s::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH std as MODULE A SELECT abs(1)"],
+        [1, "WITH std as MODULE A SELECT std::abs(1)"],
+        [2, "WITH std as MODULE A SELECT dummy::abs(1)"],
+        [1, "WITH std as MODULE A SELECT A::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH A as MODULE std SELECT abs(1)"],
+        [2, "WITH A as MODULE std SELECT std::abs(1)"],
+        [2, "WITH A as MODULE std SELECT dummy::abs(1)"],
+        [2, "WITH A as MODULE std SELECT A::abs(1)"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("abs' does not exist"));
         }
       }
@@ -24295,64 +22257,72 @@ aa \\
     h.script(
       `
             create module dummy;
-        `
+        `,
     );
     let queries: any = [
-  [1, "SELECT <int64>{} = 1"],
-  [1, "SELECT <std::int64>{} = 1"],
-  [2, "SELECT <default::int64>{} = 1"],
-  [2, "SELECT <dummy::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH MODULE dummy SELECT <int64>{} = 1"],
-  [1, "WITH MODULE dummy SELECT <std::int64>{} = 1"],
-  [2, "WITH MODULE dummy SELECT <default::int64>{} = 1"],
-  [2, "WITH MODULE dummy SELECT <dummy::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH MODULE std SELECT <int64>{} = 1"],
-  [1, "WITH MODULE std SELECT <std::int64>{} = 1"],
-  [2, "WITH MODULE std SELECT <default::int64>{} = 1"],
-  [2, "WITH MODULE std SELECT <dummy::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH dum as MODULE dummy SELECT <int64>{} = 1"],
-  [1, "WITH dum as MODULE dummy SELECT <std::int64>{} = 1"],
-  [2, "WITH dum as MODULE dummy SELECT <default::int64>{} = 1"],
-  [2, "WITH dum as MODULE dummy SELECT <dummy::int64>{} = 1"],
-  [2, "WITH dum as MODULE dummy SELECT <dum::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH def as MODULE default SELECT <int64>{} = 1"],
-  [1, "WITH def as MODULE default SELECT <std::int64>{} = 1"],
-  [2, "WITH def as MODULE default SELECT <default::int64>{} = 1"],
-  [2, "WITH def as MODULE default SELECT <dummy::int64>{} = 1"],
-  [2, "WITH def as MODULE default SELECT <def::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH s as MODULE std SELECT <int64>{} = 1"],
-  [1, "WITH s as MODULE std SELECT <std::int64>{} = 1"],
-  [2, "WITH s as MODULE std SELECT <default::int64>{} = 1"],
-  [2, "WITH s as MODULE std SELECT <dummy::int64>{} = 1"],
-  [1, "WITH s as MODULE std SELECT <s::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH std as MODULE dummy SELECT <int64>{} = 1"],
-  [2, "WITH std as MODULE dummy SELECT <std::int64>{} = 1"],
-  [2, "WITH std as MODULE dummy SELECT <default::int64>{} = 1"],
-  [2, "WITH std as MODULE dummy SELECT <dummy::int64>{} = 1"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [1, "SELECT <int64>{} = 1"],
+      [1, "SELECT <std::int64>{} = 1"],
+      [2, "SELECT <default::int64>{} = 1"],
+      [2, "SELECT <dummy::int64>{} = 1"],
+    ];
+    queries =
+      queries +
+      [
+        [1, "WITH MODULE dummy SELECT <int64>{} = 1"],
+        [1, "WITH MODULE dummy SELECT <std::int64>{} = 1"],
+        [2, "WITH MODULE dummy SELECT <default::int64>{} = 1"],
+        [2, "WITH MODULE dummy SELECT <dummy::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH MODULE std SELECT <int64>{} = 1"],
+        [1, "WITH MODULE std SELECT <std::int64>{} = 1"],
+        [2, "WITH MODULE std SELECT <default::int64>{} = 1"],
+        [2, "WITH MODULE std SELECT <dummy::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH dum as MODULE dummy SELECT <int64>{} = 1"],
+        [1, "WITH dum as MODULE dummy SELECT <std::int64>{} = 1"],
+        [2, "WITH dum as MODULE dummy SELECT <default::int64>{} = 1"],
+        [2, "WITH dum as MODULE dummy SELECT <dummy::int64>{} = 1"],
+        [2, "WITH dum as MODULE dummy SELECT <dum::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH def as MODULE default SELECT <int64>{} = 1"],
+        [1, "WITH def as MODULE default SELECT <std::int64>{} = 1"],
+        [2, "WITH def as MODULE default SELECT <default::int64>{} = 1"],
+        [2, "WITH def as MODULE default SELECT <dummy::int64>{} = 1"],
+        [2, "WITH def as MODULE default SELECT <def::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH s as MODULE std SELECT <int64>{} = 1"],
+        [1, "WITH s as MODULE std SELECT <std::int64>{} = 1"],
+        [2, "WITH s as MODULE std SELECT <default::int64>{} = 1"],
+        [2, "WITH s as MODULE std SELECT <dummy::int64>{} = 1"],
+        [1, "WITH s as MODULE std SELECT <s::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH std as MODULE dummy SELECT <int64>{} = 1"],
+        [2, "WITH std as MODULE dummy SELECT <std::int64>{} = 1"],
+        [2, "WITH std as MODULE dummy SELECT <default::int64>{} = 1"],
+        [2, "WITH std as MODULE dummy SELECT <dummy::int64>{} = 1"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("int64' does not exist"));
         }
       }
@@ -24364,77 +22334,85 @@ aa \\
       `
             create module dummy;
             create type default::int64;
-        `
+        `,
     );
     let queries: any = [
-  [3, "SELECT <int64>{} = 1"],
-  [1, "SELECT <std::int64>{} = 1"],
-  [3, "SELECT <default::int64>{} = 1"],
-  [2, "SELECT <dummy::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH MODULE dummy SELECT <int64>{} = 1"],
-  [1, "WITH MODULE dummy SELECT <std::int64>{} = 1"],
-  [3, "WITH MODULE dummy SELECT <default::int64>{} = 1"],
-  [2, "WITH MODULE dummy SELECT <dummy::int64>{} = 1"],
-];
-    queries = queries + [
-  [1, "WITH MODULE std SELECT <int64>{} = 1"],
-  [1, "WITH MODULE std SELECT <std::int64>{} = 1"],
-  [3, "WITH MODULE std SELECT <default::int64>{} = 1"],
-  [2, "WITH MODULE std SELECT <dummy::int64>{} = 1"],
-];
-    queries = queries + [
-  [3, "WITH dum as MODULE dummy SELECT <int64>{} = 1"],
-  [1, "WITH dum as MODULE dummy SELECT <std::int64>{} = 1"],
-  [3, "WITH dum as MODULE dummy SELECT <default::int64>{} = 1"],
-  [2, "WITH dum as MODULE dummy SELECT <dummy::int64>{} = 1"],
-  [2, "WITH dum as MODULE dummy SELECT <dum::int64>{} = 1"],
-];
-    queries = queries + [
-  [3, "WITH def as MODULE default SELECT <int64>{} = 1"],
-  [1, "WITH def as MODULE default SELECT <std::int64>{} = 1"],
-  [3, "WITH def as MODULE default SELECT <default::int64>{} = 1"],
-  [2, "WITH def as MODULE default SELECT <dummy::int64>{} = 1"],
-  [3, "WITH def as MODULE default SELECT <def::int64>{} = 1"],
-];
-    queries = queries + [
-  [3, "WITH s as MODULE std SELECT <int64>{} = 1"],
-  [1, "WITH s as MODULE std SELECT <std::int64>{} = 1"],
-  [3, "WITH s as MODULE std SELECT <default::int64>{} = 1"],
-  [2, "WITH s as MODULE std SELECT <dummy::int64>{} = 1"],
-  [1, "WITH s as MODULE std SELECT <s::int64>{} = 1"],
-];
-    queries = queries + [
-  [3, "WITH std as MODULE dummy SELECT <int64>{} = 1"],
-  [2, "WITH std as MODULE dummy SELECT <std::int64>{} = 1"],
-  [3, "WITH std as MODULE dummy SELECT <default::int64>{} = 1"],
-  [2, "WITH std as MODULE dummy SELECT <dummy::int64>{} = 1"],
-];
-    queries = queries + [
-  [3, "WITH std as MODULE default SELECT <int64>{} = 1"],
-  [3, "WITH std as MODULE default SELECT <std::int64>{} = 1"],
-  [3, "WITH std as MODULE default SELECT <default::int64>{} = 1"],
-  [2, "WITH std as MODULE default SELECT <dummy::int64>{} = 1"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [3, "SELECT <int64>{} = 1"],
+      [1, "SELECT <std::int64>{} = 1"],
+      [3, "SELECT <default::int64>{} = 1"],
+      [2, "SELECT <dummy::int64>{} = 1"],
+    ];
+    queries =
+      queries +
+      [
+        [1, "WITH MODULE dummy SELECT <int64>{} = 1"],
+        [1, "WITH MODULE dummy SELECT <std::int64>{} = 1"],
+        [3, "WITH MODULE dummy SELECT <default::int64>{} = 1"],
+        [2, "WITH MODULE dummy SELECT <dummy::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "WITH MODULE std SELECT <int64>{} = 1"],
+        [1, "WITH MODULE std SELECT <std::int64>{} = 1"],
+        [3, "WITH MODULE std SELECT <default::int64>{} = 1"],
+        [2, "WITH MODULE std SELECT <dummy::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [3, "WITH dum as MODULE dummy SELECT <int64>{} = 1"],
+        [1, "WITH dum as MODULE dummy SELECT <std::int64>{} = 1"],
+        [3, "WITH dum as MODULE dummy SELECT <default::int64>{} = 1"],
+        [2, "WITH dum as MODULE dummy SELECT <dummy::int64>{} = 1"],
+        [2, "WITH dum as MODULE dummy SELECT <dum::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [3, "WITH def as MODULE default SELECT <int64>{} = 1"],
+        [1, "WITH def as MODULE default SELECT <std::int64>{} = 1"],
+        [3, "WITH def as MODULE default SELECT <default::int64>{} = 1"],
+        [2, "WITH def as MODULE default SELECT <dummy::int64>{} = 1"],
+        [3, "WITH def as MODULE default SELECT <def::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [3, "WITH s as MODULE std SELECT <int64>{} = 1"],
+        [1, "WITH s as MODULE std SELECT <std::int64>{} = 1"],
+        [3, "WITH s as MODULE std SELECT <default::int64>{} = 1"],
+        [2, "WITH s as MODULE std SELECT <dummy::int64>{} = 1"],
+        [1, "WITH s as MODULE std SELECT <s::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [3, "WITH std as MODULE dummy SELECT <int64>{} = 1"],
+        [2, "WITH std as MODULE dummy SELECT <std::int64>{} = 1"],
+        [3, "WITH std as MODULE dummy SELECT <default::int64>{} = 1"],
+        [2, "WITH std as MODULE dummy SELECT <dummy::int64>{} = 1"],
+      ];
+    queries =
+      queries +
+      [
+        [3, "WITH std as MODULE default SELECT <int64>{} = 1"],
+        [3, "WITH std as MODULE default SELECT <std::int64>{} = 1"],
+        [3, "WITH std as MODULE default SELECT <default::int64>{} = 1"],
+        [2, "WITH std as MODULE default SELECT <dummy::int64>{} = 1"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("int64' does not exist"));
         } else {
-          if ((error === 3)) {
+          if (error === 3) {
             expect(() => {
-              h.script(
-                query
-              );
+              h.script(query);
             }).toThrow(new RegExp("operator '=' cannot be applied"));
           }
         }
@@ -24446,68 +22424,80 @@ aa \\
     h.script(
       `
             create module dummy;
-        `
+        `,
     );
     let queries: any = [
-  [2, "select abs(1)"],
-  [1, "select _test::abs(1)"],
-  [1, "select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [2, "with module dummy select abs(1)"],
-  [1, "with module dummy select _test::abs(1)"],
-  [1, "with module dummy select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [1, "with module _test select abs(1)"],
-  [1, "with module _test select _test::abs(1)"],
-  [1, "with module _test select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [2, "with module std select abs(1)"],
-  [1, "with module std select _test::abs(1)"],
-  [1, "with module std select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [1, "with module std::_test select abs(1)"],
-  [1, "with module std::_test select _test::abs(1)"],
-  [1, "with module std::_test select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [2, "with t as module _test select abs(1)"],
-  [1, "with t as module _test select _test::abs(1)"],
-  [1, "with t as module _test select std::_test::abs(1)"],
-  [1, "with t as module _test select t::abs(1)"],
-];
-    queries = queries + [
-  [2, "with s as module std select abs(1)"],
-  [1, "with s as module std select _test::abs(1)"],
-  [1, "with s as module std select std::_test::abs(1)"],
-  [2, "with s as module std select s::abs(1)"],
-];
-    queries = queries + [
-  [2, "with st as module std::_test select abs(1)"],
-  [1, "with st as module std::_test select _test::abs(1)"],
-  [1, "with st as module std::_test select std::_test::abs(1)"],
-  [1, "with st as module std::_test select st::abs(1)"],
-];
-    queries = queries + [
-  [2, "with std as module _test select abs(1)"],
-  [1, "with std as module _test select _test::abs(1)"],
-  [2, "with std as module _test select std::_test::abs(1)"],
-  [1, "with std as module _test select std::abs(1)"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [2, "select abs(1)"],
+      [1, "select _test::abs(1)"],
+      [1, "select std::_test::abs(1)"],
+    ];
+    queries =
+      queries +
+      [
+        [2, "with module dummy select abs(1)"],
+        [1, "with module dummy select _test::abs(1)"],
+        [1, "with module dummy select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "with module _test select abs(1)"],
+        [1, "with module _test select _test::abs(1)"],
+        [1, "with module _test select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with module std select abs(1)"],
+        [1, "with module std select _test::abs(1)"],
+        [1, "with module std select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "with module std::_test select abs(1)"],
+        [1, "with module std::_test select _test::abs(1)"],
+        [1, "with module std::_test select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with t as module _test select abs(1)"],
+        [1, "with t as module _test select _test::abs(1)"],
+        [1, "with t as module _test select std::_test::abs(1)"],
+        [1, "with t as module _test select t::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with s as module std select abs(1)"],
+        [1, "with s as module std select _test::abs(1)"],
+        [1, "with s as module std select std::_test::abs(1)"],
+        [2, "with s as module std select s::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with st as module std::_test select abs(1)"],
+        [1, "with st as module std::_test select _test::abs(1)"],
+        [1, "with st as module std::_test select std::_test::abs(1)"],
+        [1, "with st as module std::_test select st::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with std as module _test select abs(1)"],
+        [1, "with std as module _test select _test::abs(1)"],
+        [2, "with std as module _test select std::_test::abs(1)"],
+        [1, "with std as module _test select std::abs(1)"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("abs' does not exist"));
         }
       }
@@ -24519,74 +22509,88 @@ aa \\
       `
             create module dummy;
             create module _test;
-        `
+        `,
     );
     let queries: any = [
-  [2, "select abs(1)"],
-  [2, "select _test::abs(1)"],
-  [1, "select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [2, "with module dummy select abs(1)"],
-  [2, "with module dummy select _test::abs(1)"],
-  [1, "with module dummy select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [2, "with module _test select abs(1)"],
-  [2, "with module _test select _test::abs(1)"],
-  [1, "with module _test select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [2, "with module std select abs(1)"],
-  [2, "with module std select _test::abs(1)"],
-  [1, "with module std select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [1, "with module std::_test select abs(1)"],
-  [2, "with module std::_test select _test::abs(1)"],
-  [1, "with module std::_test select std::_test::abs(1)"],
-];
-    queries = queries + [
-  [2, "with t as module _test select abs(1)"],
-  [2, "with t as module _test select _test::abs(1)"],
-  [1, "with t as module _test select std::_test::abs(1)"],
-  [2, "with t as module _test select t::abs(1)"],
-];
-    queries = queries + [
-  [2, "with s as module std select abs(1)"],
-  [2, "with s as module std select _test::abs(1)"],
-  [1, "with s as module std select std::_test::abs(1)"],
-  [2, "with s as module std select s::abs(1)"],
-];
-    queries = queries + [
-  [2, "with st as module std::_test select abs(1)"],
-  [2, "with st as module std::_test select _test::abs(1)"],
-  [1, "with st as module std::_test select std::_test::abs(1)"],
-  [1, "with st as module std::_test select st::abs(1)"],
-];
-    queries = queries + [
-  [2, "with std as module _test select abs(1)"],
-  [2, "with std as module _test select _test::abs(1)"],
-  [2, "with std as module _test select std::_test::abs(1)"],
-  [2, "with std as module _test select std::abs(1)"],
-];
-    queries = queries + [
-  [2, "with std as module std::_test select abs(1)"],
-  [2, "with std as module std::_test select _test::abs(1)"],
-  [2, "with std as module std::_test select std::_test::abs(1)"],
-  [1, "with std as module std::_test select std::abs(1)"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [2, "select abs(1)"],
+      [2, "select _test::abs(1)"],
+      [1, "select std::_test::abs(1)"],
+    ];
+    queries =
+      queries +
+      [
+        [2, "with module dummy select abs(1)"],
+        [2, "with module dummy select _test::abs(1)"],
+        [1, "with module dummy select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with module _test select abs(1)"],
+        [2, "with module _test select _test::abs(1)"],
+        [1, "with module _test select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with module std select abs(1)"],
+        [2, "with module std select _test::abs(1)"],
+        [1, "with module std select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "with module std::_test select abs(1)"],
+        [2, "with module std::_test select _test::abs(1)"],
+        [1, "with module std::_test select std::_test::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with t as module _test select abs(1)"],
+        [2, "with t as module _test select _test::abs(1)"],
+        [1, "with t as module _test select std::_test::abs(1)"],
+        [2, "with t as module _test select t::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with s as module std select abs(1)"],
+        [2, "with s as module std select _test::abs(1)"],
+        [1, "with s as module std select std::_test::abs(1)"],
+        [2, "with s as module std select s::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with st as module std::_test select abs(1)"],
+        [2, "with st as module std::_test select _test::abs(1)"],
+        [1, "with st as module std::_test select std::_test::abs(1)"],
+        [1, "with st as module std::_test select st::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with std as module _test select abs(1)"],
+        [2, "with std as module _test select _test::abs(1)"],
+        [2, "with std as module _test select std::_test::abs(1)"],
+        [2, "with std as module _test select std::abs(1)"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with std as module std::_test select abs(1)"],
+        [2, "with std as module std::_test select _test::abs(1)"],
+        [2, "with std as module std::_test select std::_test::abs(1)"],
+        [1, "with std as module std::_test select std::abs(1)"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("abs' does not exist"));
         }
       }
@@ -24599,74 +22603,88 @@ aa \\
             create module dummy;
             create module std::test;
             create scalar type std::test::Foo extending int64;
-        `
+        `,
     );
     let queries: any = [
-  [2, "select <Foo>1"],
-  [1, "select <test::Foo>1"],
-  [1, "select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [2, "with module dummy select <Foo>1"],
-  [1, "with module dummy select <test::Foo>1"],
-  [1, "with module dummy select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [1, "with module test select <Foo>1"],
-  [1, "with module test select <test::Foo>1"],
-  [1, "with module test select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [2, "with module std select <Foo>1"],
-  [1, "with module std select <test::Foo>1"],
-  [1, "with module std select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [1, "with module std::test select <Foo>1"],
-  [1, "with module std::test select <test::Foo>1"],
-  [1, "with module std::test select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [2, "with t as module test select <Foo>1"],
-  [1, "with t as module test select <test::Foo>1"],
-  [1, "with t as module test select <std::test::Foo>1"],
-  [1, "with t as module test select <t::Foo>1"],
-];
-    queries = queries + [
-  [2, "with s as module std select <Foo>1"],
-  [1, "with s as module std select <test::Foo>1"],
-  [1, "with s as module std select <std::test::Foo>1"],
-  [2, "with s as module std select <s::Foo>1"],
-];
-    queries = queries + [
-  [2, "with st as module std::test select <Foo>1"],
-  [1, "with st as module std::test select <test::Foo>1"],
-  [1, "with st as module std::test select <std::test::Foo>1"],
-  [1, "with st as module std::test select <st::Foo>1"],
-];
-    queries = queries + [
-  [2, "WITH std as MODULE dummy select <Foo>1"],
-  [1, "WITH std as MODULE dummy select <test::Foo>1"],
-  [2, "WITH std as MODULE dummy select <std::test::Foo>1"],
-  [2, "WITH std as MODULE dummy select <std::Foo>1"],
-];
-    queries = queries + [
-  [2, "WITH std as MODULE test select <Foo>1"],
-  [1, "WITH std as MODULE test select <test::Foo>1"],
-  [2, "WITH std as MODULE test select <std::test::Foo>1"],
-  [1, "WITH std as MODULE test select <std::Foo>1"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [2, "select <Foo>1"],
+      [1, "select <test::Foo>1"],
+      [1, "select <std::test::Foo>1"],
+    ];
+    queries =
+      queries +
+      [
+        [2, "with module dummy select <Foo>1"],
+        [1, "with module dummy select <test::Foo>1"],
+        [1, "with module dummy select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "with module test select <Foo>1"],
+        [1, "with module test select <test::Foo>1"],
+        [1, "with module test select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with module std select <Foo>1"],
+        [1, "with module std select <test::Foo>1"],
+        [1, "with module std select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "with module std::test select <Foo>1"],
+        [1, "with module std::test select <test::Foo>1"],
+        [1, "with module std::test select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with t as module test select <Foo>1"],
+        [1, "with t as module test select <test::Foo>1"],
+        [1, "with t as module test select <std::test::Foo>1"],
+        [1, "with t as module test select <t::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with s as module std select <Foo>1"],
+        [1, "with s as module std select <test::Foo>1"],
+        [1, "with s as module std select <std::test::Foo>1"],
+        [2, "with s as module std select <s::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with st as module std::test select <Foo>1"],
+        [1, "with st as module std::test select <test::Foo>1"],
+        [1, "with st as module std::test select <std::test::Foo>1"],
+        [1, "with st as module std::test select <st::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH std as MODULE dummy select <Foo>1"],
+        [1, "WITH std as MODULE dummy select <test::Foo>1"],
+        [2, "WITH std as MODULE dummy select <std::test::Foo>1"],
+        [2, "WITH std as MODULE dummy select <std::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH std as MODULE test select <Foo>1"],
+        [1, "WITH std as MODULE test select <test::Foo>1"],
+        [2, "WITH std as MODULE test select <std::test::Foo>1"],
+        [1, "WITH std as MODULE test select <std::Foo>1"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("Foo' does not exist"));
         }
       }
@@ -24680,74 +22698,88 @@ aa \\
             create module std::test;
             create scalar type std::test::Foo extending int64;
             create module test;
-        `
+        `,
     );
     let queries: any = [
-  [2, "select <Foo>1"],
-  [2, "select <test::Foo>1"],
-  [1, "select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [2, "with module dummy select <Foo>1"],
-  [2, "with module dummy select <test::Foo>1"],
-  [1, "with module dummy select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [2, "with module test select <Foo>1"],
-  [2, "with module test select <test::Foo>1"],
-  [1, "with module test select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [2, "with module std select <Foo>1"],
-  [2, "with module std select <test::Foo>1"],
-  [1, "with module std select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [1, "with module std::test select <Foo>1"],
-  [2, "with module std::test select <test::Foo>1"],
-  [1, "with module std::test select <std::test::Foo>1"],
-];
-    queries = queries + [
-  [2, "with t as module test select <Foo>1"],
-  [2, "with t as module test select <test::Foo>1"],
-  [1, "with t as module test select <std::test::Foo>1"],
-  [2, "with t as module test select <t::Foo>1"],
-];
-    queries = queries + [
-  [2, "with s as module std select <Foo>1"],
-  [2, "with s as module std select <test::Foo>1"],
-  [1, "with s as module std select <std::test::Foo>1"],
-  [2, "with s as module std select <s::Foo>1"],
-];
-    queries = queries + [
-  [2, "with st as module std::test select <Foo>1"],
-  [2, "with st as module std::test select <test::Foo>1"],
-  [1, "with st as module std::test select <std::test::Foo>1"],
-  [1, "with st as module std::test select <st::Foo>1"],
-];
-    queries = queries + [
-  [2, "WITH std as MODULE dummy select <Foo>1"],
-  [2, "WITH std as MODULE dummy select <test::Foo>1"],
-  [2, "WITH std as MODULE dummy select <std::test::Foo>1"],
-  [2, "WITH std as MODULE dummy select <std::Foo>1"],
-];
-    queries = queries + [
-  [2, "WITH std as MODULE test select <Foo>1"],
-  [2, "WITH std as MODULE test select <test::Foo>1"],
-  [2, "WITH std as MODULE test select <std::test::Foo>1"],
-  [2, "WITH std as MODULE test select <std::Foo>1"],
-];
-    for (const [error, query] of (queries as any)) {
-      if ((error === 1)) {
-        h.script(
-          query
-        );
+      [2, "select <Foo>1"],
+      [2, "select <test::Foo>1"],
+      [1, "select <std::test::Foo>1"],
+    ];
+    queries =
+      queries +
+      [
+        [2, "with module dummy select <Foo>1"],
+        [2, "with module dummy select <test::Foo>1"],
+        [1, "with module dummy select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with module test select <Foo>1"],
+        [2, "with module test select <test::Foo>1"],
+        [1, "with module test select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with module std select <Foo>1"],
+        [2, "with module std select <test::Foo>1"],
+        [1, "with module std select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [1, "with module std::test select <Foo>1"],
+        [2, "with module std::test select <test::Foo>1"],
+        [1, "with module std::test select <std::test::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with t as module test select <Foo>1"],
+        [2, "with t as module test select <test::Foo>1"],
+        [1, "with t as module test select <std::test::Foo>1"],
+        [2, "with t as module test select <t::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with s as module std select <Foo>1"],
+        [2, "with s as module std select <test::Foo>1"],
+        [1, "with s as module std select <std::test::Foo>1"],
+        [2, "with s as module std select <s::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "with st as module std::test select <Foo>1"],
+        [2, "with st as module std::test select <test::Foo>1"],
+        [1, "with st as module std::test select <std::test::Foo>1"],
+        [1, "with st as module std::test select <st::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH std as MODULE dummy select <Foo>1"],
+        [2, "WITH std as MODULE dummy select <test::Foo>1"],
+        [2, "WITH std as MODULE dummy select <std::test::Foo>1"],
+        [2, "WITH std as MODULE dummy select <std::Foo>1"],
+      ];
+    queries =
+      queries +
+      [
+        [2, "WITH std as MODULE test select <Foo>1"],
+        [2, "WITH std as MODULE test select <test::Foo>1"],
+        [2, "WITH std as MODULE test select <std::test::Foo>1"],
+        [2, "WITH std as MODULE test select <std::Foo>1"],
+      ];
+    for (const [error, query] of queries as any) {
+      if (error === 1) {
+        h.script(query);
       } else {
-        if ((error === 2)) {
+        if (error === 2) {
           expect(() => {
-            h.script(
-              query
-            );
+            h.script(query);
           }).toThrow(new RegExp("Foo' does not exist"));
         }
       }
@@ -24760,14 +22792,14 @@ aa \\
       `
                 select "1 + 1 = \\(1 + 1)"
             `,
-      ["1 + 1 = 2"]
+      ["1 + 1 = 2"],
     );
     assertQueryResult(
       h,
       `
                 select ("1 + 1 = \\(1 + 1)")
             `,
-      ["1 + 1 = 2"]
+      ["1 + 1 = 2"],
     );
     assertQueryResult(
       h,
@@ -24775,7 +22807,7 @@ aa \\
 "[\\(sum({1,2,3}))]")! count(User)=\\
 \\(
 count(User))" ++ "!";`,
-      ["asdf 4321[6]! count(User)=0!"]
+      ["asdf 4321[6]! count(User)=0!"],
     );
   });
 });

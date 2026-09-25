@@ -89,7 +89,9 @@ describe("migrator — push (stateless)", () => {
     expect(res.sql.toUpperCase()).toContain("CAST");
     expect(res.sql.toUpperCase()).toContain("RENAME COLUMN");
 
-    const env = queryViaDb(db, "select default::Person { name, age };") as { rows?: Array<Record<string, unknown>> };
+    const env = queryViaDb(db, "select default::Person { name, age };") as {
+      rows?: Array<Record<string, unknown>>;
+    };
     const out = env.rows ?? [];
     expect(out).toHaveLength(1);
     // The value survived the migration and is now the string "30" (not lost).

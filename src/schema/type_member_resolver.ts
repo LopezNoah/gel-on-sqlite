@@ -22,7 +22,8 @@ const cloneConstraint = (constraint: ConstraintDef): ConstraintDef => ({
   exceptExpr: constraint.exceptExpr,
 });
 
-export const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] => constraints.map(cloneConstraint);
+export const cloneConstraints = (constraints: ConstraintDef[]): ConstraintDef[] =>
+  constraints.map(cloneConstraint);
 
 const mergeConstraintSets = (base: ConstraintDef[], override: ConstraintDef[]): ConstraintDef[] => {
   const map = new Map<string, ConstraintDef>();
@@ -116,19 +117,25 @@ const assertOverloadCompatibility = (
   isSubtypeOf: (candidate: string, target: string) => boolean,
 ): void => {
   if (baseMember.kind !== overloadedMember.kind) {
-    throw new Error(`overloaded member '${overloadedMember.name}' on ${typeName} must keep member kind`);
+    throw new Error(
+      `overloaded member '${overloadedMember.name}' on ${typeName} must keep member kind`,
+    );
   }
 
   if (baseMember.kind === "property" && overloadedMember.kind === "property") {
     if (baseMember.scalar !== overloadedMember.scalar) {
-      throw new Error(`overloaded property '${overloadedMember.name}' on ${typeName} must keep scalar type`);
+      throw new Error(
+        `overloaded property '${overloadedMember.name}' on ${typeName} must keep scalar type`,
+      );
     }
     return;
   }
 
   if (baseMember.kind === "link" && overloadedMember.kind === "link") {
     if (baseMember.multi !== overloadedMember.multi) {
-      throw new Error(`overloaded link '${overloadedMember.name}' on ${typeName} must keep cardinality`);
+      throw new Error(
+        `overloaded link '${overloadedMember.name}' on ${typeName} must keep cardinality`,
+      );
     }
 
     const baseTarget = baseMember.target;
@@ -143,7 +150,9 @@ const assertOverloadCompatibility = (
 
   if (baseMember.kind === "computed" && overloadedMember.kind === "computed") {
     if (baseMember.computedKind !== overloadedMember.computedKind) {
-      throw new Error(`overloaded computed '${overloadedMember.name}' on ${typeName} must keep computed kind`);
+      throw new Error(
+        `overloaded computed '${overloadedMember.name}' on ${typeName} must keep computed kind`,
+      );
     }
     return;
   }
@@ -172,7 +181,7 @@ const mergeOverloadedMember = (
     // override per name. Without this, `overloaded link owner { property
     // since: datetime }` would shadow Owned.owner's `note` property and
     // splats over the inherited link would silently drop `@note`.
-    const propsByName = new Map<string, typeof overloadedMember.properties[number]>();
+    const propsByName = new Map<string, (typeof overloadedMember.properties)[number]>();
     for (const property of baseMember.properties) {
       propsByName.set(property.name, {
         ...property,
@@ -290,7 +299,9 @@ export class TypeMemberResolver {
       if (!baseDecl) {
         throw new Error(`Unknown base type '${baseName}' in ${typeName}`);
       }
-      for (const member of this.resolveMembers(baseDecl, stack).map((member) => this.cloneMemberForInheritance(member))) {
+      for (const member of this.resolveMembers(baseDecl, stack).map((member) =>
+        this.cloneMemberForInheritance(member),
+      )) {
         if (!inheritedNames.has(member.name)) {
           inheritedMembers.push(member);
           inheritedNames.add(member.name);
@@ -306,7 +317,9 @@ export class TypeMemberResolver {
 
       if (existingIndex < 0) {
         if (own.overloaded) {
-          throw new Error(`'overloaded' member '${own.name}' on ${typeName} does not override an inherited member`);
+          throw new Error(
+            `'overloaded' member '${own.name}' on ${typeName} does not override an inherited member`,
+          );
         }
         merged.push(own);
         continue;
@@ -317,11 +330,16 @@ export class TypeMemberResolver {
       }
 
       const baseMember = merged[existingIndex];
-      assertOverloadCompatibility(baseMember, own, typeName, (candidate, target) => this.isSubtypeOf(candidate, target));
+      assertOverloadCompatibility(baseMember, own, typeName, (candidate, target) =>
+        this.isSubtypeOf(candidate, target),
+      );
       merged[existingIndex] = mergeOverloadedMember(baseMember, own, this.annotationRegistry);
     }
 
-    this.cache.set(typeName, merged.map((member) => cloneMember(member)));
+    this.cache.set(
+      typeName,
+      merged.map((member) => cloneMember(member)),
+    );
     stack.delete(typeName);
     return merged.map((member) => cloneMember(member));
   }

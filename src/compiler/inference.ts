@@ -129,7 +129,10 @@ export const inferStatementVolatility = (
     return "immutable";
   };
 
-  const inferFilterExprVolatility = (filter: FilterExpr | undefined, bindings: Bindings): Volatility => {
+  const inferFilterExprVolatility = (
+    filter: FilterExpr | undefined,
+    bindings: Bindings,
+  ): Volatility => {
     if (!filter) return "immutable";
     switch (filter.kind) {
       case "predicate":
@@ -148,13 +151,21 @@ export const inferStatementVolatility = (
     }
   };
 
-  const inferOrderByVolatility = (orderBy: OrderExpr | undefined, bindings: Bindings): Volatility => {
+  const inferOrderByVolatility = (
+    orderBy: OrderExpr | undefined,
+    bindings: Bindings,
+  ): Volatility => {
     if (!orderBy) return "immutable";
-    const own: Volatility = orderBy.expr ? inferFreeObjectExprVolatility(orderBy.expr, bindings) : "immutable";
+    const own: Volatility = orderBy.expr
+      ? inferFreeObjectExprVolatility(orderBy.expr, bindings)
+      : "immutable";
     return maxVolatility(own, inferOrderByVolatility(orderBy.then, bindings));
   };
 
-  const inferOrderByChainVolatility = (chain: OrderExprChain | undefined, bindings: Bindings): Volatility => {
+  const inferOrderByChainVolatility = (
+    chain: OrderExprChain | undefined,
+    bindings: Bindings,
+  ): Volatility => {
     if (!chain) return "immutable";
     return maxVolatility(
       inferFreeObjectExprVolatility(chain.expr, bindings),
@@ -162,7 +173,10 @@ export const inferStatementVolatility = (
     );
   };
 
-  const inferWithBindingValueVolatility = (value: WithBindingValue, bindings: Bindings): Volatility => {
+  const inferWithBindingValueVolatility = (
+    value: WithBindingValue,
+    bindings: Bindings,
+  ): Volatility => {
     switch (value.kind) {
       case "literal":
       case "set_literal":
@@ -197,7 +211,8 @@ export const inferStatementVolatility = (
 
   const inferStmtVolatility = (stmt: Statement, parentBindings: Bindings): Volatility => {
     const localBindings: Bindings = new Map(parentBindings);
-    for (const binding of (stmt as { with?: Array<{ name: string; value: WithBindingValue }> }).with ?? []) {
+    for (const binding of (stmt as { with?: Array<{ name: string; value: WithBindingValue }> })
+      .with ?? []) {
       localBindings.set(binding.name, binding.value);
     }
 
@@ -206,16 +221,24 @@ export const inferStatementVolatility = (
     }
 
     let bindingsVol: Volatility = "immutable";
-    for (const binding of (stmt as { with?: Array<{ name: string; value: WithBindingValue }> }).with ?? []) {
-      bindingsVol = maxVolatility(bindingsVol, inferWithBindingValueVolatility(binding.value, localBindings));
+    for (const binding of (stmt as { with?: Array<{ name: string; value: WithBindingValue }> })
+      .with ?? []) {
+      bindingsVol = maxVolatility(
+        bindingsVol,
+        inferWithBindingValueVolatility(binding.value, localBindings),
+      );
     }
 
     if (stmt.kind === "select") {
       const baseVol = inferTypeNameVolatility(stmt.typeName, localBindings);
       const filterVol = inferFilterExprVolatility(stmt.filter, localBindings);
       const orderByVol = inferOrderByVolatility(stmt.orderBy, localBindings);
-      const limitVol = stmt.limitExpr ? inferFreeObjectExprVolatility(stmt.limitExpr, localBindings) : "immutable";
-      const offsetVol = stmt.offsetExpr ? inferFreeObjectExprVolatility(stmt.offsetExpr, localBindings) : "immutable";
+      const limitVol = stmt.limitExpr
+        ? inferFreeObjectExprVolatility(stmt.limitExpr, localBindings)
+        : "immutable";
+      const offsetVol = stmt.offsetExpr
+        ? inferFreeObjectExprVolatility(stmt.offsetExpr, localBindings)
+        : "immutable";
       return maxVolatility(baseVol, filterVol, orderByVol, limitVol, offsetVol, bindingsVol);
     }
 
@@ -240,7 +263,10 @@ export const inferStatementVolatility = (
     return bindingsVol;
   };
 
-  const inferFreeObjectExprVolatility = (expr: FreeObjectExpr | ComputedExpr, bindings: Bindings): Volatility => {
+  const inferFreeObjectExprVolatility = (
+    expr: FreeObjectExpr | ComputedExpr,
+    bindings: Bindings,
+  ): Volatility => {
     switch (expr.kind) {
       case "literal":
       case "set_literal":
@@ -275,38 +301,61 @@ export const inferStatementVolatility = (
         return vol;
       }
       case "select":
-        return inferStmtVolatility({
-          kind: "select",
-          typeName: expr.typeName,
-          shape: expr.shape,
-          fields: [],
-          filter: expr.clauses?.filter,
-          orderBy: expr.clauses?.orderBy,
-          limit: expr.clauses?.limit,
-          offset: expr.clauses?.offset,
-          limitExpr: expr.clauses?.limitExpr,
-          offsetExpr: expr.clauses?.offsetExpr,
-          pos: { line: 0, column: 0 },
-        } as Statement, bindings);
+        return inferStmtVolatility(
+          {
+            kind: "select",
+            typeName: expr.typeName,
+            shape: expr.shape,
+            fields: [],
+            filter: expr.clauses?.filter,
+            orderBy: expr.clauses?.orderBy,
+            limit: expr.clauses?.limit,
+            offset: expr.clauses?.offset,
+            limitExpr: expr.clauses?.limitExpr,
+            offsetExpr: expr.clauses?.offsetExpr,
+            pos: { line: 0, column: 0 },
+          } as Statement,
+          bindings,
+        );
       case "select_expr_subquery": {
         const exprVol = inferFreeObjectExprVolatility(expr.expr, bindings);
-        const filterVol = expr.filter ? inferFreeObjectExprVolatility(expr.filter, bindings) : "immutable";
+        const filterVol = expr.filter
+          ? inferFreeObjectExprVolatility(expr.filter, bindings)
+          : "immutable";
         const orderVol = inferOrderByChainVolatility(expr.orderBy, bindings);
-        const limitVol = expr.limitExpr ? inferFreeObjectExprVolatility(expr.limitExpr, bindings) : "immutable";
-        const offsetVol = expr.offsetExpr ? inferFreeObjectExprVolatility(expr.offsetExpr, bindings) : "immutable";
+        const limitVol = expr.limitExpr
+          ? inferFreeObjectExprVolatility(expr.limitExpr, bindings)
+          : "immutable";
+        const offsetVol = expr.offsetExpr
+          ? inferFreeObjectExprVolatility(expr.offsetExpr, bindings)
+          : "immutable";
         let extraBindingsVol: Volatility = "immutable";
         const subBindings: Bindings = new Map(bindings);
         for (const binding of expr.clauses?._withBindings ?? []) {
           subBindings.set(binding.name, binding.value);
-          extraBindingsVol = maxVolatility(extraBindingsVol, inferWithBindingValueVolatility(binding.value, subBindings));
+          extraBindingsVol = maxVolatility(
+            extraBindingsVol,
+            inferWithBindingValueVolatility(binding.value, subBindings),
+          );
         }
         const exprVolWithBindings = inferFreeObjectExprVolatility(expr.expr, subBindings);
-        return maxVolatility(exprVol, exprVolWithBindings, filterVol, orderVol, limitVol, offsetVol, extraBindingsVol);
+        return maxVolatility(
+          exprVol,
+          exprVolWithBindings,
+          filterVol,
+          orderVol,
+          limitVol,
+          offsetVol,
+          extraBindingsVol,
+        );
       }
       case "set_expr":
       case "tuple":
       case "array_literal_expr":
-        return expr.values.reduce<Volatility>((acc, value) => maxVolatility(acc, inferFreeObjectExprVolatility(value, bindings)), "immutable");
+        return expr.values.reduce<Volatility>(
+          (acc, value) => maxVolatility(acc, inferFreeObjectExprVolatility(value, bindings)),
+          "immutable",
+        );
       case "set_op":
       case "compare":
       case "and":
@@ -334,9 +383,15 @@ export const inferStatementVolatility = (
       case "is_type":
         return inferFreeObjectExprVolatility(expr.expr, bindings);
       case "concat":
-        return expr.parts.reduce<Volatility>((acc, part) => maxVolatility(acc, inferFreeObjectExprVolatility(part, bindings)), "immutable");
+        return expr.parts.reduce<Volatility>(
+          (acc, part) => maxVolatility(acc, inferFreeObjectExprVolatility(part, bindings)),
+          "immutable",
+        );
       case "free_object_constructor":
-        return expr.entries.reduce<Volatility>((acc, entry) => maxVolatility(acc, inferFreeObjectExprVolatility(entry.expr, bindings)), "immutable");
+        return expr.entries.reduce<Volatility>(
+          (acc, entry) => maxVolatility(acc, inferFreeObjectExprVolatility(entry.expr, bindings)),
+          "immutable",
+        );
       case "function_call": {
         let vol: Volatility = resolveFunctionVolatility(expr.call.name, expr.call.args.length);
         for (const arg of expr.call.args) {
@@ -349,9 +404,15 @@ export const inferStatementVolatility = (
       case "for_expr": {
         const iterVol = inferFreeObjectExprVolatility(expr.iterator, bindings);
         const bodyVol = inferFreeObjectExprVolatility(expr.body, bindings);
-        const filterVol = expr.filter ? inferFreeObjectExprVolatility(expr.filter, bindings) : "immutable";
-        const limitVol = expr.limitExpr ? inferFreeObjectExprVolatility(expr.limitExpr, bindings) : "immutable";
-        const offsetVol = expr.offsetExpr ? inferFreeObjectExprVolatility(expr.offsetExpr, bindings) : "immutable";
+        const filterVol = expr.filter
+          ? inferFreeObjectExprVolatility(expr.filter, bindings)
+          : "immutable";
+        const limitVol = expr.limitExpr
+          ? inferFreeObjectExprVolatility(expr.limitExpr, bindings)
+          : "immutable";
+        const offsetVol = expr.offsetExpr
+          ? inferFreeObjectExprVolatility(expr.offsetExpr, bindings)
+          : "immutable";
         return maxVolatility(iterVol, bodyVol, filterVol, limitVol, offsetVol);
       }
       default:
@@ -370,8 +431,6 @@ export const inferStatementVolatility = (
 // (`compileToIR` select_expr / select paths). Statement-level only — the
 // per-shape-element cardinality the SQL lowering reads is produced by the
 // builder and is out of scope here. Additive (nothing reads `Statement.cardinality`).
-type Bindings2 = Map<string, WithBindingValue>;
-
 const dedupeByName = <T extends { name: string }>(items: readonly T[]): T[] => {
   const out: T[] = [];
   const seen = new Set<string>();
@@ -421,7 +480,10 @@ const makeInferenceEngine = (
     });
     return dedupeByName([...typeDef.fields, ...inherited]);
   };
-  const collectLinks = (typeDef: TypeDef, seen = new Set<string>()): NonNullable<TypeDef["links"]> => {
+  const collectLinks = (
+    typeDef: TypeDef,
+    seen = new Set<string>(),
+  ): NonNullable<TypeDef["links"]> => {
     const tn = qualifiedTypeName(typeDef);
     if (seen.has(tn)) return [];
     seen.add(tn);
@@ -429,10 +491,16 @@ const makeInferenceEngine = (
       const base = schema.getType(b);
       return base ? collectLinks(base, seen) : [];
     });
-    return dedupeByName([...(typeDef.links ?? []), ...(inherited as NonNullable<TypeDef["links"]>)]);
+    return dedupeByName([
+      ...(typeDef.links ?? []),
+      ...(inherited as NonNullable<TypeDef["links"]>),
+    ]);
   };
 
-  const resolveObjectTypeOrAliasSource = (name: string, fallbackModule: string = activeModule): TypeDef | undefined => {
+  const resolveObjectTypeOrAliasSource = (
+    name: string,
+    fallbackModule: string = activeModule,
+  ): TypeDef | undefined => {
     const normalized = normalizeTypeName(name, fallbackModule);
     const alias = schema.getAlias(normalized);
     if (alias?.sourceType) {
@@ -442,10 +510,11 @@ const makeInferenceEngine = (
   };
 
   const cardinalityForFieldDef = (f: { required?: boolean; multi?: boolean }): CardLevel =>
-    f.multi ? (f.required ? "at_least_one" : "many") : (f.required ? "one" : "at_most_one");
+    f.multi ? (f.required ? "at_least_one" : "many") : f.required ? "one" : "at_most_one";
   const cardinalityForLinkDef = cardinalityForFieldDef;
 
-  const isAtMostOne = (c: CardLevel): boolean => c === "one" || c === "at_most_one" || c === "empty";
+  const isAtMostOne = (c: CardLevel): boolean =>
+    c === "one" || c === "at_most_one" || c === "empty";
   const isAtLeastOne = (c: CardLevel): boolean => c === "one" || c === "at_least_one";
   const cartesianCard = (a: CardLevel, b: CardLevel): CardLevel => {
     if (a === "empty" || b === "empty") return "empty";
@@ -470,7 +539,7 @@ const makeInferenceEngine = (
   const cardIntersectOfFields = (a: CardLevel, b: CardLevel): CardLevel => {
     if (a === "empty" || b === "empty") return "empty";
     const lower = isAtLeastOne(a) || isAtLeastOne(b);
-    const upper = (a === "one" || a === "at_most_one") || (b === "one" || b === "at_most_one");
+    const upper = a === "one" || a === "at_most_one" || b === "one" || b === "at_most_one";
     if (lower && upper) return "one";
     if (upper) return "at_most_one";
     if (lower) return "at_least_one";
@@ -486,7 +555,9 @@ const makeInferenceEngine = (
   const isExclusiveFieldOf = (fieldName: string, typeDef: TypeDef): boolean => {
     if (fieldName === "id") return true;
     const field = collectFields(typeDef).find((f) => f.name === fieldName);
-    const constraint = field?.constraints?.find((c) => c.name === "std::exclusive" || c.name === "exclusive");
+    const constraint = field?.constraints?.find(
+      (c) => c.name === "std::exclusive" || c.name === "exclusive",
+    );
     if (!constraint) return false;
     if (constraint.delegated && typeDef.abstract) return false;
     return true;
@@ -509,7 +580,9 @@ const makeInferenceEngine = (
     const lc = fieldCardOnTypeExpr(typeExpr.left, fieldName);
     const rc = fieldCardOnTypeExpr(typeExpr.right, fieldName);
     if (lc === undefined || rc === undefined) return undefined;
-    return typeExpr.kind === "type_union" ? cardUnionOfFields(lc, rc) : cardIntersectOfFields(lc, rc);
+    return typeExpr.kind === "type_union"
+      ? cardUnionOfFields(lc, rc)
+      : cardIntersectOfFields(lc, rc);
   };
 
   const findUnderlyingTypeExpr = (expr: FreeObjectExpr): TypeExpr | undefined => {
@@ -519,7 +592,11 @@ const makeInferenceEngine = (
       if (s === "assert_exists" || s === "assert_single" || s === "assert_distinct") {
         const first = expr.call.args[0];
         if (first?.kind === "expr") return findUnderlyingTypeExpr(first.expr);
-        if (first?.kind === "binding_ref") return findUnderlyingTypeExpr({ kind: "binding_ref", name: first.name } as FreeObjectExpr);
+        if (first?.kind === "binding_ref")
+          return findUnderlyingTypeExpr({
+            kind: "binding_ref",
+            name: first.name,
+          } as FreeObjectExpr);
       }
     }
     if (expr.kind === "select_expr_subquery" || expr.kind === "cast" || expr.kind === "distinct") {
@@ -529,9 +606,15 @@ const makeInferenceEngine = (
   };
 
   const resolveExprObjectType = (expr: FreeObjectExpr): TypeDef | undefined => {
-    if (expr.kind === "binding_ref") return bindingTypes.get(expr.name) ?? resolveObjectTypeOrAliasSource(expr.name);
+    if (expr.kind === "binding_ref")
+      return bindingTypes.get(expr.name) ?? resolveObjectTypeOrAliasSource(expr.name);
     if (expr.kind === "select") return resolveObjectTypeOrAliasSource(expr.typeName);
-    if (expr.kind === "shape_projection" || expr.kind === "cast" || expr.kind === "distinct" || expr.kind === "select_expr_subquery") {
+    if (
+      expr.kind === "shape_projection" ||
+      expr.kind === "cast" ||
+      expr.kind === "distinct" ||
+      expr.kind === "select_expr_subquery"
+    ) {
       return resolveExprObjectType(expr.expr);
     }
     return undefined;
@@ -552,7 +635,10 @@ const makeInferenceEngine = (
     }
     return aliases;
   };
-  const isSubjectFieldAccess = (expr: FreeObjectExpr, typeDef: TypeDef): { field: string } | undefined => {
+  const isSubjectFieldAccess = (
+    expr: FreeObjectExpr,
+    typeDef: TypeDef,
+  ): { field: string } | undefined => {
     const aliases = subjectAliasesFor(typeDef);
     if (expr.kind === "field_access") {
       const base = expr.expr;
@@ -574,8 +660,18 @@ const makeInferenceEngine = (
     const path: string[] = [];
     let cur: FreeObjectExpr = expr;
     while (true) {
-      if (cur.kind === "field_access") { path.unshift(cur.field); cur = cur.expr; continue; }
-      if (cur.kind === "current_item" || cur.kind === "binding_ref" || cur.kind === "select" || cur.kind === "shape_projection") break;
+      if (cur.kind === "field_access") {
+        path.unshift(cur.field);
+        cur = cur.expr;
+        continue;
+      }
+      if (
+        cur.kind === "current_item" ||
+        cur.kind === "binding_ref" ||
+        cur.kind === "select" ||
+        cur.kind === "shape_projection"
+      )
+        break;
       return false;
     }
     if (cur.kind === "binding_ref" && !subjectAliasesFor(typeDef).has(cur.name)) return false;
@@ -585,7 +681,9 @@ const makeInferenceEngine = (
       const link = collectLinks(stepType).find((l) => l.name === step);
       if (link) {
         if (link.multi) return false;
-        const exclusive = (link.constraints ?? []).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
+        const exclusive = (link.constraints ?? []).some(
+          (c) => c.name === "std::exclusive" || c.name === "exclusive",
+        );
         if (!exclusive) return false;
         stepType = resolveObjectTypeOrAliasSource(link.targetType);
         continue;
@@ -593,7 +691,10 @@ const makeInferenceEngine = (
       const field = collectFields(stepType).find((f) => f.name === step);
       if (!field) return false;
       if (field.multi) return false;
-      if (step === "id") { stepType = undefined; continue; }
+      if (step === "id") {
+        stepType = undefined;
+        continue;
+      }
       if (!isExclusiveFieldOf(step, stepType)) return false;
       stepType = undefined;
     }
@@ -607,7 +708,9 @@ const makeInferenceEngine = (
       const link = collectLinks(stepType).find((l) => l.name === step);
       if (link) {
         if (link.multi) return false;
-        const exclusive = (link.constraints ?? []).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
+        const exclusive = (link.constraints ?? []).some(
+          (c) => c.name === "std::exclusive" || c.name === "exclusive",
+        );
         if (!exclusive) return false;
         stepType = resolveObjectTypeOrAliasSource(link.targetType);
         continue;
@@ -615,7 +718,10 @@ const makeInferenceEngine = (
       const field = collectFields(stepType).find((f) => f.name === step);
       if (!field) return false;
       if (field.multi) return false;
-      if (step === "id") { stepType = undefined; continue; }
+      if (step === "id") {
+        stepType = undefined;
+        continue;
+      }
       if (!isExclusiveFieldOf(step, stepType)) return false;
       stepType = undefined;
     }
@@ -623,11 +729,27 @@ const makeInferenceEngine = (
   };
   const freeExprRestrictsAtMostOne = (expr: FreeObjectExpr, typeDef: TypeDef): boolean => {
     if (expr.kind === "logical") {
-      if (expr.op === "and") return freeExprRestrictsAtMostOne(expr.left, typeDef) || freeExprRestrictsAtMostOne(expr.right, typeDef);
-      if (expr.op === "or") return freeExprRestrictsAtMostOne(expr.left, typeDef) && freeExprRestrictsAtMostOne(expr.right, typeDef);
+      if (expr.op === "and")
+        return (
+          freeExprRestrictsAtMostOne(expr.left, typeDef) ||
+          freeExprRestrictsAtMostOne(expr.right, typeDef)
+        );
+      if (expr.op === "or")
+        return (
+          freeExprRestrictsAtMostOne(expr.left, typeDef) &&
+          freeExprRestrictsAtMostOne(expr.right, typeDef)
+        );
     }
-    if (expr.kind === "and") return freeExprRestrictsAtMostOne(expr.left, typeDef) || freeExprRestrictsAtMostOne(expr.right, typeDef);
-    if (expr.kind === "or") return freeExprRestrictsAtMostOne(expr.left, typeDef) && freeExprRestrictsAtMostOne(expr.right, typeDef);
+    if (expr.kind === "and")
+      return (
+        freeExprRestrictsAtMostOne(expr.left, typeDef) ||
+        freeExprRestrictsAtMostOne(expr.right, typeDef)
+      );
+    if (expr.kind === "or")
+      return (
+        freeExprRestrictsAtMostOne(expr.left, typeDef) &&
+        freeExprRestrictsAtMostOne(expr.right, typeDef)
+      );
     if (expr.kind === "compare" && expr.op === "=") {
       const lf = isSubjectFieldAccess(expr.left, typeDef);
       const rf = isSubjectFieldAccess(expr.right, typeDef);
@@ -635,25 +757,37 @@ const makeInferenceEngine = (
       if (field && isExclusiveFieldOf(field, typeDef)) return true;
       if (isExclusiveSinglePathChain(expr.left, typeDef)) return true;
       if (isExclusiveSinglePathChain(expr.right, typeDef)) return true;
-      if (isSubjectReference(expr.left, typeDef) && isAtMostOne(inferAstCardinality(expr.right))) return true;
-      if (isSubjectReference(expr.right, typeDef) && isAtMostOne(inferAstCardinality(expr.left))) return true;
+      if (isSubjectReference(expr.left, typeDef) && isAtMostOne(inferAstCardinality(expr.right)))
+        return true;
+      if (isSubjectReference(expr.right, typeDef) && isAtMostOne(inferAstCardinality(expr.left)))
+        return true;
     }
     return false;
   };
-  const filterRestrictsAtMostOneInner = (filter: FilterExpr | undefined, typeDef: TypeDef): boolean => {
+  const filterRestrictsAtMostOneInner = (
+    filter: FilterExpr | undefined,
+    typeDef: TypeDef,
+  ): boolean => {
     if (!filter) return false;
     switch (filter.kind) {
       case "predicate":
         if (filter.op !== "=") return false;
         if (filter.target.kind === "field") {
-          if (filter.target.field.includes(".")) return dottedPathIsExclusiveChain(filter.target.field, typeDef);
+          if (filter.target.field.includes("."))
+            return dottedPathIsExclusiveChain(filter.target.field, typeDef);
           return isExclusiveFieldOf(filter.target.field, typeDef);
         }
         return false;
       case "and":
-        return filterRestrictsAtMostOneInner(filter.left, typeDef) || filterRestrictsAtMostOneInner(filter.right, typeDef);
+        return (
+          filterRestrictsAtMostOneInner(filter.left, typeDef) ||
+          filterRestrictsAtMostOneInner(filter.right, typeDef)
+        );
       case "or":
-        return filterRestrictsAtMostOneInner(filter.left, typeDef) && filterRestrictsAtMostOneInner(filter.right, typeDef);
+        return (
+          filterRestrictsAtMostOneInner(filter.left, typeDef) &&
+          filterRestrictsAtMostOneInner(filter.right, typeDef)
+        );
       case "not":
       case "in_predicate":
         return false;
@@ -665,12 +799,17 @@ const makeInferenceEngine = (
   };
   // Type-level compound exclusive constraints (`exclusive on (.first, .last)`):
   // an equality on every referenced field pins the row to at most one.
-  const collectEqualityPinnedFields = (filter: FilterExpr | undefined, typeDef: TypeDef): Set<string> => {
+  const collectEqualityPinnedFields = (
+    filter: FilterExpr | undefined,
+    typeDef: TypeDef,
+  ): Set<string> => {
     const pinned = new Set<string>();
     if (!filter) return pinned;
     const addFromFreeExpr = (expr: FreeObjectExpr): void => {
       if ((expr.kind === "logical" && expr.op === "and") || expr.kind === "and") {
-        addFromFreeExpr(expr.left); addFromFreeExpr(expr.right); return;
+        addFromFreeExpr(expr.left);
+        addFromFreeExpr(expr.right);
+        return;
       }
       if (expr.kind === "compare" && expr.op === "=") {
         const l = isSubjectFieldAccess(expr.left, typeDef);
@@ -680,18 +819,30 @@ const makeInferenceEngine = (
       }
     };
     const walk = (f: FilterExpr): void => {
-      if (f.kind === "predicate" && f.op === "=" && f.target.kind === "field") pinned.add(f.target.field);
-      else if (f.kind === "and") { walk(f.left); walk(f.right); }
-      else if (f.kind === "free_expr") addFromFreeExpr(f.expr);
+      if (f.kind === "predicate" && f.op === "=" && f.target.kind === "field")
+        pinned.add(f.target.field);
+      else if (f.kind === "and") {
+        walk(f.left);
+        walk(f.right);
+      } else if (f.kind === "free_expr") addFromFreeExpr(f.expr);
     };
     walk(filter);
     return pinned;
   };
-  const typeConstraintSatisfied = (typeDef: TypeDef, pinned: Set<string>, rootAbstract: boolean, visited = new Set<string>()): boolean => {
+  const typeConstraintSatisfied = (
+    typeDef: TypeDef,
+    pinned: Set<string>,
+    rootAbstract: boolean,
+    visited = new Set<string>(),
+  ): boolean => {
     const tn = qualifiedTypeName(typeDef);
     if (visited.has(tn)) return false;
     visited.add(tn);
-    for (const c of (typeDef as { typeConstraints?: Array<{ name: string; fieldRefs: string[]; delegated?: boolean }> }).typeConstraints ?? []) {
+    for (const c of (
+      typeDef as {
+        typeConstraints?: Array<{ name: string; fieldRefs: string[]; delegated?: boolean }>;
+      }
+    ).typeConstraints ?? []) {
       if (c.name !== "std::exclusive" && c.name !== "exclusive") continue;
       if (c.fieldRefs.length === 0) continue;
       if (c.delegated && rootAbstract) continue;
@@ -720,14 +871,25 @@ const makeInferenceEngine = (
         return "one";
       case "global_ref": {
         const normalized = normalizeTypeName(expr.name, activeModule);
-        const def = schema.getGlobal(normalized) ?? schema.getGlobal(`default::${expr.name}`) ?? schema.getGlobal(expr.name);
+        const def =
+          schema.getGlobal(normalized) ??
+          schema.getGlobal(`default::${expr.name}`) ??
+          schema.getGlobal(expr.name);
         if (def?.exprText) {
           const exprText = def.exprText;
           const parsed = tryResult(() => parseEdgeQL(`select ${exprText.replace(/;\s*$/, "")}`));
           if (parsed.ok) {
-            const stmt = (Array.isArray(parsed.value) ? parsed.value[0] : parsed.value) as Statement;
+            const stmt = (
+              Array.isArray(parsed.value) ? parsed.value[0] : parsed.value
+            ) as Statement;
             if (stmt.kind === "select_expr") return inferAstCardinality(stmt.expr);
-            if (stmt.kind === "select") return inferAstCardinality({ kind: "select", typeName: stmt.typeName, shape: stmt.shape, clauses: { filter: stmt.filter } } as FreeObjectExpr);
+            if (stmt.kind === "select")
+              return inferAstCardinality({
+                kind: "select",
+                typeName: stmt.typeName,
+                shape: stmt.shape,
+                clauses: { filter: stmt.filter },
+              } as FreeObjectExpr);
           }
         }
         return "one";
@@ -747,7 +909,12 @@ const makeInferenceEngine = (
         if (expr.clauses?.limit === 0) return "empty";
         if (expr.clauses?.limit === 1) return "at_most_one";
         const typeDef = resolveObjectTypeOrAliasSource(expr.typeName);
-        if (typeDef && expr.clauses?.filter && filterRestrictsAtMostOne(expr.clauses.filter, typeDef)) return "at_most_one";
+        if (
+          typeDef &&
+          expr.clauses?.filter &&
+          filterRestrictsAtMostOne(expr.clauses.filter, typeDef)
+        )
+          return "at_most_one";
         return "many";
       }
       case "select_expr_subquery": {
@@ -766,8 +933,14 @@ const makeInferenceEngine = (
           }
         }
         if (expr.limit === 1) card = isAtLeastOne(card) ? "one" : "at_most_one";
-        const dyn = expr.limitExpr !== undefined || (expr.offset !== undefined && expr.offset > 0) || expr.offsetExpr !== undefined;
-        if (dyn) { if (card === "one") card = "at_most_one"; else if (card === "at_least_one") card = "many"; }
+        const dyn =
+          expr.limitExpr !== undefined ||
+          (expr.offset !== undefined && expr.offset > 0) ||
+          expr.offsetExpr !== undefined;
+        if (dyn) {
+          if (card === "one") card = "at_most_one";
+          else if (card === "at_least_one") card = "many";
+        }
         return card;
       }
       case "shape_projection":
@@ -786,19 +959,29 @@ const makeInferenceEngine = (
             if (fc !== undefined) return cartesianCard(sourceCard, fc);
           }
         }
-        const findShapeProjection = (e: FreeObjectExpr): { expr: FreeObjectExpr; shape: ShapeElement[] } | undefined => {
-          if (e.kind === "shape_projection") return e as unknown as { expr: FreeObjectExpr; shape: ShapeElement[] };
-          if (e.kind === "select_expr_subquery" || e.kind === "cast") return findShapeProjection(e.expr);
+        const findShapeProjection = (
+          e: FreeObjectExpr,
+        ): { expr: FreeObjectExpr; shape: ShapeElement[] } | undefined => {
+          if (e.kind === "shape_projection")
+            return e as unknown as { expr: FreeObjectExpr; shape: ShapeElement[] };
+          if (e.kind === "select_expr_subquery" || e.kind === "cast")
+            return findShapeProjection(e.expr);
           return undefined;
         };
         const shaped = findShapeProjection(expr.expr);
         if (shaped) {
           const el = shaped.shape.find((s) => (s as { name?: string }).name === expr.field);
-          if (el && (el as { expr?: { kind?: string; sourceType?: string } }).expr?.kind === "polymorphic_field_ref") {
+          if (
+            el &&
+            (el as { expr?: { kind?: string; sourceType?: string } }).expr?.kind ===
+              "polymorphic_field_ref"
+          ) {
             const polySrc = (el as { expr: { sourceType: string } }).expr.sourceType;
             const srcType = resolveExprObjectType(shaped.expr);
             const srcName = srcType ? qualifiedTypeName(srcType) : undefined;
-            const total = srcName ? isAssignableTo(srcName, normalizeTypeName(polySrc, activeModule)) : false;
+            const total = srcName
+              ? isAssignableTo(srcName, normalizeTypeName(polySrc, activeModule))
+              : false;
             if (!total) {
               if (sourceCard === "one") return "at_most_one";
               if (sourceCard === "at_least_one") return "many";
@@ -816,13 +999,16 @@ const makeInferenceEngine = (
         const a = inferAstCardinality(expr.left);
         const b = inferAstCardinality(expr.right);
         if (a === "empty" || b === "empty") return "empty";
-        if (expr.op === "intersect") return (isAtMostOne(a) || isAtMostOne(b)) ? "at_most_one" : "many";
+        if (expr.op === "intersect")
+          return isAtMostOne(a) || isAtMostOne(b) ? "at_most_one" : "many";
         return isAtMostOne(a) ? "at_most_one" : "many";
       }
       case "array_literal_expr":
         return cartesianMany(expr.values.map(inferAstCardinality));
       case "free_object_constructor":
-        return expr.tupleLike ? cartesianMany(expr.entries.map((e) => inferAstCardinality(e.expr))) : "one";
+        return expr.tupleLike
+          ? cartesianMany(expr.entries.map((e) => inferAstCardinality(e.expr)))
+          : "one";
       case "tuple":
         return cartesianMany(expr.values.map(inferAstCardinality));
       case "cast":
@@ -842,7 +1028,8 @@ const makeInferenceEngine = (
       case "compare": {
         const a = inferAstCardinality(expr.left);
         const b = inferAstCardinality(expr.right);
-        if ((expr.op === "?=" || expr.op === "?!=") && isAtMostOne(a) && isAtMostOne(b)) return "one";
+        if ((expr.op === "?=" || expr.op === "?!=") && isAtMostOne(a) && isAtMostOne(b))
+          return "one";
         return cartesianCard(a, b);
       }
       case "coalesce": {
@@ -877,11 +1064,20 @@ const makeInferenceEngine = (
           const k = (a as { kind?: string }).kind;
           if (k === "named_arg") return inferArgCard((a as { arg: unknown }).arg);
           if (k === "expr") return inferAstCardinality((a as { expr: FreeObjectExpr }).expr);
-          if (k === "binding_ref") return inferAstCardinality({ kind: "binding_ref", name: (a as { name: string }).name } as FreeObjectExpr);
+          if (k === "binding_ref")
+            return inferAstCardinality({
+              kind: "binding_ref",
+              name: (a as { name: string }).name,
+            } as FreeObjectExpr);
           if (k === "literal" || k === "parameter") return "one";
-          if (k === "set_literal") return ((a as { values: unknown[] }).values.length === 0) ? "empty" : "at_least_one";
+          if (k === "set_literal")
+            return (a as { values: unknown[] }).values.length === 0 ? "empty" : "at_least_one";
           if (k === "array_literal") return "one";
-          if (k === "function_call") return inferAstCardinality({ kind: "function_call", call: (a as { call: FunctionCallExpr }).call } as FreeObjectExpr);
+          if (k === "function_call")
+            return inferAstCardinality({
+              kind: "function_call",
+              call: (a as { call: FunctionCallExpr }).call,
+            } as FreeObjectExpr);
           return "many";
         };
         const argCards = expr.call.args.map(inferArgCard);
@@ -890,7 +1086,8 @@ const makeInferenceEngine = (
           const primary = argCards[0] ?? "many";
           const rest = argCards.slice(1);
           const card: CardLevel = isAtMostOne(primary) ? "one" : "at_least_one";
-          if (rest.some((c) => c !== "one" && c !== "at_most_one" && c !== "empty")) return "at_least_one";
+          if (rest.some((c) => c !== "one" && c !== "at_most_one" && c !== "empty"))
+            return "at_least_one";
           return rest.reduce((acc, c) => cartesianCard(acc, c), card);
         }
         if (stripped === "assert_distinct") {
@@ -902,7 +1099,8 @@ const makeInferenceEngine = (
           const msg = argCards[1];
           const pLower = isAtLeastOne(primary);
           const pUpper = isAtMostOne(primary);
-          const msgMulti = msg !== undefined && msg !== "one" && msg !== "at_most_one" && msg !== "empty";
+          const msgMulti =
+            msg !== undefined && msg !== "one" && msg !== "at_most_one" && msg !== "empty";
           if (msgMulti) return pLower ? "at_least_one" : "many";
           if (pUpper && pLower) return "one";
           if (pUpper) return "at_most_one";
@@ -913,12 +1111,17 @@ const makeInferenceEngine = (
           const primary = argCards[0] ?? "many";
           return isAtLeastOne(primary) ? "one" : "at_most_one";
         }
-        const fn = schema.findFunction("default", stripped, expr.call.args.length) ?? schema.findFunction("std", stripped, expr.call.args.length);
+        const fn =
+          schema.findFunction("default", stripped, expr.call.args.length) ??
+          schema.findFunction("std", stripped, expr.call.args.length);
         if (fn) {
           const eff = fn.params.map((p, i) => {
             const c = argCards[i] ?? "many";
             if (p.setOf) return "one" as CardLevel;
-            if (p.optional) { if (c === "empty" || c === "at_most_one") return "one" as CardLevel; return c; }
+            if (p.optional) {
+              if (c === "empty" || c === "at_most_one") return "one" as CardLevel;
+              return c;
+            }
             return c;
           });
           const cart = eff.reduce((acc, c) => cartesianCard(acc, c), "one" as CardLevel);
@@ -926,7 +1129,7 @@ const makeInferenceEngine = (
         }
         const stdlib = tryResolveStdlibFunction(callName, expr.call.args.length, "default");
         if (stdlib) {
-          const eff = argCards.map((c, i) => stdlib.paramSetOf?.[i] ? "one" as CardLevel : c);
+          const eff = argCards.map((c, i) => (stdlib.paramSetOf?.[i] ? ("one" as CardLevel) : c));
           const cart = eff.reduce((acc, c) => cartesianCard(acc, c), "one" as CardLevel);
           return cartesianCard(cart, stdlib.returnOptional ? "at_most_one" : "one");
         }
@@ -937,7 +1140,9 @@ const makeInferenceEngine = (
       case "path_steps": {
         const steps = expr.steps ?? [];
         if (steps.length === 0) return "many";
-        return (steps[steps.length - 1] as { kind: string }).kind === "type_intersection" ? "at_most_one" : "many";
+        return (steps[steps.length - 1] as { kind: string }).kind === "type_intersection"
+          ? "at_most_one"
+          : "many";
       }
       case "backlink_path": {
         if (!expr.sourceType) return "many";
@@ -945,7 +1150,9 @@ const makeInferenceEngine = (
         if (!srcType) return "many";
         const fwd = collectLinks(srcType).find((l) => l.name === expr.link);
         if (!fwd) return "many";
-        const excl = (fwd.constraints ?? []).find((c) => c.name === "std::exclusive" || c.name === "exclusive");
+        const excl = (fwd.constraints ?? []).find(
+          (c) => c.name === "std::exclusive" || c.name === "exclusive",
+        );
         if (!excl) return "many";
         if (excl.delegated && srcType.abstract) return "many";
         return "at_most_one";
@@ -958,7 +1165,9 @@ const makeInferenceEngine = (
   };
 
   // ---- statement-level derivation (mirrors compileToIR) ----
-  const populateBindings = (withClause: Array<{ name: string; value: WithBindingValue }> | undefined): void => {
+  const populateBindings = (
+    withClause: Array<{ name: string; value: WithBindingValue }> | undefined,
+  ): void => {
     for (const binding of withClause ?? []) {
       const value = binding.value;
       let card: CardLevel | undefined;
@@ -970,19 +1179,31 @@ const makeInferenceEngine = (
         else if (value.query.clauses?.limit === 1) card = "at_most_one";
       } else if (value.kind === "subquery_expr") {
         resolved = resolveExprObjectType(value.expr);
-        if (value.expr.kind === "set_literal") card = value.expr.values.length === 0 ? "empty" : "at_least_one";
+        if (value.expr.kind === "set_literal")
+          card = value.expr.values.length === 0 ? "empty" : "at_least_one";
         else if (value.expr.kind === "array_literal_expr") card = "one";
         else card = inferAstCardinality(value.expr);
         if (value.expr.kind === "path_steps") {
-          const steps = (value.expr as { steps?: Array<{ kind: string; typeExpr?: TypeExpr }> }).steps ?? [];
+          const steps =
+            (value.expr as { steps?: Array<{ kind: string; typeExpr?: TypeExpr }> }).steps ?? [];
           const last = steps[steps.length - 1];
-          if (last?.kind === "type_intersection" && last.typeExpr) bindingTypeExprs.set(binding.name, last.typeExpr);
+          if (last?.kind === "type_intersection" && last.typeExpr)
+            bindingTypeExprs.set(binding.name, last.typeExpr);
         }
       } else if (value.kind === "subquery_statement") {
         const inner = value.statement;
-        if (inner.kind === "select") { resolved = resolveObjectTypeOrAliasSource(inner.typeName); card = "many"; }
-        else if (inner.kind === "select_expr") { resolved = resolveExprObjectType(inner.expr); card = inferAstCardinality(inner.expr); }
-      } else if (value.kind === "literal" || value.kind === "array_literal" || value.kind === "parameter") {
+        if (inner.kind === "select") {
+          resolved = resolveObjectTypeOrAliasSource(inner.typeName);
+          card = "many";
+        } else if (inner.kind === "select_expr") {
+          resolved = resolveExprObjectType(inner.expr);
+          card = inferAstCardinality(inner.expr);
+        }
+      } else if (
+        value.kind === "literal" ||
+        value.kind === "array_literal" ||
+        value.kind === "parameter"
+      ) {
         card = "one";
       } else if (value.kind === "set_literal") {
         card = value.values.length === 0 ? "empty" : "at_least_one";
@@ -1002,34 +1223,50 @@ const makeInferenceEngine = (
       if (!conflict) return "one";
       if (!conflict.else) return "at_most_one"; // UNLESS CONFLICT may insert nothing
       const elseType = conflict.else.typeName;
-      if (elseType && normalizeTypeName(elseType, activeModule) === normalizeTypeName(ins.typeName, activeModule)) return "one";
+      if (
+        elseType &&
+        normalizeTypeName(elseType, activeModule) === normalizeTypeName(ins.typeName, activeModule)
+      )
+        return "one";
       return "many";
     }
     if (statement.kind === "update" || statement.kind === "delete") {
-      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      populateBindings(
+        (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with,
+      );
       const s = statement as { typeName: string; filter?: FilterExpr };
       const typeDef = bindingTypes.get(s.typeName) ?? resolveObjectTypeOrAliasSource(s.typeName);
       if (typeDef && filterRestrictsAtMostOne(s.filter, typeDef)) return "at_most_one";
       return "many";
     }
     if (statement.kind === "for") {
-      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      populateBindings(
+        (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with,
+      );
       const s = statement as { iteratorExpr: FreeObjectExpr; body: Statement };
       const iterCard = inferAstCardinality(s.iteratorExpr);
       const bodyCard = inferStatementCardinality(s.body, schema, activeModule);
       return cartesianCard(iterCard, bodyCard);
     }
     if (statement.kind === "select_expr") {
-      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      populateBindings(
+        (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with,
+      );
       const raw = inferAstCardinality(statement.expr);
       return raw === "empty" ? "at_most_one" : raw;
     }
     if (statement.kind === "select") {
-      populateBindings((statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with);
+      populateBindings(
+        (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with,
+      );
       const limit = (statement as { limit?: number }).limit;
       let card: CardLevel = limit === 0 ? "empty" : limit === 1 ? "at_most_one" : "many";
       const typeDef = resolveObjectTypeOrAliasSource((statement as { typeName: string }).typeName);
-      if (card === "many" && typeDef && filterRestrictsAtMostOne((statement as { filter?: FilterExpr }).filter, typeDef)) {
+      if (
+        card === "many" &&
+        typeDef &&
+        filterRestrictsAtMostOne((statement as { filter?: FilterExpr }).filter, typeDef)
+      ) {
         card = "at_most_one";
       }
       return card;
@@ -1042,7 +1279,9 @@ const makeInferenceEngine = (
   const bindingMults = new Map<string, MultLevel>();
   const shapeContextStack: ShapeElement[][] = [];
   const withBindingValues = new Map<string, WithBindingValue>(
-    (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with?.map((b) => [b.name, b.value] as const) ?? [],
+    (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with?.map(
+      (b) => [b.name, b.value] as const,
+    ) ?? [],
   );
 
   // Look up `field` in the shape a binding/projection projects, returning the
@@ -1062,7 +1301,11 @@ const makeInferenceEngine = (
         const inner = computedBodyToExpr((el as { expr: unknown }).expr);
         if (!inner) return undefined;
         shapeContextStack.push(shape);
-        try { return inferAstMultiplicity(inner); } finally { shapeContextStack.pop(); }
+        try {
+          return inferAstMultiplicity(inner);
+        } finally {
+          shapeContextStack.pop();
+        }
       }
     }
     return undefined;
@@ -1073,7 +1316,8 @@ const makeInferenceEngine = (
       if (own !== undefined) return own;
       return findInExprShape(e.expr, field);
     }
-    if (e.kind === "select_expr_subquery" || e.kind === "distinct" || e.kind === "cast") return findInExprShape(e.expr, field);
+    if (e.kind === "select_expr_subquery" || e.kind === "distinct" || e.kind === "cast")
+      return findInExprShape(e.expr, field);
     if (e.kind === "binding_ref") {
       const v = withBindingValues.get(e.name);
       if (v?.kind === "subquery") return findShapeFieldMult(v.query.shape, field);
@@ -1104,12 +1348,20 @@ const makeInferenceEngine = (
     const k = (a as { kind?: string }).kind;
     if (k === "named_arg") return callArgAsExpr((a as { arg: unknown }).arg);
     if (k === "expr") return (a as { expr: FreeObjectExpr }).expr;
-    if (k === "binding_ref") return { kind: "binding_ref", name: (a as { name: string }).name } as FreeObjectExpr;
-    if (k === "literal") return { kind: "literal", value: (a as { value: unknown }).value } as FreeObjectExpr;
-    if (k === "parameter") return { kind: "parameter", name: (a as { name: string }).name } as FreeObjectExpr;
-    if (k === "set_literal") return { kind: "set_literal", values: (a as { values: unknown[] }).values } as FreeObjectExpr;
+    if (k === "binding_ref")
+      return { kind: "binding_ref", name: (a as { name: string }).name } as FreeObjectExpr;
+    if (k === "literal")
+      return { kind: "literal", value: (a as { value: unknown }).value } as FreeObjectExpr;
+    if (k === "parameter")
+      return { kind: "parameter", name: (a as { name: string }).name } as FreeObjectExpr;
+    if (k === "set_literal")
+      return { kind: "set_literal", values: (a as { values: unknown[] }).values } as FreeObjectExpr;
     if (k === "array_literal") return { kind: "array_literal_expr", values: [] } as FreeObjectExpr;
-    if (k === "function_call") return { kind: "function_call", call: (a as { call: FunctionCallExpr }).call } as FreeObjectExpr;
+    if (k === "function_call")
+      return {
+        kind: "function_call",
+        call: (a as { call: FunctionCallExpr }).call,
+      } as FreeObjectExpr;
     return undefined;
   };
 
@@ -1120,7 +1372,14 @@ const makeInferenceEngine = (
     if (nonEmpty.length === 0) return "empty";
     if (nonEmpty.some((m) => m === "duplicate")) return "duplicate";
     if (nonEmpty.length === 1) return nonEmpty[0];
-    if (values.every((v) => v.kind === "mutation_expr" && (v as { statement: { kind: string } }).statement.kind === "insert")) return "unique";
+    if (
+      values.every(
+        (v) =>
+          v.kind === "mutation_expr" &&
+          (v as { statement: { kind: string } }).statement.kind === "insert",
+      )
+    )
+      return "unique";
     const types = values.map((v) => resolveExprObjectType(v));
     let anyType = false;
     let overlap = false;
@@ -1130,7 +1389,10 @@ const makeInferenceEngine = (
       anyType = true;
       for (let j = i + 1; j < types.length; j++) {
         const tj = types[j];
-        if (tj && objectTypesOverlap(ti, tj)) { overlap = true; break; }
+        if (tj && objectTypesOverlap(ti, tj)) {
+          overlap = true;
+          break;
+        }
       }
     }
     if (anyType && !overlap) return "unique";
@@ -1179,7 +1441,8 @@ const makeInferenceEngine = (
         const a = inferAstMultiplicity(expr.left);
         const b = inferAstMultiplicity(expr.right);
         if (a === "empty" || b === "empty") return "empty";
-        if (expr.op === "intersect") return (a === "unique" || b === "unique") ? "unique" : "duplicate";
+        if (expr.op === "intersect")
+          return a === "unique" || b === "unique" ? "unique" : "duplicate";
         return a;
       }
       case "tuple": {
@@ -1199,7 +1462,7 @@ const makeInferenceEngine = (
         if (mults.some((m) => m === "empty")) return "empty";
         const cards = expr.values.map(inferAstCardinality);
         const numMany = cards.filter((c) => !isAtMostOne(c)).length;
-        return (numMany <= 1 && mults.every((m) => m === "unique")) ? "unique" : "duplicate";
+        return numMany <= 1 && mults.every((m) => m === "unique") ? "unique" : "duplicate";
       }
       case "field_access": {
         if (expr.expr.kind === "introspect_typeof") return "unique";
@@ -1209,10 +1472,15 @@ const makeInferenceEngine = (
           for (const el of ctx) {
             if ("name" in el && el.name === expr.field && el.kind === "computed") {
               const body = (el as { expr?: { kind?: string; expr?: FreeObjectExpr } }).expr;
-              const inner = body?.kind === "select_expr" ? body.expr : (body as FreeObjectExpr | undefined);
+              const inner =
+                body?.kind === "select_expr" ? body.expr : (body as FreeObjectExpr | undefined);
               if (inner) {
                 shapeContextStack.push(ctx);
-                try { return inferAstMultiplicity(inner); } finally { shapeContextStack.pop(); }
+                try {
+                  return inferAstMultiplicity(inner);
+                } finally {
+                  shapeContextStack.pop();
+                }
               }
             }
           }
@@ -1232,7 +1500,9 @@ const makeInferenceEngine = (
         if (lm === "empty" || rm === "empty") return "empty";
         if (expr.op === "+") {
           if (lm === "duplicate" || rm === "duplicate") return "duplicate";
-          const numMany = (isAtMostOne(inferAstCardinality(expr.left)) ? 0 : 1) + (isAtMostOne(inferAstCardinality(expr.right)) ? 0 : 1);
+          const numMany =
+            (isAtMostOne(inferAstCardinality(expr.left)) ? 0 : 1) +
+            (isAtMostOne(inferAstCardinality(expr.right)) ? 0 : 1);
           return numMany > 1 ? "duplicate" : "unique";
         }
         return "duplicate";
@@ -1252,14 +1522,14 @@ const makeInferenceEngine = (
         const e = inferAstMultiplicity(expr.elseExpr);
         if (t === "empty") return e;
         if (e === "empty") return t;
-        return (t === "unique" && e === "unique") ? "unique" : "duplicate";
+        return t === "unique" && e === "unique" ? "unique" : "duplicate";
       }
       case "coalesce": {
         const a = inferAstMultiplicity(expr.left);
         const b = inferAstMultiplicity(expr.right);
         if (a === "empty") return b;
         if (b === "empty") return a;
-        return (a === "unique" && b === "unique") ? "unique" : "duplicate";
+        return a === "unique" && b === "unique" ? "unique" : "duplicate";
       }
       case "concat": {
         const partMults = expr.parts.map(inferAstMultiplicity);
@@ -1273,15 +1543,20 @@ const makeInferenceEngine = (
         const callName = expr.call.name;
         const stripped = stripModulePrefix(callName);
         const argExprs = expr.call.args.map(callArgAsExpr);
-        const argMults = argExprs.map((a) => a ? inferAstMultiplicity(a) : "duplicate");
-        const argCards = argExprs.map((a) => a ? inferAstCardinality(a) : "many");
+        const argMults = argExprs.map((a) => (a ? inferAstMultiplicity(a) : "duplicate"));
+        const argCards = argExprs.map((a) => (a ? inferAstCardinality(a) : "many"));
         if (isAggregating(callName) || isOptionalAggregate(callName)) return "unique";
         if (stripped === "assert_distinct" || stripped === "enumerate") return "unique";
-        if (stripped === "assert_exists" || stripped === "assert_single") return argMults[0] ?? "unknown";
-        const fn = schema.findFunction("default", stripped, expr.call.args.length) ?? schema.findFunction("std", stripped, expr.call.args.length);
+        if (stripped === "assert_exists" || stripped === "assert_single")
+          return argMults[0] ?? "unknown";
+        const fn =
+          schema.findFunction("default", stripped, expr.call.args.length) ??
+          schema.findFunction("std", stripped, expr.call.args.length);
         if (fn) {
-          const eMults = fn.params.map((p, i) => p.setOf ? "unique" : (argMults[i] ?? "unknown"));
-          const eCards = fn.params.map((p, i) => p.setOf ? "one" as CardLevel : (argCards[i] ?? "many"));
+          const eMults = fn.params.map((p, i) => (p.setOf ? "unique" : (argMults[i] ?? "unknown")));
+          const eCards = fn.params.map((p, i) =>
+            p.setOf ? ("one" as CardLevel) : (argCards[i] ?? "many"),
+          );
           if (eMults.some((m) => m === "empty")) return "empty";
           if (eMults.some((m) => m === "duplicate" || m === "unknown")) return "duplicate";
           return eCards.filter((c) => !isAtMostOne(c)).length > 1 ? "duplicate" : "unique";
@@ -1330,27 +1605,51 @@ const makeInferenceEngine = (
     }
   }
 
-  const inferTopLevelMultiplicity = (expr: FreeObjectExpr | undefined, card: CardLevel): MultLevel => {
+  const inferTopLevelMultiplicity = (
+    expr: FreeObjectExpr | undefined,
+    card: CardLevel,
+  ): MultLevel => {
     const m = inferAstMultiplicity(expr);
     if ((m === "duplicate" || m === "unknown") && isAtMostOne(card)) return "unique";
     return m;
   };
 
-  const populateBindingMults = (withClause: Array<{ name: string; value: WithBindingValue }> | undefined): void => {
+  const populateBindingMults = (
+    withClause: Array<{ name: string; value: WithBindingValue }> | undefined,
+  ): void => {
     for (const binding of withClause ?? []) {
       const value = binding.value;
-      if (value.kind === "subquery_expr") bindingMults.set(binding.name, inferAstMultiplicity(value.expr));
+      if (value.kind === "subquery_expr")
+        bindingMults.set(binding.name, inferAstMultiplicity(value.expr));
       else if (value.kind === "subquery") bindingMults.set(binding.name, "unique");
-      else if (value.kind === "set_literal") bindingMults.set(binding.name, value.values.length === 0 ? "empty" : (new Set(value.values.map((v) => JSON.stringify(v))).size === value.values.length ? "unique" : "duplicate"));
-      else if (value.kind === "literal" || value.kind === "parameter" || value.kind === "array_literal") bindingMults.set(binding.name, "unique");
-      else if (value.kind === "binding_ref") { const m = bindingMults.get(value.name); if (m !== undefined) bindingMults.set(binding.name, m); }
+      else if (value.kind === "set_literal")
+        bindingMults.set(
+          binding.name,
+          value.values.length === 0
+            ? "empty"
+            : new Set(value.values.map((v) => JSON.stringify(v))).size === value.values.length
+              ? "unique"
+              : "duplicate",
+        );
+      else if (
+        value.kind === "literal" ||
+        value.kind === "parameter" ||
+        value.kind === "array_literal"
+      )
+        bindingMults.set(binding.name, "unique");
+      else if (value.kind === "binding_ref") {
+        const m = bindingMults.get(value.name);
+        if (m !== undefined) bindingMults.set(binding.name, m);
+      }
     }
   };
 
   const statementMultiplicity = (): MultLevel => {
-    if (statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete") return "unique";
+    if (statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete")
+      return "unique";
     if (statement.kind === "select" || statement.kind === "select_free") return "unique";
-    const withClause = (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with;
+    const withClause = (statement as { with?: Array<{ name: string; value: WithBindingValue }> })
+      .with;
     populateBindings(withClause);
     populateBindingMults(withClause);
     if (statement.kind === "select_expr") {
@@ -1367,7 +1666,8 @@ const makeInferenceEngine = (
 
       const iterCard = inferAstCardinality(iteratorExpr);
       let bodyCard: CardLevel = "many";
-      if (body.kind === "select_expr") bodyCard = inferAstCardinality((body as { expr: FreeObjectExpr }).expr);
+      if (body.kind === "select_expr")
+        bodyCard = inferAstCardinality((body as { expr: FreeObjectExpr }).expr);
       else if (body.kind === "select_free") bodyCard = "one";
       else if (body.kind === "insert") bodyCard = "one";
       const combinedRaw = cartesianCard(iterCard, bodyCard);
@@ -1376,9 +1676,16 @@ const makeInferenceEngine = (
       bindingCards.set(variable, "one");
       const forIterMult = inferAstMultiplicity(iteratorExpr);
       const forBodyExpr: FreeObjectExpr | undefined =
-        body.kind === "select_expr" ? (body as { expr: FreeObjectExpr }).expr :
-        body.kind === "select" ? { kind: "select", typeName: (body as { typeName: string }).typeName, shape: (body as { shape: ShapeElement[] }).shape, clauses: {} } as FreeObjectExpr :
-        undefined;
+        body.kind === "select_expr"
+          ? (body as { expr: FreeObjectExpr }).expr
+          : body.kind === "select"
+            ? ({
+                kind: "select",
+                typeName: (body as { typeName: string }).typeName,
+                shape: (body as { shape: ShapeElement[] }).shape,
+                clauses: {},
+              } as FreeObjectExpr)
+            : undefined;
 
       const isIterDerivedRef = (e: FreeObjectExpr): boolean => {
         if (e.kind === "binding_ref" && e.name === variable) return true;
@@ -1389,14 +1696,25 @@ const makeInferenceEngine = (
         if (!filter) return false;
         if (filter.kind === "predicate" && filter.op === "=" && filter.target.kind === "field") {
           const v = (filter as { value?: unknown }).value;
-          if (typeof v === "object" && v !== null && (v as { kind?: string }).kind === "binding_ref" && (v as { name?: string }).name === variable) return true;
+          if (
+            typeof v === "object" &&
+            v !== null &&
+            (v as { kind?: string }).kind === "binding_ref" &&
+            (v as { name?: string }).name === variable
+          )
+            return true;
         }
-        if (filter.kind === "and") return isDirectIterFilter(filter.left) || isDirectIterFilter(filter.right);
+        if (filter.kind === "and")
+          return isDirectIterFilter(filter.left) || isDirectIterFilter(filter.right);
         if (filter.kind === "free_expr") {
           const e = filter.expr;
           if (e.kind === "compare" && e.op === "=") {
             const sides = [e.left, e.right];
-            const fieldSide = sides.find((s) => s.kind === "field_access" && (s.expr.kind === "current_item" || s.expr.kind === "binding_ref"));
+            const fieldSide = sides.find(
+              (s) =>
+                s.kind === "field_access" &&
+                (s.expr.kind === "current_item" || s.expr.kind === "binding_ref"),
+            );
             const varSide = sides.find(isIterDerivedRef);
             if (fieldSide && varSide) return true;
           }
@@ -1404,22 +1722,34 @@ const makeInferenceEngine = (
         return false;
       };
       const bodyFilter: FilterExpr | undefined =
-        body.kind === "select" ? (body as { filter?: FilterExpr }).filter :
-        body.kind === "select_expr" && ((body as { expr: { filter?: unknown } }).expr).filter ? (((body as { expr: { filter: FreeObjectExpr } }).expr).filter as unknown as FilterExpr) :
-        undefined;
+        body.kind === "select"
+          ? (body as { filter?: FilterExpr }).filter
+          : body.kind === "select_expr" && (body as { expr: { filter?: unknown } }).expr.filter
+            ? ((body as { expr: { filter: FreeObjectExpr } }).expr.filter as unknown as FilterExpr)
+            : undefined;
       const unwrapBodyExpr = (e: FreeObjectExpr | undefined): FreeObjectExpr | undefined => {
         if (!e) return undefined;
-        if (e.kind === "shape_projection" || e.kind === "cast" || e.kind === "distinct") return unwrapBodyExpr(e.expr);
-        if (e.kind === "select_expr_subquery" && !e.filter && !e.orderBy && e.limit === undefined && e.offset === undefined) return unwrapBodyExpr(e.expr);
+        if (e.kind === "shape_projection" || e.kind === "cast" || e.kind === "distinct")
+          return unwrapBodyExpr(e.expr);
+        if (
+          e.kind === "select_expr_subquery" &&
+          !e.filter &&
+          !e.orderBy &&
+          e.limit === undefined &&
+          e.offset === undefined
+        )
+          return unwrapBodyExpr(e.expr);
         return e;
       };
-      const withList = (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with ?? [];
+      const withList =
+        (statement as { with?: Array<{ name: string; value: WithBindingValue }> }).with ?? [];
       const resolveBindingToExpr = (name: string, depth = 0): FreeObjectExpr | undefined => {
         if (depth > 8) return undefined;
         for (const b of withList) {
           if (b.name === name) {
             if (b.value.kind === "subquery_expr") return b.value.expr;
-            if (b.value.kind === "binding_ref") return resolveBindingToExpr(b.value.name, depth + 1);
+            if (b.value.kind === "binding_ref")
+              return resolveBindingToExpr(b.value.name, depth + 1);
           }
         }
         return undefined;
@@ -1428,9 +1758,21 @@ const makeInferenceEngine = (
       const seedInnerBindings = (e: FreeObjectExpr | undefined): void => {
         if (!e) return;
         if (e.kind === "select_expr_subquery") {
-          const withs = (e.clauses as { _withBindings?: Array<{ name: string; value: { kind: string; expr?: FreeObjectExpr } }> } | undefined)?._withBindings;
+          const withs = (
+            e.clauses as
+              | {
+                  _withBindings?: Array<{
+                    name: string;
+                    value: { kind: string; expr?: FreeObjectExpr };
+                  }>;
+                }
+              | undefined
+          )?._withBindings;
           for (const b of withs ?? []) {
-            if (b.value.kind === "subquery_expr" && b.value.expr) { bindingMults.set(b.name, inferAstMultiplicity(b.value.expr)); seededInner.push(b.name); }
+            if (b.value.kind === "subquery_expr" && b.value.expr) {
+              bindingMults.set(b.name, inferAstMultiplicity(b.value.expr));
+              seededInner.push(b.name);
+            }
           }
           seedInnerBindings(e.expr);
         }
@@ -1440,8 +1782,19 @@ const makeInferenceEngine = (
       const collectInner = (e: FreeObjectExpr | undefined): void => {
         if (!e) return;
         if (e.kind === "select_expr_subquery") {
-          const withs = (e.clauses as { _withBindings?: Array<{ name: string; value: { kind: string; expr?: FreeObjectExpr } }> } | undefined)?._withBindings;
-          for (const b of withs ?? []) if (b.value.kind === "subquery_expr" && b.value.expr) innerBindingMap.set(b.name, b.value.expr);
+          const withs = (
+            e.clauses as
+              | {
+                  _withBindings?: Array<{
+                    name: string;
+                    value: { kind: string; expr?: FreeObjectExpr };
+                  }>;
+                }
+              | undefined
+          )?._withBindings;
+          for (const b of withs ?? [])
+            if (b.value.kind === "subquery_expr" && b.value.expr)
+              innerBindingMap.set(b.name, b.value.expr);
           collectInner(e.expr);
         }
       };
@@ -1461,32 +1814,49 @@ const makeInferenceEngine = (
         if (!e || depth > 6) return false;
         const fc = (e as { filter?: unknown }).filter;
         if (fc && isDirectIterFilter(fc as unknown as FilterExpr)) return true;
-        if (e.kind === "select" && e.clauses?.filter && isDirectIterFilter(e.clauses.filter)) return true;
-        if (e.kind === "select_expr_subquery" || e.kind === "shape_projection" || e.kind === "distinct" || e.kind === "cast") return findNestedIterFilter(e.expr, depth + 1);
+        if (e.kind === "select" && e.clauses?.filter && isDirectIterFilter(e.clauses.filter))
+          return true;
+        if (
+          e.kind === "select_expr_subquery" ||
+          e.kind === "shape_projection" ||
+          e.kind === "distinct" ||
+          e.kind === "cast"
+        )
+          return findNestedIterFilter(e.expr, depth + 1);
         if (e.kind === "set_expr") return e.values.some((v) => findNestedIterFilter(v, depth + 1));
         return false;
       };
 
       const forBodyMult = forBodyExpr ? inferAstMultiplicity(forBodyExpr) : "unique";
       const bodyInner = unwrapBodyExpr(forBodyExpr);
-      const bodyResolvedFreeObj = bodyInner?.kind === "binding_ref"
-        ? unwrapBodyExpr(resolveBindingToExpr(bodyInner.name))?.kind === "free_object_constructor"
-        : false;
+      const bodyResolvedFreeObj =
+        bodyInner?.kind === "binding_ref"
+          ? unwrapBodyExpr(resolveBindingToExpr(bodyInner.name))?.kind === "free_object_constructor"
+          : false;
 
       let forCombinedMult: MultLevel = "duplicate";
       if (forIterMult === "empty" || forBodyMult === "empty") forCombinedMult = "empty";
       else if (body.kind === "insert") forCombinedMult = "unique";
       else if (forIterMult !== "duplicate" && forBodyMult === "unique") {
         const bodyRefsIter =
-          (bodyInner?.kind === "binding_ref" && resolvesToIterVar(bodyInner.name))
-          || (bodyInner !== undefined && isIterDerivedRef(bodyInner));
+          (bodyInner?.kind === "binding_ref" && resolvesToIterVar(bodyInner.name)) ||
+          (bodyInner !== undefined && isIterDerivedRef(bodyInner));
         const bodyIsFreeObj = bodyInner?.kind === "free_object_constructor";
-        const bodyIsInsert = bodyInner?.kind === "mutation_expr" && (bodyInner as { statement: { kind: string } }).statement.kind === "insert";
-        if (bodyRefsIter || bodyIsFreeObj || bodyIsInsert || isDirectIterFilter(bodyFilter) || findNestedIterFilter(forBodyExpr)) {
+        const bodyIsInsert =
+          bodyInner?.kind === "mutation_expr" &&
+          (bodyInner as { statement: { kind: string } }).statement.kind === "insert";
+        if (
+          bodyRefsIter ||
+          bodyIsFreeObj ||
+          bodyIsInsert ||
+          isDirectIterFilter(bodyFilter) ||
+          findNestedIterFilter(forBodyExpr)
+        ) {
           forCombinedMult = "unique";
         }
       }
-      if (bodyInner?.kind === "free_object_constructor" || bodyResolvedFreeObj) forCombinedMult = "unique";
+      if (bodyInner?.kind === "free_object_constructor" || bodyResolvedFreeObj)
+        forCombinedMult = "unique";
       if (forCombinedMult === "duplicate" && isAtMostOne(combinedRaw)) forCombinedMult = "unique";
       return forCombinedMult;
     }

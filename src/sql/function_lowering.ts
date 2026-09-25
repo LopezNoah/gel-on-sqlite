@@ -24,24 +24,49 @@ import { countArgIsFactored } from "../ir/scope_tree.js";
 // Functions returning `optional T` where a SQL NULL means "no value" — at a
 // top-level scalar select that's the EMPTY SET (zero rows), not a NULL row.
 // `range_get_upper`/`range_get_lower` return {} for an unbounded bound.
-export const EMPTY_ON_NULL_FUNCTIONS = new Set<string>([
-  "range_get_upper", "range_get_lower",
-]);
+export const EMPTY_ON_NULL_FUNCTIONS = new Set<string>(["range_get_upper", "range_get_lower"]);
 
 export const SET_CONSUMING_FUNCTIONS = new Set<string>([
-  "count", "sum", "min", "max", "avg", "all", "any", "array_agg", "enumerate",
-  "mean", "stddev", "stddev_pop", "var", "var_pop",
-  "assert_distinct", "assert_single", "assert_exists", "assert",
-  "array_unpack", "range_unpack", "array_get",
+  "count",
+  "sum",
+  "min",
+  "max",
+  "avg",
+  "all",
+  "any",
+  "array_agg",
+  "enumerate",
+  "mean",
+  "stddev",
+  "stddev_pop",
+  "var",
+  "var_pop",
+  "assert_distinct",
+  "assert_single",
+  "assert_exists",
+  "assert",
+  "array_unpack",
+  "range_unpack",
+  "array_get",
 ]);
 
 // Stdlib functions that return std::bool — their IR typeref is usually the
 // uninferred `std::anytype`, so the value layer consults this list to decide
 // when to JSON-encode the boolean result.
 const BOOL_RETURNING_STDLIB = new Set<string>([
-  "all", "any", "contains", "re_test", "range_is_empty", "range_is_inclusive_upper",
-  "range_is_inclusive_lower", "overlaps", "strictly_above", "strictly_below",
-  "bounded_above", "bounded_below", "adjacent",
+  "all",
+  "any",
+  "contains",
+  "re_test",
+  "range_is_empty",
+  "range_is_inclusive_upper",
+  "range_is_inclusive_lower",
+  "overlaps",
+  "strictly_above",
+  "strictly_below",
+  "bounded_above",
+  "bounded_below",
+  "adjacent",
 ]);
 
 // The SQL compiler's PRIVATE internal seam: the gel_ir_compiler primitives that
@@ -131,7 +156,11 @@ export interface SqlLoweringContext {
     options: GelIRCompileOptions,
   ): string | null;
   collectForExprProjectedColumns(sourceSet: Set, where?: Set, orderBy?: SortExpr[]): string[];
-  collectFreeTypeRoots(bodySet: Set, bindingAliases: Map<string, string>, outerWhere?: Set): Array<{ key: string; typeref: TypeRef }>;
+  collectFreeTypeRoots(
+    bodySet: Set,
+    bindingAliases: Map<string, string>,
+    outerWhere?: Set,
+  ): Array<{ key: string; typeref: TypeRef }>;
   countAliases(bindingAliases: Map<string, string>): number;
   innermostForExprBody(sourceSet: Set): Set;
   isTopLevelEmptySetMarker(set: Set, options?: GelIRCompileOptions): boolean;
@@ -216,7 +245,7 @@ export const setLooksLikeRange = (set: Set): boolean => {
   let cur = set;
   while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
   if (cur.expr.kind === "function_call") {
-    const fn = ((cur.expr as FunctionCall).functionName.split("::").pop()) ?? "";
+    const fn = (cur.expr as FunctionCall).functionName.split("::").pop() ?? "";
     if (fn === "range" || fn === "multirange") return true;
   }
   // Range set algebra (`+`/`*`/`-` over range operands) again yields a range,
@@ -290,7 +319,8 @@ const tryCompileSharedPrefixTupleCount = (
     if (e.kind !== "pointer") return null;
     const ptr = e as Pointer;
     if (ptr.ptrref.isLinkProperty || !ptr.ptrref.outTarget.isScalar) return null;
-    const single = ptr.ptrref.outCardinality === "one" || ptr.ptrref.outCardinality === "at_most_one";
+    const single =
+      ptr.ptrref.outCardinality === "one" || ptr.ptrref.outCardinality === "at_most_one";
     if (!single) return null;
     const src = ptr.source;
     // The shared prefix must be a TYPE-ROOT extent — counting its SQL rows then
@@ -312,8 +342,16 @@ const tryCompileSharedPrefixTupleCount = (
   // its rows. A FACTORED prefix (alias-view computable) is never reached here —
   // the caller only invokes this gate when the scope-tree verdict is correlated.
   const checkpoint = params.length;
-  const source = deps.compileSelectSourceRelation(shared, undefined, undefined, options, params, target, "sp0")
-    ?? deps.compileSelectSource(shared, undefined, undefined, options, params, target, "sp0");
+  const source =
+    deps.compileSelectSourceRelation(
+      shared,
+      undefined,
+      undefined,
+      options,
+      params,
+      target,
+      "sp0",
+    ) ?? deps.compileSelectSource(shared, undefined, undefined, options, params, target, "sp0");
   if (!source) {
     params.length = checkpoint;
     return null;
@@ -340,7 +378,13 @@ export const compileCountOfSetSQL = (
     if (scopedAlias) {
       return `(CASE WHEN ${scopedAlias}.${quoteIdent("id")} IS NULL THEN 0 ELSE 1 END)`;
     }
-    const fromSql = deps.compilePolymorphicSource(root.typeref, root.skipSubtypes, "g_agg", ["id"], options);
+    const fromSql = deps.compilePolymorphicSource(
+      root.typeref,
+      root.skipSubtypes,
+      "g_agg",
+      ["id"],
+      options,
+    );
     return `(SELECT count(*) FROM ${fromSql})`;
   }
 
@@ -395,11 +439,24 @@ export const compileCountOfSetSQL = (
       params.length = cp;
     }
     const checkpoint = params.length;
-    const compiledSource = deps.compileSelectSource(selectExpr.result, selectExpr.where, selectExpr.orderBy, options, params, target);
+    const compiledSource = deps.compileSelectSource(
+      selectExpr.result,
+      selectExpr.where,
+      selectExpr.orderBy,
+      options,
+      params,
+      target,
+    );
     if (compiledSource) {
       let sql = `SELECT count(*) AS ${quoteIdent("value")} FROM ${compiledSource.sql}`;
       if (selectExpr.where) {
-        const whereSql = deps.compileWhereClause(selectExpr.where, compiledSource.alias, params, target, options);
+        const whereSql = deps.compileWhereClause(
+          selectExpr.where,
+          compiledSource.alias,
+          params,
+          target,
+          options,
+        );
         if (!whereSql) {
           params.length = checkpoint;
           return null;
@@ -413,7 +470,13 @@ export const compileCountOfSetSQL = (
           ? deps.compileValueSetSQL(selectExpr.limit, compiledSource.alias, params, target, options)
           : null;
         const offsetSql = selectExpr.offset
-          ? deps.compileValueSetSQL(selectExpr.offset, compiledSource.alias, params, target, options)
+          ? deps.compileValueSetSQL(
+              selectExpr.offset,
+              compiledSource.alias,
+              params,
+              target,
+              options,
+            )
           : null;
         if ((selectExpr.limit && !limitSql) || (selectExpr.offset && !offsetSql)) {
           params.length = checkpoint;
@@ -421,7 +484,13 @@ export const compileCountOfSetSQL = (
         }
         let inner = `SELECT 1 FROM ${compiledSource.sql}`;
         if (selectExpr.where) {
-          const innerWhereSql = deps.compileWhereClause(selectExpr.where, compiledSource.alias, params, target, options);
+          const innerWhereSql = deps.compileWhereClause(
+            selectExpr.where,
+            compiledSource.alias,
+            params,
+            target,
+            options,
+          );
           if (!innerWhereSql) {
             params.length = checkpoint;
             return null;
@@ -442,23 +511,25 @@ export const compileCountOfSetSQL = (
     const name = (expr as FunctionCall).functionName.split("::").pop() ?? "";
     if (["count", "sum", "array_agg", "all", "any"].includes(name)) {
       const checkpoint = params.length;
-      const source = deps.compileSelectSourceRelation(
-        set.computedSource,
-        undefined,
-        undefined,
-        options,
-        params,
-        target,
-        "computed_owner",
-      ) ?? deps.compileSelectSource(
-        set.computedSource,
-        undefined,
-        undefined,
-        options,
-        params,
-        target,
-        "computed_owner",
-      );
+      const source =
+        deps.compileSelectSourceRelation(
+          set.computedSource,
+          undefined,
+          undefined,
+          options,
+          params,
+          target,
+          "computed_owner",
+        ) ??
+        deps.compileSelectSource(
+          set.computedSource,
+          undefined,
+          undefined,
+          options,
+          params,
+          target,
+          "computed_owner",
+        );
       if (source) return `(SELECT count(*) FROM ${source.sql})`;
       params.length = checkpoint;
     }
@@ -467,8 +538,10 @@ export const compileCountOfSetSQL = (
   // count() always returns one scalar row, including for an empty argument.
   // Therefore a count of that result has cardinality one without evaluating
   // the inner aggregate as a row source.
-  if (expr.kind === "function_call"
-      && ((expr as FunctionCall).functionName.split("::").pop() ?? "") === "count") {
+  if (
+    expr.kind === "function_call" &&
+    ((expr as FunctionCall).functionName.split("::").pop() ?? "") === "count"
+  ) {
     return "1";
   }
 
@@ -501,7 +574,14 @@ export const compileCountOfSetSQL = (
     // Non-scalar pointer (link traversal like `User.friends`): scalar compile
     // bails because the target isn't a scalar. Build the link-traversal
     // FROM clause directly and count its rows.
-    const compiledSource = deps.compileSelectSource(set, undefined, undefined, options, params, target);
+    const compiledSource = deps.compileSelectSource(
+      set,
+      undefined,
+      undefined,
+      options,
+      params,
+      target,
+    );
     if (compiledSource) {
       return `(SELECT count(*) FROM ${compiledSource.sql})`;
     }
@@ -522,7 +602,9 @@ export const compileCountOfSetSQL = (
       return cur.expr.kind === "group_row_field" || cur.expr.kind === "group_rows";
     })();
     const projectedColumns = deps.collectForExprProjectedColumns(set);
-    const forSource = bodyIsGroupRowChain ? null : deps.compileForExprSource(set, projectedColumns, options, params, target);
+    const forSource = bodyIsGroupRowChain
+      ? null
+      : deps.compileForExprSource(set, projectedColumns, options, params, target);
     if (forSource) {
       // Add cross joins for free type roots in the body, matching how the
       // outer FOR path builds its FROM clause.
@@ -531,7 +613,13 @@ export const compileCountOfSetSQL = (
       let nextIdx = deps.countAliases(forSource.bindingAliases);
       for (const root of freeRoots) {
         const alias = `g${nextIdx++}`;
-        const joinSql = deps.compilePolymorphicSource(root.typeref, false, alias, projectedColumns, options);
+        const joinSql = deps.compilePolymorphicSource(
+          root.typeref,
+          false,
+          alias,
+          projectedColumns,
+          options,
+        );
         forSource.fromSql += ` CROSS JOIN ${joinSql}`;
         forSource.bindingAliases.set(root.key, alias);
       }
@@ -545,7 +633,12 @@ export const compileCountOfSetSQL = (
   // length of that union. (Scalar constants already evaluate to a single
   // row, so they count as 1.) Group-row element paths (`count(g.elements)`)
   // lower to a correlated row set the same way.
-  if (expr.kind === "operator_call" || expr.kind === "group_row_field" || expr.kind === "group_rows" || expr.kind === "for_expr") {
+  if (
+    expr.kind === "operator_call" ||
+    expr.kind === "group_row_field" ||
+    expr.kind === "group_rows" ||
+    expr.kind === "for_expr"
+  ) {
     const checkpoint = params.length;
     const scalarSql = deps.compileScalarSelectSQL(set, params, target, options);
     if (scalarSql) {
@@ -579,8 +672,10 @@ export const compileFunctionCallSQL = (
       const argList = orderedCallArgs(call.args);
       if (argList.length >= 2) {
         const idxUnwrapped = deps.unwrapSelectExprSet(argList[1].expr);
-        if (idxUnwrapped.result.expr.kind === "operator_call"
-            && (idxUnwrapped.result.expr as OperatorCall).operator === "union") {
+        if (
+          idxUnwrapped.result.expr.kind === "operator_call" &&
+          (idxUnwrapped.result.expr as OperatorCall).operator === "union"
+        ) {
           return null;
         }
       }
@@ -605,24 +700,34 @@ export const compileFunctionCallSQL = (
   // (division by zero); last-ULP differences vs Gel's stable algorithm. See
   // KNOWN_LIMITATIONS.md.
   const STAT_AGG_SQL: Record<string, string> = {
-    mean: "_gel_mean", stddev: "_gel_stddev", stddev_pop: "_gel_stddev_pop",
-    var: "_gel_var", var_pop: "_gel_var_pop",
+    mean: "_gel_mean",
+    stddev: "_gel_stddev",
+    stddev_pop: "_gel_stddev_pop",
+    var: "_gel_var",
+    var_pop: "_gel_var_pop",
   };
   const statAggSql = (name: string, col: string): string => {
     if (target !== "d1") return `${STAT_AGG_SQL[name]}(${col})`;
     const varPop = `(avg(${col}*${col}) - avg(${col})*avg(${col}))`;
     const varSamp = `(${varPop} * count(${col}) / (count(${col}) - 1.0))`;
     switch (name) {
-      case "mean": return `avg(${col})`;
-      case "var_pop": return varPop;
-      case "var": return varSamp;
-      case "stddev_pop": return `sqrt(${varPop})`;
-      case "stddev": return `sqrt(${varSamp})`;
-      default: return `${STAT_AGG_SQL[name]}(${col})`;
+      case "mean":
+        return `avg(${col})`;
+      case "var_pop":
+        return varPop;
+      case "var":
+        return varSamp;
+      case "stddev_pop":
+        return `sqrt(${varPop})`;
+      case "stddev":
+        return `sqrt(${varSamp})`;
+      default:
+        return `${STAT_AGG_SQL[name]}(${col})`;
     }
   };
-  const aggregateOfType = ["count", "min", "max", "sum", "avg", "array_agg", "all", "any"].includes(shortName)
-    || shortName in STAT_AGG_SQL;
+  const aggregateOfType =
+    ["count", "min", "max", "sum", "avg", "array_agg", "all", "any"].includes(shortName) ||
+    shortName in STAT_AGG_SQL;
   if (aggregateOfType) {
     const argList = orderedCallArgs(call.args);
     // Empty-set short-circuit: EdgeQL aggregates over the empty set have
@@ -649,20 +754,26 @@ export const compileFunctionCallSQL = (
       // pointer as a free-standing set, which would count every link in the
       // table for every row.
       const countArg = deps.unwrapSelectExprSet(argList[0].expr);
-      const hasClauses = countArg.selectExpr
-        && (countArg.selectExpr.where || countArg.selectExpr.limit || countArg.selectExpr.offset);
+      const hasClauses =
+        countArg.selectExpr &&
+        (countArg.selectExpr.where || countArg.selectExpr.limit || countArg.selectExpr.offset);
       const countPtrAnchorsRow = (): boolean => {
-        if (countArg.result.expr.kind !== "pointer" || countArg.result.typeref.isScalar) return false;
+        if (countArg.result.expr.kind !== "pointer" || countArg.result.typeref.isScalar)
+          return false;
         let ptrSource: Set = (countArg.result.expr as Pointer).source;
         while (ptrSource.expr.kind === "select_expr") {
           const se = ptrSource.expr as SelectExpr;
           // A filtered/clamped source (`(SELECT User FILTER …).<owner`)
           // is its own row set, not the current row — counting it as a
           // correlated link would reference an alias that doesn't exist.
-          if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0)) return false;
+          if (se.where || se.limit || se.offset || (se.orderBy && se.orderBy.length > 0))
+            return false;
           ptrSource = se.result;
         }
-        return ptrSource.expr.kind === "type_root" || deps.pickSourcePathAlias(ptrSource, options) !== null;
+        return (
+          ptrSource.expr.kind === "type_root" ||
+          deps.pickSourcePathAlias(ptrSource, options) !== null
+        );
       };
       if (!hasClauses && countPtrAnchorsRow()) {
         const arr = deps.compilePointerArrayExpr(
@@ -686,7 +797,13 @@ export const compileFunctionCallSQL = (
     }
     if (argList.length === 1 && argList[0].expr.expr.kind === "type_root") {
       const root = argList[0].expr.expr as TypeRoot;
-      const fromSql = deps.compilePolymorphicSource(root.typeref, root.skipSubtypes, "g_agg", ["id"], options);
+      const fromSql = deps.compilePolymorphicSource(
+        root.typeref,
+        root.skipSubtypes,
+        "g_agg",
+        ["id"],
+        options,
+      );
       if (shortName === "count") {
         return `(SELECT count(*) FROM ${fromSql})`;
       }
@@ -712,14 +829,12 @@ export const compileFunctionCallSQL = (
         orderBy = se.orderBy;
       }
       const scalarPath = deps.extractScalarPointerPath(pathSet);
-      const rootIsScoped = scalarPath !== null
-        && (
-          options.relation?.correlateScope(scopeKeyOf(
-            scalarPath.root.typeref,
-            scalarPath.root.pathId?.namespace ?? [],
-          )) !== undefined
-          || options.relation?.tryGetPathVar(pathKeyOf(scalarPath.root), "source") != null
-        );
+      const rootIsScoped =
+        scalarPath !== null &&
+        (options.relation?.correlateScope(
+          scopeKeyOf(scalarPath.root.typeref, scalarPath.root.pathId?.namespace ?? []),
+        ) !== undefined ||
+          options.relation?.tryGetPathVar(pathKeyOf(scalarPath.root), "source") != null);
       const correlated = rootIsScoped
         ? deps.tryCompileCorrelatedScalarPointerPathScalarSelect(pathSet, sourceAlias, options)
         : null;
@@ -729,7 +844,9 @@ export const compileFunctionCallSQL = (
           // The correlated inner SELECT projects a single `value` column, so
           // ORDER BY on that column matches ordering by the inner SELECT's
           // own result expression (the common shape `SELECT _ := X ORDER BY _`).
-          const orders = orderBy.map((sort) => `${quoteIdent("value")} ${sort.direction.toUpperCase()}`);
+          const orders = orderBy.map(
+            (sort) => `${quoteIdent("value")} ${sort.direction.toUpperCase()}`,
+          );
           inner = `${correlated} ORDER BY ${orders.join(", ")}`;
         }
         // `all`/`any` are boolean aggregates: SQLite has no direct equivalent
@@ -743,15 +860,16 @@ export const compileFunctionCallSQL = (
         if (shortName === "any") {
           return `(SELECT IFNULL(max(${quoteIdent("value")}), json('false')) FROM (${inner}) WHERE ${quoteIdent("value")} IS NOT NULL)`;
         }
-        const sqlAgg = shortName === "array_agg"
-          ? `json_group_array(${quoteIdent("value")})`
-          : shortName in STAT_AGG_SQL
-            ? statAggSql(shortName, quoteIdent("value"))
-            : shortName === "sum"
-              // EdgeQL `sum` has identity 0 over the (runtime-)empty set;
-              // SQL `sum` over zero rows is NULL.
-              ? `IFNULL(sum(${quoteIdent("value")}), 0)`
-              : `${shortName}(${quoteIdent("value")})`;
+        const sqlAgg =
+          shortName === "array_agg"
+            ? `json_group_array(${quoteIdent("value")})`
+            : shortName in STAT_AGG_SQL
+              ? statAggSql(shortName, quoteIdent("value"))
+              : shortName === "sum"
+                ? // EdgeQL `sum` has identity 0 over the (runtime-)empty set;
+                  // SQL `sum` over zero rows is NULL.
+                  `IFNULL(sum(${quoteIdent("value")}), 0)`
+                : `${shortName}(${quoteIdent("value")})`;
         return `(SELECT ${sqlAgg} FROM (${inner}))`;
       }
       const innerCheckpoint = params.length;
@@ -763,14 +881,15 @@ export const compileFunctionCallSQL = (
         if (shortName === "any") {
           return `(SELECT IFNULL(max(${quoteIdent("value")}), json('false')) FROM (${scalarSql}) WHERE ${quoteIdent("value")} IS NOT NULL)`;
         }
-        const sqlAgg = shortName === "array_agg"
-          ? `json_group_array(${deps.setValueIsJson(argList[0].expr) ? `json(${quoteIdent("value")})` : quoteIdent("value")})`
-          : shortName in STAT_AGG_SQL
-            ? statAggSql(shortName, quoteIdent("value"))
-            : shortName === "sum"
-              // EdgeQL `sum` identity is 0 over the runtime-empty set.
-              ? `IFNULL(sum(${quoteIdent("value")}), 0)`
-              : `${shortName}(${quoteIdent("value")})`;
+        const sqlAgg =
+          shortName === "array_agg"
+            ? `json_group_array(${deps.setValueIsJson(argList[0].expr) ? `json(${quoteIdent("value")})` : quoteIdent("value")})`
+            : shortName in STAT_AGG_SQL
+              ? statAggSql(shortName, quoteIdent("value"))
+              : shortName === "sum"
+                ? // EdgeQL `sum` identity is 0 over the runtime-empty set.
+                  `IFNULL(sum(${quoteIdent("value")}), 0)`
+                : `${shortName}(${quoteIdent("value")})`;
         return `(SELECT ${sqlAgg} FROM (${scalarSql}))`;
       }
       params.length = innerCheckpoint;
@@ -786,9 +905,22 @@ export const compileFunctionCallSQL = (
     let ok = true;
     for (const slot of slots) {
       const ca = (call.args as Record<string, CallArg | undefined>)[slot];
-      if (!ca) { pieces.push("0"); continue; }
-      const v = deps.compileValueSetSQL(ca.expr, sourceAlias, params, target, options, linkPropertyAlias);
-      if (!v) { ok = false; break; }
+      if (!ca) {
+        pieces.push("0");
+        continue;
+      }
+      const v = deps.compileValueSetSQL(
+        ca.expr,
+        sourceAlias,
+        params,
+        target,
+        options,
+        linkPropertyAlias,
+      );
+      if (!v) {
+        ok = false;
+        break;
+      }
       pieces.push(v);
     }
     if (ok) return `_gel_to_duration(${pieces.join(", ")})`;
@@ -796,11 +928,18 @@ export const compileFunctionCallSQL = (
   }
 
   const callArgs = orderedCallArgs(call.args);
-  const argKeys = Object.keys(call.args)
-    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
-  const args = callArgs
-    .map((arg) => deps.compileValueSetSQL(arg.expr, sourceAlias, params, target, options, linkPropertyAlias));
-  if (args.some((arg, index) => !arg && !(shortName === "range" && (argKeys[index] === "0" || argKeys[index] === "1")))) {
+  const argKeys = Object.keys(call.args).sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true }),
+  );
+  const args = callArgs.map((arg) =>
+    deps.compileValueSetSQL(arg.expr, sourceAlias, params, target, options, linkPropertyAlias),
+  );
+  if (
+    args.some(
+      (arg, index) =>
+        !arg && !(shortName === "range" && (argKeys[index] === "0" || argKeys[index] === "1")),
+    )
+  ) {
     params.length = checkpoint;
     return null;
   }
@@ -829,32 +968,45 @@ export const compileFunctionCallSQL = (
     // function boundary, so a missing optional query parameter propagates the
     // empty set instead of constructing a NULL-valued range.
     const aliasByKey: Record<string, string> = {};
-    argKeys.forEach((key, index) => { aliasByKey[key] = `range_arg_${index}`; });
+    argKeys.forEach((key, index) => {
+      aliasByKey[key] = `range_arg_${index}`;
+    });
     const sqlByKey: Record<string, string> = {};
-    argKeys.forEach((key) => { sqlByKey[key] = quoteIdent(aliasByKey[key]); });
+    argKeys.forEach((key) => {
+      sqlByKey[key] = quoteIdent(aliasByKey[key]);
+    });
     // Discrete range types canonicalize to inclusive-lower / exclusive-upper
     // (like Postgres `int4range`/`daterange`): the integer families and
     // `cal::local_date` (dates step by whole days). `datetime`/`local_datetime`
     // are continuous and keep their bounds verbatim.
     const isDiscreteTypeHint = (hint: string): boolean =>
-      hint.endsWith("::int16") || hint.endsWith("::int32") || hint.endsWith("::int64")
-      || hint.endsWith("::local_date");
+      hint.endsWith("::int16") ||
+      hint.endsWith("::int32") ||
+      hint.endsWith("::int64") ||
+      hint.endsWith("::local_date");
     const isContinuousTypeHint = (hint: string): boolean =>
-      hint.endsWith("::float32") || hint.endsWith("::float64") || hint.endsWith("::decimal")
-      || hint.endsWith("::datetime") || hint.endsWith("::local_datetime");
+      hint.endsWith("::float32") ||
+      hint.endsWith("::float64") ||
+      hint.endsWith("::decimal") ||
+      hint.endsWith("::datetime") ||
+      hint.endsWith("::local_datetime");
     const exprIsIntLiteral = (s: Set): boolean => {
       let cur = s;
       while (cur.expr.kind === "select_expr") cur = (cur.expr as SelectExpr).result;
       return cur.expr.kind === "integer_constant";
     };
     const boundArgs = (["0", "1"] as const).map((key) => call.args[key]).filter(Boolean);
-    const boundHints = boundArgs.map((arg) => scalarArgTypeHint(arg!.expr)).filter((hint): hint is string => hint !== undefined);
-    const discrete = !boundHints.some(isContinuousTypeHint) && (["0", "1"] as const).some((key) => {
-      const arg = call.args[key];
-      if (!arg) return false;
-      const hint = scalarArgTypeHint(arg.expr);
-      return (hint !== undefined && isDiscreteTypeHint(hint)) || exprIsIntLiteral(arg.expr);
-    });
+    const boundHints = boundArgs
+      .map((arg) => scalarArgTypeHint(arg.expr))
+      .filter((hint): hint is string => hint !== undefined);
+    const discrete =
+      !boundHints.some(isContinuousTypeHint) &&
+      (["0", "1"] as const).some((key) => {
+        const arg = call.args[key];
+        if (!arg) return false;
+        const hint = scalarArgTypeHint(arg.expr);
+        return (hint !== undefined && isDiscreteTypeHint(hint)) || exprIsIntLiteral(arg.expr);
+      });
     const lower = sqlByKey["0"] ?? "NULL";
     const upper = sqlByKey["1"] ?? "NULL";
     const incLower = sqlByKey["inc_lower"] ?? "NULL";
@@ -864,12 +1016,16 @@ export const compileFunctionCallSQL = (
     const resultSql = empty
       ? `(CASE WHEN ${empty} = 1 OR ${empty} = json('true') THEN json_object('empty', json('true')) ELSE ${rangeSql} END)`
       : rangeSql;
-    const bindings = argKeys.map((key, index) => `${args[index] ?? "NULL"} AS ${quoteIdent(aliasByKey[key])}`);
+    const bindings = argKeys.map(
+      (key, index) => `${args[index] ?? "NULL"} AS ${quoteIdent(aliasByKey[key])}`,
+    );
     const requiredNamedArgs = argKeys
       .filter((key) => !/^\d+$/.test(key))
       .map((key) => `${quoteIdent(aliasByKey[key])} IS NOT NULL`);
-    return `(SELECT ${resultSql} FROM (SELECT ${bindings.join(", ")})`
-      + `${requiredNamedArgs.length > 0 ? ` WHERE ${requiredNamedArgs.join(" AND ")}` : ""})`;
+    return (
+      `(SELECT ${resultSql} FROM (SELECT ${bindings.join(", ")})` +
+      `${requiredNamedArgs.length > 0 ? ` WHERE ${requiredNamedArgs.join(" AND ")}` : ""})`
+    );
   }
 
   const lowered = lowerStdlibFunctionSql(
@@ -886,7 +1042,10 @@ export const compileFunctionCallSQL = (
     // lowered expression once so its `?` params aren't consumed twice.
     // (call.typeref is often `std::anytype` — stdlib return types aren't
     // inferred — so consult the explicit name list as well.)
-    if (deps.qualifyTypeName(call.typeref) === "std::bool" || BOOL_RETURNING_STDLIB.has(shortName)) {
+    if (
+      deps.qualifyTypeName(call.typeref) === "std::bool" ||
+      BOOL_RETURNING_STDLIB.has(shortName)
+    ) {
       return bindOperandsOnce(
         [{ alias: "p", sql: lowered }],
         `CASE WHEN p IS NULL THEN NULL WHEN p = json('true') THEN json('true') WHEN p = json('false') THEN json('false') WHEN p THEN json('true') ELSE json('false') END`,
@@ -903,7 +1062,14 @@ export const compileFunctionCallSQL = (
   // hand-written expression.
   params.length = checkpoint;
   if (call.body) {
-    const bodySql = deps.compileValueSetSQL(call.body, sourceAlias, params, target, options, linkPropertyAlias);
+    const bodySql = deps.compileValueSetSQL(
+      call.body,
+      sourceAlias,
+      params,
+      target,
+      options,
+      linkPropertyAlias,
+    );
     if (bodySql) {
       return bodySql;
     }

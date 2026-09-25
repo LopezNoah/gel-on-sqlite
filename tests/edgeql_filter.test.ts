@@ -1,10 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { QueryHarness } from "./utils.js";
-import {
-  assertQueryResult,
-  unorderedBag,
-  unorderedSet
-} from "./python_query_test_helpers.js";
+import { assertQueryResult, unorderedBag, unorderedSet } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLFilter", () => {
   let h: QueryHarness;
@@ -35,10 +31,10 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -70,10 +66,10 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -101,10 +97,10 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -119,10 +115,10 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Victor",
-            },
-          ]
+        {
+          name: "Victor",
+        },
+      ],
     );
   });
 
@@ -138,13 +134,13 @@ describe("TestEdgeQLFilter", () => {
                 ).owner{name} ORDER BY .name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -164,13 +160,13 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -196,13 +192,13 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -226,10 +222,10 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -255,10 +251,10 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -290,10 +286,10 @@ describe("TestEdgeQLFilter", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -305,10 +301,10 @@ describe("TestEdgeQLFilter", () => {
                 FILTER .name = 'Open';
             `,
       [
-            {
-              "name": "Open",
-            },
-          ]
+        {
+          name: "Open",
+        },
+      ],
     );
   });
 
@@ -321,9 +317,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT Status
                 FILTER .name = 'Open';
             `,
-      [
-            {},
-          ]
+      [{}],
     );
   });
 
@@ -335,7 +329,7 @@ describe("TestEdgeQLFilter", () => {
                 FILTER TRUE
                 ORDER BY Issue.number;
             `,
-      ["1", "2", "3", "4"]
+      ["1", "2", "3", "4"],
     );
     assertQueryResult(
       h,
@@ -345,7 +339,7 @@ describe("TestEdgeQLFilter", () => {
                 FILTER Status.name = 'Closed'
                 ORDER BY Issue.number;
             `,
-      ["1", "2", "3", "4"]
+      ["1", "2", "3", "4"],
     );
   });
 
@@ -357,7 +351,7 @@ describe("TestEdgeQLFilter", () => {
                 FILTER FALSE
                 ORDER BY Issue.number;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -367,7 +361,7 @@ describe("TestEdgeQLFilter", () => {
                 FILTER Status.name = 'XXX'
                 ORDER BY Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -379,16 +373,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT _ := Issue.number ++ Status.name
                 ORDER BY _;
             `,
-      [
-            "1Closed",
-            "1Open",
-            "2Closed",
-            "2Open",
-            "3Closed",
-            "3Open",
-            "4Closed",
-            "4Open",
-          ]
+      ["1Closed", "1Open", "2Closed", "2Open", "3Closed", "3Open", "4Closed", "4Open"],
     );
     assertQueryResult(
       h,
@@ -400,7 +385,7 @@ describe("TestEdgeQLFilter", () => {
                     ).number ++ Status.name
                 ORDER BY _;
             `,
-      ["1Closed", "1Open", "2Closed", "2Open"]
+      ["1Closed", "1Open", "2Closed", "2Open"],
     );
     assertQueryResult(
       h,
@@ -416,7 +401,7 @@ describe("TestEdgeQLFilter", () => {
                     Status.name = 'Open'
                 ORDER BY _;
             `,
-      ["1Closed", "1Open", "2Closed", "2Open"]
+      ["1Closed", "1Open", "2Closed", "2Open"],
     );
   });
 
@@ -428,7 +413,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT Issue{number}
                 FILTER {};
             `,
-      []
+      [],
     );
   });
 
@@ -440,7 +425,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT Issue{number}
                 FILTER Issue.number = <str>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -448,7 +433,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT Issue{number}
                 FILTER Issue.priority = <Object>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -456,7 +441,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT Issue{number}
                 FILTER Issue.priority.name = <str>{};
             `,
-      []
+      [],
     );
   });
 
@@ -466,7 +451,7 @@ describe("TestEdgeQLFilter", () => {
       `
                 SELECT count(Issue);
             `,
-      [4]
+      [4],
     );
   });
 
@@ -479,7 +464,7 @@ describe("TestEdgeQLFilter", () => {
                 #
                 FILTER Status.name = 'Open';
             `,
-      [4]
+      [4],
     );
     assertQueryResult(
       h,
@@ -488,7 +473,7 @@ describe("TestEdgeQLFilter", () => {
                 # this filter is conceptually equivalent to the above
                 FILTER TRUE;
             `,
-      [4]
+      [4],
     );
   });
 
@@ -500,7 +485,7 @@ describe("TestEdgeQLFilter", () => {
                     I := (SELECT Issue FILTER Issue.status.name = 'Open')
                 SELECT count(I);
             `,
-      [3]
+      [3],
     );
   });
 
@@ -513,7 +498,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT count(Issue)
                 FILTER FALSE;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -521,7 +506,7 @@ describe("TestEdgeQLFilter", () => {
                 SELECT count(Issue)
                 FILTER {};
             `,
-      []
+      [],
     );
   });
 });

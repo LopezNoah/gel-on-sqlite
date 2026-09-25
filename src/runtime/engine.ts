@@ -1,24 +1,91 @@
-import { getCompilerService, type CompileContext, type CompilerCacheMeta } from "../compiler/service.js";
+import {
+  getCompilerService,
+  type CompileContext,
+  type CompilerCacheMeta,
+} from "../compiler/service.js";
 import { validateParsedStatement } from "../compiler/ast_to_ir.js";
-import { PENDING_INSERT_SEQUENCE_VALUE, PENDING_INSERT_SQL_EXPR_VALUE, rewriteDunderDefaults, validateDeleteStatement } from "../compiler/dml_lowering.js";
+import {
+  PENDING_INSERT_SEQUENCE_VALUE,
+  PENDING_INSERT_SQL_EXPR_VALUE,
+  rewriteDunderDefaults,
+  validateDeleteStatement,
+} from "../compiler/dml_lowering.js";
 import { AppError, asAppError, isQueryFailure, tryProbe, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
 import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
-import type { BacklinkExpr, ClauseChain, ComputedExpr, ConfigureStatement, DDLStatement, DeleteStatement, FilterExpr, FilterValue, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionCallExpr, InsertStatement, InsertValue, OrderExpr, OrderExprChain, PathStep, SelectExprStatement, SelectStatement, ShapeElement, Statement, TypeExpr, UpdateStatement, WithBinding, WithBindingValue, WithModuleAlias } from "../edgeql/ast.js";
+import type {
+  BacklinkExpr,
+  ClauseChain,
+  ComputedExpr,
+  ConfigureStatement,
+  DDLStatement,
+  DeleteStatement,
+  FilterExpr,
+  ForStatement,
+  FreeObjectExpr,
+  FunctionCallArgExpr,
+  FunctionCallExpr,
+  InsertStatement,
+  InsertValue,
+  OrderExprChain,
+  PathStep,
+  SelectExprStatement,
+  SelectStatement,
+  ShapeElement,
+  Statement,
+  TypeExpr,
+  UpdateStatement,
+  WithBinding,
+  WithBindingValue,
+  WithModuleAlias,
+} from "../edgeql/ast.js";
 import type { RuntimeDatabaseAdapter } from "./adapter.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
 import type { GelIRSQLArtifact as SQLArtifact } from "../sql/gel_ir_compiler.js";
 import { lowersToSingleSql } from "../sql/compiler_types.js";
-import { classifyExecutionStrategy, selectExprNeedsRuntime } from "../compiler/execution_strategy.js";
+import { classifyExecutionStrategy } from "../compiler/execution_strategy.js";
 import { resolveStdlibFunction, type RuntimeFunctionArg } from "../stdlib/functions.js";
 import { assertTargetSqlCompatibility, type RuntimeTarget } from "./target.js";
-import type { ShapeElement as GelIRShapeElement, Set as GelIRSet, Statement as GelIRStatement, TypeRef as GelIRTypeRef } from "../ir/gel_ir.js";
-import type { DeleteIR, InsertIR, InsertLinkDefaultIR, InsertLinkPropertyIR, IRStatement, OverlayIR, UpdateIR, UpdateLinkAssignmentIR } from "../ir/model.js";
-import type { AccessPolicyCondition, AccessPolicyDef, ComputedLinkPropertyExpr, ConstraintDef, FieldDef, FieldDefaultExpr, FunctionDef, FunctionVolatility, LinkPropertyDef, ScalarType, ScalarValue, TypeDef } from "../types.js";
-import { cloneTypeDef, fieldSequenceName, normalizeLinkTargetNames, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
+import type {
+  ShapeElement as GelIRShapeElement,
+  Set as GelIRSet,
+  Statement as GelIRStatement,
+  TypeRef as GelIRTypeRef,
+} from "../ir/gel_ir.js";
+import type {
+  DeleteIR,
+  InsertIR,
+  InsertLinkDefaultIR,
+  InsertLinkPropertyIR,
+  IRStatement,
+  OverlayIR,
+  UpdateIR,
+  UpdateLinkAssignmentIR,
+} from "../ir/model.js";
+import type {
+  AccessPolicyCondition,
+  AccessPolicyDef,
+  ComputedLinkPropertyExpr,
+  ConstraintDef,
+  FieldDef,
+  FieldDefaultExpr,
+  FunctionDef,
+  FunctionVolatility,
+  LinkPropertyDef,
+  ScalarType,
+  ScalarValue,
+  TypeDef,
+} from "../types.js";
+import {
+  cloneTypeDef,
+  fieldSequenceName,
+  normalizeLinkTargetNames,
+  qualifiedTypeName,
+  usesLinkTable,
+} from "../schema/schema.js";
 import { resolveLinkStorageOwner } from "../schema/physical_layout.js";
-import { materializeGelSQLRows, normalizeGelSQLValue } from "./row_codec.js";
+import { materializeGelSQLRows } from "./row_codec.js";
 import { dbAll, dbRun, runDbEffectSync, syncDbExec, type DbEffect } from "./db_effect.js";
 import { AsyncUnsupportedError } from "./async_query.js";
 import {
@@ -34,7 +101,6 @@ import {
   resolveUserFunctionOverload,
   type FunctionDispatchDeps,
 } from "./function_dispatch.js";
-import { coIteratedBinding } from "./co_iteration.js";
 import { runSelectExprEvaluation } from "./evaluator.js";
 import { buildInsertRowSql } from "./dml_sql.js";
 import {
@@ -52,14 +118,26 @@ import { functionDefsFromDeclarative, schemaSnapshotFromDeclarative } from "../s
 import { linkTableName, tableNameForType } from "../codegen/sql.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import type { SQLiteDatabase } from "../runtime/database.js";
-import { conflictIsAgainstSameStatementRow, constraintIsExclusiveLike, exclusiveChecksFor, insertValueIsVolatile, parseExclusivityViolation, planExclusiveConflictProbe, runExclusiveConflictProbe, typeAncestorsOf } from "./conflict_detection.js";
+import {
+  conflictIsAgainstSameStatementRow,
+  constraintIsExclusiveLike,
+  exclusiveChecksFor,
+  insertValueIsVolatile,
+  parseExclusivityViolation,
+  planExclusiveConflictProbe,
+  runExclusiveConflictProbe,
+  typeAncestorsOf,
+} from "./conflict_detection.js";
 import { materializeSchema } from "../runtime/schema_materialize.js";
 import { validateScriptUserDDL, validateUserDDLStatement } from "./ddl.js";
 import { installSqlTrace, runWithSqlSink } from "./sql_trace_sink.js";
 import type { ExclusiveConstraintSpec } from "../edgeql/ddl_body.js";
-import { applyLimitOffset, dedupeRowsById, distinctValues } from "./result_clauses.js";
-import { validateStatementAst, preValidationFail, type AstValidationDeps } from "./ast_validation.js";
-
+import { applyLimitOffset } from "./result_clauses.js";
+import {
+  validateStatementAst,
+  preValidationFail,
+  type AstValidationDeps,
+} from "./ast_validation.js";
 
 export interface QueryResult {
   kind: "select" | "insert" | "update" | "delete";
@@ -137,14 +215,17 @@ const DEFAULT_SECURITY_CONTEXT: SecurityContext = {
 };
 
 const countRuntimeSetCardinality = (value: unknown): number => {
-  const values = typeof value === "object" && value !== null && "kind" in value
-    && ((value as { kind?: unknown }).kind === "set" || (value as { kind?: unknown }).kind === "array")
-    ? (value as { values?: unknown[] }).values ?? []
-    : Array.isArray(value)
-      ? value
-      : value === null || value === undefined
-        ? []
-        : [value];
+  const values =
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    ((value as { kind?: unknown }).kind === "set" || (value as { kind?: unknown }).kind === "array")
+      ? ((value as { values?: unknown[] }).values ?? [])
+      : Array.isArray(value)
+        ? value
+        : value === null || value === undefined
+          ? []
+          : [value];
 
   const seenObjectIds = new Set<string>();
   let count = 0;
@@ -190,10 +271,8 @@ const evaluateRuntimeAggregate = (functionName: string, values: unknown[]): unkn
   return null;
 };
 
-const normalizeRuntimeFloat = (value: number): number => (
-  Number.isFinite(value) ? Number(value.toPrecision(15)) : value
-);
-
+const normalizeRuntimeFloat = (value: number): number =>
+  Number.isFinite(value) ? Number(value.toPrecision(15)) : value;
 
 const runtimeExprAliases = new WeakMap<SchemaSnapshot, Map<string, string>>();
 
@@ -233,8 +312,6 @@ const applySessionConfigure = (schema: SchemaSnapshot, ast: ConfigureStatement):
       : false;
 };
 
-
-
 // The shared home for the "can this statement run as one SQL statement? if so
 // use it, else fall back to the runtime evaluator" probe. Compiles `stmtAst`
 // and, when it lowers to a single SQL statement, runs it and returns the rows;
@@ -272,7 +349,6 @@ const fnDispatchDeps = (): FunctionDispatchDeps => ({
   countRuntimeSetCardinality,
 });
 
-
 // Lists every alias known for a schema — both schema::Alias entries
 // registered via schema.addAlias (typed aliases with shapes) and runtime
 // expr aliases stashed in the WeakMap above (scalar/tuple-set CREATE ALIAS
@@ -286,7 +362,11 @@ const fnDispatchDeps = (): FunctionDispatchDeps => ({
 // `schema::Type` introspection.
 export const listAllRuntimeAliasNames = (schema: SchemaSnapshot): string[] => {
   const names = new Set<string>();
-  const addAliasShapeTypeName = (aliasModule: string, aliasName: string, sourceType: string): void => {
+  const addAliasShapeTypeName = (
+    aliasModule: string,
+    aliasName: string,
+    sourceType: string,
+  ): void => {
     const parts = sourceType.split("::");
     const baseName = parts[parts.length - 1];
     names.add(`${aliasModule}::__${aliasName}__${baseName}`);
@@ -325,7 +405,19 @@ type RuntimeTypedAliasDef = {
   sourceType: string;
   filter?: {
     field: string;
-    op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike" | "not_like" | "not_ilike";
+    op:
+      | "="
+      | "!="
+      | "<"
+      | "<="
+      | ">"
+      | ">="
+      | "?="
+      | "?!="
+      | "like"
+      | "ilike"
+      | "not_like"
+      | "not_ilike";
     value: ScalarValue;
   };
   filterValues?: {
@@ -440,7 +532,10 @@ const parseRuntimeTypedAliasDef = (
   const normalized = stripRuntimeAliasOuterParens(exprBody.replace(/^[ \t]*#.*$/gm, "").trim());
   const compact = normalized.replace(/\s+/g, " ").trim();
 
-  const match = /^SELECT\s+([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*\(\s*SELECT\s+([A-Za-z_][\w:]*)\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*str_upper\s*\(\s*\.\s*([A-Za-z_][\w]*)\s*\)\s*\}\s*\)\s*\}\s*FILTER\s+([A-Za-z_][\w:]*)\s*\.\s*([A-Za-z_][\w]*)\s+LIKE\s+'([^']+)'\s*$/i.exec(compact);
+  const match =
+    /^SELECT\s+([A-Za-z_][\w:]*)\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*\(\s*SELECT\s+([A-Za-z_][\w:]*)\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\{\s*([A-Za-z_][\w]*)\s*:=\s*str_upper\s*\(\s*\.\s*([A-Za-z_][\w]*)\s*\)\s*\}\s*\)\s*\}\s*FILTER\s+([A-Za-z_][\w:]*)\s*\.\s*([A-Za-z_][\w]*)\s+LIKE\s+'([^']+)'\s*$/i.exec(
+      compact,
+    );
   if (!match) {
     return undefined;
   }
@@ -463,7 +558,10 @@ const parseRuntimeTypedAliasDef = (
   const qualifiedBacklinkSourceType = qualifyRuntimeTypeName(backlinkSourceType, moduleName);
   const qualifiedFilterSourceType = qualifyRuntimeTypeName(filterSourceType, moduleName);
 
-  if (qualifiedSourceType !== qualifiedBacklinkSourceType || qualifiedSourceType !== qualifiedFilterSourceType) {
+  if (
+    qualifiedSourceType !== qualifiedBacklinkSourceType ||
+    qualifiedSourceType !== qualifiedFilterSourceType
+  ) {
     return undefined;
   }
 
@@ -493,8 +591,13 @@ const parseRuntimeTypedAliasDef = (
   };
 };
 
-const parseRuntimeAliasComputedProperties = (exprText: string): RuntimeTypedAliasDef["computedProperties"] => {
-  const compact = exprText.replace(/^[ \t]*#.*$/gm, "").replace(/\s+/g, " ").trim();
+const parseRuntimeAliasComputedProperties = (
+  exprText: string,
+): RuntimeTypedAliasDef["computedProperties"] => {
+  const compact = exprText
+    .replace(/^[ \t]*#.*$/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
   const properties: NonNullable<RuntimeTypedAliasDef["computedProperties"]> = [];
   const tuplePattern = /\b([A-Za-z_][\w]*)\s*:=\s*\(([^)]*)\)/g;
   for (const match of compact.matchAll(tuplePattern)) {
@@ -517,9 +620,13 @@ const parseRuntimeAliasComputedExistsProperties = (
   exprText: string,
   moduleName: string,
 ): RuntimeTypedAliasDef["computedExistsProperties"] => {
-  const compact = exprText.replace(/^[ \t]*#.*$/gm, "").replace(/\s+/g, " ").trim();
+  const compact = exprText
+    .replace(/^[ \t]*#.*$/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
   const properties: NonNullable<RuntimeTypedAliasDef["computedExistsProperties"]> = [];
-  const existsPattern = /\b([A-Za-z_][\w]*)\s*:=\s*EXISTS\s*\(\s*SELECT\s+((?:[A-Za-z_][\w:]*)?)\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\.\s*([A-Za-z_][\w]*)\s*=\s*'([^']+)'\s*\)/gi;
+  const existsPattern =
+    /\b([A-Za-z_][\w]*)\s*:=\s*EXISTS\s*\(\s*SELECT\s+((?:[A-Za-z_][\w:]*)?)\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\.\s*([A-Za-z_][\w]*)\s*=\s*'([^']+)'\s*\)/gi;
   for (const match of compact.matchAll(existsPattern)) {
     properties.push({
       name: match[1],
@@ -533,17 +640,27 @@ const parseRuntimeAliasComputedExistsProperties = (
   return properties.length > 0 ? properties : undefined;
 };
 
-const parseRuntimeAliasLinkOverrides = (exprText: string, moduleName: string): RuntimeTypedAliasDef["linkOverrides"] => {
-  const compact = exprText.replace(/^[ \t]*#.*$/gm, "").replace(/\s+/g, " ").trim();
+const parseRuntimeAliasLinkOverrides = (
+  exprText: string,
+  moduleName: string,
+): RuntimeTypedAliasDef["linkOverrides"] => {
+  const compact = exprText
+    .replace(/^[ \t]*#.*$/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
   const overrides: RuntimeTypedAliasDef["linkOverrides"] = [];
-  const linkPattern = /\b([A-Za-z_][\w]*)\s*:=\s*\(?\s*(?:SELECT\s+)?[A-Za-z_][\w:]*\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\{([^}]*)\}/gi;
+  const linkPattern =
+    /\b([A-Za-z_][\w]*)\s*:=\s*\(?\s*(?:SELECT\s+)?[A-Za-z_][\w:]*\s*\.\s*<\s*([A-Za-z_][\w]*)\s*\[\s*IS\s+([A-Za-z_][\w:]*)\s*\]\s*\{([^}]*)\}/gi;
   for (const match of compact.matchAll(linkPattern)) {
-    const computedFields = [...match[4].matchAll(/\b([A-Za-z_][\w]*)\s*:=\s*str_upper\s*\(\s*\.\s*([A-Za-z_][\w]*)\s*\)/gi)]
-      .map((fieldMatch) => ({
-        name: fieldMatch[1],
-        sourceField: fieldMatch[2],
-        functionName: "str_upper" as const,
-      }));
+    const computedFields = [
+      ...match[4].matchAll(
+        /\b([A-Za-z_][\w]*)\s*:=\s*str_upper\s*\(\s*\.\s*([A-Za-z_][\w]*)\s*\)/gi,
+      ),
+    ].map((fieldMatch) => ({
+      name: fieldMatch[1],
+      sourceField: fieldMatch[2],
+      functionName: "str_upper" as const,
+    }));
     overrides.push({
       name: match[1],
       backlinkLink: match[2],
@@ -614,7 +731,10 @@ const splitTopLevelScriptStatements = (script: string): string[] => {
   return statements;
 };
 
-const dynamicQualifiedNameParts = (rawName: string, defaultModule = "default"): { module: string; name: string; qualified: string } => {
+const dynamicQualifiedNameParts = (
+  rawName: string,
+  defaultModule = "default",
+): { module: string; name: string; qualified: string } => {
   const name = rawName.trim();
   if (name.includes("::")) {
     const parts = name.split("::");
@@ -633,7 +753,10 @@ const stripLeadingTypeKeyword = (input: string, keyword: string): string => {
   const after = input.slice(keyword.length);
   // Require at least one whitespace character following the keyword so we
   // don't accidentally strip a real prefix (e.g. `optionalX`).
-  if (after.length === 0 || (after[0] !== " " && after[0] !== "\t" && after[0] !== "\n" && after[0] !== "\r")) {
+  if (
+    after.length === 0 ||
+    (after[0] !== " " && after[0] !== "\t" && after[0] !== "\n" && after[0] !== "\r")
+  ) {
     return input;
   }
   return after.trimStart();
@@ -663,11 +786,15 @@ const normalizeDynamicTypeName = (rawType: string, defaultModule = "default"): s
 const SCALAR_INT_NAMES = new globalThis.Set(["int", "int16", "int32", "int64", "bigint"]);
 const SCALAR_FLOAT_NAMES = new globalThis.Set(["float", "float32", "float64", "decimal"]);
 
-const dynamicScalarFromType = (rawType: string): { type: ScalarType; collection?: FieldDef["collection"] } => {
+const dynamicScalarFromType = (
+  rawType: string,
+): { type: ScalarType; collection?: FieldDef["collection"] } => {
   const typeName = stripLeadingTypeKeyword(rawType.trim(), "optional").trim();
   const lower = typeName.toLowerCase();
-  if (lower.startsWith("tuple<") || lower.startsWith("std::tuple<")) return { type: "json", collection: { kind: "tuple" } };
-  if (lower.startsWith("array<") || lower.startsWith("std::array<")) return { type: "json", collection: { kind: "array" } };
+  if (lower.startsWith("tuple<") || lower.startsWith("std::tuple<"))
+    return { type: "json", collection: { kind: "tuple" } };
+  if (lower.startsWith("array<") || lower.startsWith("std::array<"))
+    return { type: "json", collection: { kind: "array" } };
   if (lower.endsWith("str")) return { type: "str" };
   if (lower.endsWith("bool")) return { type: "bool" };
   if (lower.endsWith("json")) return { type: "json" };
@@ -683,8 +810,10 @@ const dynamicScalarFromType = (rawType: string): { type: ScalarType; collection?
 const evaluateDefaultExprToScalar = (expr: string): ScalarValue | undefined => {
   const trimmed = expr.trim().replace(/;$/, "").trim();
   if (!trimmed) return undefined;
-  if ((trimmed.startsWith("'") && trimmed.endsWith("'"))
-      || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  ) {
     return trimmed.slice(1, -1).replace(/\\(['"\\])/g, "$1");
   }
   if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
@@ -694,11 +823,16 @@ const evaluateDefaultExprToScalar = (expr: string): ScalarValue | undefined => {
   return undefined;
 };
 
-const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultModule = "default"): void => {
+const applyParsedFunctionDDL = (
+  schema: SchemaSnapshot,
+  ast: DDLStatement,
+  defaultModule = "default",
+): void => {
   if (!ast.functionDecl) return;
   const { module, name } = dynamicQualifiedNameParts(ast.name, defaultModule);
   const params = ast.functionDecl.params.map((param) => {
-    const defaultValue = param.defaultExpr !== undefined ? evaluateDefaultExprToScalar(param.defaultExpr) : undefined;
+    const defaultValue =
+      param.defaultExpr !== undefined ? evaluateDefaultExprToScalar(param.defaultExpr) : undefined;
     const hasDefaultExpr = param.defaultExpr !== undefined;
     return {
       name: param.name,
@@ -711,9 +845,7 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
       // Preserve the raw default text so the inliner can substitute
       // non-scalar defaults (array/tuple literals) that don't reduce to a
       // ScalarValue. Only retained when no scalar reduction was available.
-      defaultExpr: hasDefaultExpr && defaultValue === undefined
-        ? param.defaultExpr
-        : undefined,
+      defaultExpr: hasDefaultExpr && defaultValue === undefined ? param.defaultExpr : undefined,
     };
   });
   const bodyQuery = ast.functionDecl.body.query.trim();
@@ -722,11 +854,20 @@ const applyParsedFunctionDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
   // Modifying functions enforce singleton-cardinality on their arguments.
   let volatility: FunctionVolatility | undefined;
   switch ((ast.functionDecl.volatility ?? "").toLowerCase()) {
-    case "immutable": volatility = "Immutable"; break;
-    case "stable": volatility = "Stable"; break;
-    case "volatile": volatility = "Volatile"; break;
-    case "modifying": volatility = "Modifying"; break;
-    default: volatility = undefined;
+    case "immutable":
+      volatility = "Immutable";
+      break;
+    case "stable":
+      volatility = "Stable";
+      break;
+    case "volatile":
+      volatility = "Volatile";
+      break;
+    case "modifying":
+      volatility = "Modifying";
+      break;
+    default:
+      volatility = undefined;
   }
   schema.addFunction({
     module,
@@ -759,13 +900,12 @@ const exclusiveConstraintFieldRefs = (onExpr: string | undefined): string[] => {
   return [...new Set(refs)];
 };
 
-
 // If `exprText` is a bare scalar literal (`'foo'`, `"foo"`, `42`, `true`),
 // return the structured literal default; otherwise undefined (the text-only
 // default path handles general expressions like `'a=' ++ .b`).
 const literalDefaultFromText = (exprText: string): FieldDefaultExpr | undefined => {
   const t = exprText.trim();
-  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith("\"") && t.endsWith("\""))) {
+  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"'))) {
     return { kind: "literal", value: t.slice(1, -1) };
   }
   if (/^-?\d+$/.test(t)) return { kind: "literal", value: Number(t) };
@@ -793,7 +933,11 @@ const normalizeAccessPolicyOperations = (raw: readonly string[]): AccessPolicyDe
 // Apply the operations parsed from a top-level `ALTER TYPE …` statement to the
 // schema in place. Returns true when the statement was a (recognised) ALTER
 // TYPE, so the caller re-materialises and clears the compiler cache.
-const applyAlterTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultModule = "default"): boolean => {
+const applyAlterTypeDDL = (
+  schema: SchemaSnapshot,
+  ast: DDLStatement,
+  defaultModule = "default",
+): boolean => {
   // Read the structured ALTER ops off the DDL AST node (docs/adr/0031, 0032).
   if (ast.action !== "alter" || ast.objectKind !== "type") return false;
   const ops = ast.alterTypeOps ?? [];
@@ -848,8 +992,12 @@ const applyAlterTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultMod
       const before = typeDef.typeConstraints?.length ?? 0;
       typeDef.typeConstraints = (typeDef.typeConstraints ?? []).filter((c) => {
         // Drop the matching exclusive constraint (same on/except expression).
-        const sameOn = (c.exprText ?? "").replace(/\s+/g, "") === (op.constraint.onExpr ?? "").replace(/\s+/g, "");
-        const sameExcept = (c.exceptExpr ?? "").replace(/\s+/g, "") === (op.constraint.exceptExpr ?? "").replace(/\s+/g, "");
+        const sameOn =
+          (c.exprText ?? "").replace(/\s+/g, "") ===
+          (op.constraint.onExpr ?? "").replace(/\s+/g, "");
+        const sameExcept =
+          (c.exceptExpr ?? "").replace(/\s+/g, "") ===
+          (op.constraint.exceptExpr ?? "").replace(/\s+/g, "");
         return !(c.name === "std::exclusive" && sameOn && sameExcept);
       });
       if ((typeDef.typeConstraints?.length ?? 0) !== before) mutated = true;
@@ -892,10 +1040,15 @@ const validateBareSdlDefaults = (script: string): void => {
   // Parse the whole script as a declarative module. tryResult swallows parse
   // failures (the statement may not be valid bare SDL — then there's nothing to
   // validate and the normal pipeline reports the real error).
-  const parsed = tryResult(() => {
-    const decl = parseDeclarativeSchema(`module default {\n${script}\n}`, { legacySyntaxCompat: true });
-    return schemaSnapshotFromDeclarative(decl);
-  }, { captureAll: true });
+  const parsed = tryResult(
+    () => {
+      const decl = parseDeclarativeSchema(`module default {\n${script}\n}`, {
+        legacySyntaxCompat: true,
+      });
+      return schemaSnapshotFromDeclarative(decl);
+    },
+    { captureAll: true },
+  );
   if (!parsed.ok || parsed.value === undefined) return;
   const sdlSchema = parsed.value;
 
@@ -904,14 +1057,21 @@ const validateBareSdlDefaults = (script: string): void => {
     const linkNames = new Set((typeDef.links ?? []).map((l) => l.name));
     for (const field of typeDef.fields) {
       if (!field.hasDefault || !field.defaultExprText) continue;
-      const refs = [...field.defaultExprText.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
+      const refs = [...field.defaultExprText.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map(
+        (m) => m[1],
+      );
       // A reference to a link (single or multi) is rejected first — the
       // canonical message names links even when wrapped in `count(.world)`.
       if (refs.some((r) => linkNames.has(r))) {
         throw new AppError("E_SEMANTIC", "default expression cannot refer to links", 1, 1);
       }
       if (refs.some((r) => multiProps.has(r))) {
-        throw new AppError("E_SEMANTIC", "default expression cannot refer to multi properties", 1, 1);
+        throw new AppError(
+          "E_SEMANTIC",
+          "default expression cannot refer to multi properties",
+          1,
+          1,
+        );
       }
     }
   }
@@ -927,11 +1087,10 @@ const registerBareSdlFunctionScript = (
   strictUserDDL: boolean,
 ): boolean => {
   if (strictUserDDL || !/^\s*function\b/i.test(script)) return false;
-  const parsed = tryResult(
-    () => parseDeclarativeSchema(script, { legacySyntaxCompat: true }),
-    { captureAll: true },
-  );
-  if (!parsed.ok || parsed.value === undefined || !(parsed.value.functions?.length)) return false;
+  const parsed = tryResult(() => parseDeclarativeSchema(script, { legacySyntaxCompat: true }), {
+    captureAll: true,
+  });
+  if (!parsed.ok || parsed.value === undefined || !parsed.value.functions?.length) return false;
 
   for (const fn of functionDefsFromDeclarative(parsed.value)) schema.addFunction(fn);
   populateSchemaIntrospection(db, schema);
@@ -942,7 +1101,9 @@ const registerBareSdlFunctionScript = (
 // Map the structured exclusive-constraint specs from `parseCreateTypeBody` to
 // the `ConstraintDef[]` the runtime's exclusivity machinery consumes (or
 // undefined when none), mirroring the old `collectExclusiveConstraintSpecs`.
-const exclusiveConstraintDefs = (specs: readonly ExclusiveConstraintSpec[]): ConstraintDef[] | undefined => {
+const exclusiveConstraintDefs = (
+  specs: readonly ExclusiveConstraintSpec[],
+): ConstraintDef[] | undefined => {
   if (specs.length === 0) return undefined;
   return specs.map((s) => ({
     name: "std::exclusive",
@@ -953,7 +1114,11 @@ const exclusiveConstraintDefs = (specs: readonly ExclusiveConstraintSpec[]): Con
   }));
 };
 
-const registerDynamicTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defaultModule = "default"): boolean => {
+const registerDynamicTypeDDL = (
+  schema: SchemaSnapshot,
+  ast: DDLStatement,
+  defaultModule = "default",
+): boolean => {
   // Register off the DDL AST node the pre-pass already parsed — the parser
   // produced the structured `createTypeBody` (docs/adr/0029, 0030, 0032).
   if (ast.action !== "create" || ast.objectKind !== "type") return false;
@@ -966,7 +1131,9 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
   const computeds: NonNullable<TypeDef["computeds"]> = [];
   const typeConstraints: NonNullable<TypeDef["typeConstraints"]> = [];
   const extendsList = extendsRaw
-    ? extendsRaw.map((entry) => normalizeDynamicTypeName(entry, module)).filter((entry) => entry.length > 0)
+    ? extendsRaw
+        .map((entry) => normalizeDynamicTypeName(entry, module))
+        .filter((entry) => entry.length > 0)
     : undefined;
 
   // Inherit fields and links from base types so subtypes (`CREATE TYPE Baz
@@ -1023,7 +1190,12 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
       // stored in a `<owner>__<link>` junction table rather than an inline FK.
       const linkProperties: LinkPropertyDef[] = member.properties.map((p) => {
         const propScalar = dynamicScalarFromType(p.targetType);
-        return { name: p.name, type: propScalar.type, required: p.required, collection: propScalar.collection };
+        return {
+          name: p.name,
+          type: propScalar.type,
+          required: p.required,
+          collection: propScalar.collection,
+        };
       });
       const linkConstraints = exclusiveConstraintDefs(member.constraints);
       links.push({
@@ -1037,7 +1209,12 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
         // Carry an exclusive constraint declared on the link down to the
         // synthetic FK column so the same-table UNIQUE index / shared
         // exclusivity machinery enforces it (links are unique on their target).
-        fields.push({ name: `${member.name}_id`, type: "uuid", isLinkColumn: true, constraints: linkConstraints });
+        fields.push({
+          name: `${member.name}_id`,
+          type: "uuid",
+          isLinkColumn: true,
+          constraints: linkConstraints,
+        });
       }
       continue;
     }
@@ -1045,7 +1222,11 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
       // A computed link alias (`CREATE LINK foo := <expr>`) isn't materialised
       // as a column — record the declaration so backlink resolution can flag
       // `.<foo` without an `[IS T]` filter (the EdgeQL error names the type).
-      computeds.push({ kind: "link", name: member.name, expr: { kind: "select_type", typeName: rawName, exprText: member.exprText } });
+      computeds.push({
+        kind: "link",
+        name: member.name,
+        expr: { kind: "select_type", typeName: rawName, exprText: member.exprText },
+      });
       continue;
     }
     if (member.kind === "alter_pointer") {
@@ -1105,8 +1286,12 @@ const registerDynamicTypeDDL = (schema: SchemaSnapshot, ast: DDLStatement, defau
   return true;
 };
 
-
-const maybeRegisterDynamicDDLScript = (db: SQLiteDatabase, schema: SchemaSnapshot, script: string, defaultModule = "default"): boolean => {
+const maybeRegisterDynamicDDLScript = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  script: string,
+  defaultModule = "default",
+): boolean => {
   // Parse the script once and drive the CREATE TYPE / ALTER TYPE / CREATE
   // FUTURE pre-registration off the DDL AST nodes — the parser already produced
   // `createTypeBody` / `alterTypeOps`. A parse failure means there's nothing to
@@ -1159,14 +1344,22 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
   // `CREATE GLOBAL` is handled by the per-statement executor (it registers the
   // global and evaluates computed defaults), so let it fall through rather than
   // treating it as a handled no-op here. `type`/`module` remain no-ops.
-  if (/^create\s+(?:type|module)\b/i.test(trimmed) || /^drop\s+(?:type|global|module)\b/i.test(trimmed)) {
+  if (
+    /^create\s+(?:type|module)\b/i.test(trimmed) ||
+    /^drop\s+(?:type|global|module)\b/i.test(trimmed)
+  ) {
     return true;
   }
 
-  const createMatch = /^create\s+alias\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)\s*:=\s*([\s\S]*)$/i.exec(trimmed);
+  const createMatch =
+    /^create\s+alias\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)\s*:=\s*([\s\S]*)$/i.exec(
+      trimmed,
+    );
   if (createMatch) {
     const [, rawAliasName, exprBody] = createMatch;
-    const aliasModuleName = rawAliasName.includes("::") ? rawAliasName.split("::").slice(0, -1).join("::") : "default";
+    const aliasModuleName = rawAliasName.includes("::")
+      ? rawAliasName.split("::").slice(0, -1).join("::")
+      : "default";
     const aliasName = rawAliasName.split("::").at(-1) ?? rawAliasName;
     const aliasKey = rawAliasName.includes("::") ? rawAliasName : aliasName;
     // Register the alias on the schema only when its body parses as a SELECT
@@ -1184,7 +1377,10 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
         if (ch === "(") depth += 1;
         else if (ch === ")") {
           depth -= 1;
-          if (depth < 0) { balanced = false; break; }
+          if (depth < 0) {
+            balanced = false;
+            break;
+          }
         }
       }
       if (!balanced || depth !== 0) break;
@@ -1194,10 +1390,15 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
     for (const candidate of [probeBody, `SELECT ${probeBody}`]) {
       try {
         const probe = parseEdgeQL(candidate);
-        if (probe.kind === "select"
-          && probe.typeName
-          && (probe.shape?.some((el) => "name" in el && el.name !== "id" && (el as { origin?: string }).origin !== "default")
-            || probe.filter)) {
+        if (
+          probe.kind === "select" &&
+          probe.typeName &&
+          (probe.shape?.some(
+            (el) =>
+              "name" in el && el.name !== "id" && (el as { origin?: string }).origin !== "default",
+          ) ||
+            probe.filter)
+        ) {
           schemaRegistrable = true;
           break;
         }
@@ -1233,7 +1434,10 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
         hasShape: true,
         limit: Number(/\blimit\s+(\d+)/i.exec(normalizedExprBody)?.[1] ?? "0") || undefined,
         computedProperties: parseRuntimeAliasComputedProperties(normalizedExprBody),
-        computedExistsProperties: parseRuntimeAliasComputedExistsProperties(normalizedExprBody, aliasModuleName),
+        computedExistsProperties: parseRuntimeAliasComputedExistsProperties(
+          normalizedExprBody,
+          aliasModuleName,
+        ),
         linkOverrides: parseRuntimeAliasLinkOverrides(normalizedExprBody, aliasModuleName),
       });
       const aliases = getRuntimeExprAliasMap(schema);
@@ -1248,11 +1452,15 @@ const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): bool
     return true;
   }
 
-  const dropMatch = /^drop\s+alias\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)$/i.exec(trimmed);
+  const dropMatch = /^drop\s+alias\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)$/i.exec(
+    trimmed,
+  );
   if (dropMatch) {
     const [, rawAliasName] = dropMatch;
     const aliasName = rawAliasName.split("::").at(-1) ?? rawAliasName;
-    const aliasModule = rawAliasName.includes("::") ? rawAliasName.split("::").slice(0, -1).join("::") : "default";
+    const aliasModule = rawAliasName.includes("::")
+      ? rawAliasName.split("::").slice(0, -1).join("::")
+      : "default";
     const aliasKey = rawAliasName.includes("::") ? rawAliasName : aliasName;
     schema.removeAlias(`${aliasModule}::${aliasName}`);
     const aliases = getRuntimeExprAliasMap(schema);
@@ -1318,7 +1526,19 @@ const runtimeAliasLikeMatches = (value: unknown, pattern: string): boolean => {
 
 const runtimeAliasPredicateMatches = (
   value: unknown,
-  op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "?=" | "?!=" | "like" | "ilike" | "not_like" | "not_ilike",
+  op:
+    | "="
+    | "!="
+    | "<"
+    | "<="
+    | ">"
+    | ">="
+    | "?="
+    | "?!="
+    | "like"
+    | "ilike"
+    | "not_like"
+    | "not_ilike",
   expected: ScalarValue,
 ): boolean => {
   if (op === "=") {
@@ -1371,16 +1591,25 @@ const readRuntimeTypedAliasSourceRows = (
   for (const sourceType of sourceTypes) {
     const sourceTypeName = qualifiedTypeName(sourceType);
     const table = tableNameForType(sourceTypeName);
-    const selected = db.prepare(`SELECT * FROM ${quoteIdent(table)}`).all() as Record<string, unknown>[];
+    const selected = db.prepare(`SELECT * FROM ${quoteIdent(table)}`).all() as Record<
+      string,
+      unknown
+    >[];
     for (const row of selected) {
       const filterValues = alias.filterValues;
       if (
-        filterValues
-        && !filterValues.values.some((value) => runtimeAliasPredicateMatches(row[filterValues.field], "=", value))
+        filterValues &&
+        !filterValues.values.some((value) =>
+          runtimeAliasPredicateMatches(row[filterValues.field], "=", value),
+        )
       ) {
         continue;
       }
-      if (!alias.filterValues && alias.filter && !runtimeAliasPredicateMatches(row[alias.filter.field], alias.filter.op, alias.filter.value)) {
+      if (
+        !alias.filterValues &&
+        alias.filter &&
+        !runtimeAliasPredicateMatches(row[alias.filter.field], alias.filter.op, alias.filter.value)
+      ) {
         continue;
       }
       rows.push({ ...row, __source_type: sourceTypeName });
@@ -1389,7 +1618,6 @@ const readRuntimeTypedAliasSourceRows = (
 
   return rows;
 };
-
 
 // The Runtime evaluator implementation now lives in `runtime/evaluator.ts`,
 // behind the injected `SelectExprEvaluatorDeps` seam. This wrapper supplies the
@@ -1403,7 +1631,8 @@ const tryRuntimeSelectExprEvaluationAst = (
 ): QueryResult | undefined =>
   runSelectExprEvaluation(db, schema, ast, context, selectExprEvaluatorDeps());
 
-const qualifiedRuntimeAliasName = (name: string): string => name.includes("::") ? name : `default::${name}`;
+const qualifiedRuntimeAliasName = (name: string): string =>
+  name.includes("::") ? name : `default::${name}`;
 
 const findRuntimeLinkDef = (
   schema: SchemaSnapshot,
@@ -1452,7 +1681,7 @@ const resolveRuntimeStoredTypeName = (schema: SchemaSnapshot, storedTypeName: st
   return storedTypeName;
 };
 
-const findRuntimeComputedMulti = (
+const _findRuntimeComputedMulti = (
   schema: SchemaSnapshot,
   typeName: string,
   computedName: string,
@@ -1474,7 +1703,7 @@ const findRuntimeComputedMulti = (
   }
 
   for (const baseName of typeDef.extends ?? []) {
-    const inherited = findRuntimeComputedMulti(schema, baseName, computedName, seen);
+    const inherited = _findRuntimeComputedMulti(schema, baseName, computedName, seen);
     if (inherited !== undefined) {
       return inherited;
     }
@@ -1483,8 +1712,10 @@ const findRuntimeComputedMulti = (
   return undefined;
 };
 
-const resolvedRuntimeTarget = (context: SecurityContext, db: RuntimeDatabaseAdapter): RuntimeTarget =>
-  context.runtimeTarget ?? db.target ?? "sqlite";
+const resolvedRuntimeTarget = (
+  context: SecurityContext,
+  db: RuntimeDatabaseAdapter,
+): RuntimeTarget => context.runtimeTarget ?? db.target ?? "sqlite";
 
 type ParsedRuntimeRow = Record<string, unknown> & { id?: unknown; __source_type?: unknown };
 
@@ -1497,7 +1728,7 @@ type ParsedRuntimeEnv = {
   iterationSource?: FreeObjectExpr;
 };
 
-const withInnerRow = (
+const _withInnerRow = (
   env: ParsedRuntimeEnv,
   row: ParsedRuntimeRow,
   rowType: string | undefined,
@@ -1643,7 +1874,8 @@ export const executeQuery = (
   }
   // Reuse the AST parsed above instead of re-parsing inside the trace impl, and
   // skip SQL-trail recording — this entry point only returns `.result`.
-  return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext, parsedQuery, false).result;
+  return executeQueryWithTrace(db, schema, rewrittenQuery, securityContext, parsedQuery, false)
+    .result;
 };
 
 export const executeScript = (
@@ -1672,7 +1904,12 @@ export const executeScript = (
     // SELECT schema::Type FILTER .name = 'newAlias' picks them up. Both
     // typed (schema.addAlias) and runtime expr aliases (runtimeExprAliases
     // WeakMap) must be included — listAllRuntimeAliasNames merges both.
-    populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema), runtimeExprAliases.get(schema));
+    populateSchemaIntrospection(
+      db,
+      schema,
+      listAllRuntimeAliasNames(schema),
+      runtimeExprAliases.get(schema),
+    );
     return { kind: "insert", changes: 0 };
   }
   return executeQueryUnitWithTrace(db, schema, script, securityContext, parserOptions).result;
@@ -1751,7 +1988,11 @@ const attachWithToNestedMutations = <T>(node: T, extras: WithBinding[]): T => {
     if (Array.isArray(cur)) return cur.map(walk);
     if (cur === null || typeof cur !== "object") return cur;
     const n = cur as Record<string, unknown> & { kind?: string; statement?: unknown };
-    if ((n.kind === "mutation_expr" || n.kind === "subquery_statement") && n.statement && typeof n.statement === "object") {
+    if (
+      (n.kind === "mutation_expr" || n.kind === "subquery_statement") &&
+      n.statement &&
+      typeof n.statement === "object"
+    ) {
       const st = n.statement as { with?: WithBinding[] };
       return { ...n, statement: { ...st, with: [...extras, ...(st.with ?? [])] } };
     }
@@ -1777,11 +2018,20 @@ const bindLoopVarInForBody = (node: unknown, name: string, value: ScalarValue): 
   const walk = (cur: unknown): unknown => {
     if (Array.isArray(cur)) return cur.map(walk);
     if (cur === null || typeof cur !== "object") return cur;
-    const n = cur as Record<string, unknown> & { kind?: string; statement?: unknown; variable?: unknown };
+    const n = cur as Record<string, unknown> & {
+      kind?: string;
+      statement?: unknown;
+      variable?: unknown;
+    };
     if (n.kind === "binding_ref" && n.name === name) return { kind: "literal", value };
-    if (n.kind === "path" && n.head === name && n.tail === undefined) return { kind: "literal", value };
+    if (n.kind === "path" && n.head === name && n.tail === undefined)
+      return { kind: "literal", value };
     if (n.kind === "for_expr" && n.variable === name) return cur;
-    if ((n.kind === "mutation_expr" || n.kind === "subquery_statement") && n.statement && typeof n.statement === "object") {
+    if (
+      (n.kind === "mutation_expr" || n.kind === "subquery_statement") &&
+      n.statement &&
+      typeof n.statement === "object"
+    ) {
       const st = n.statement as { with?: WithBinding[] };
       return { ...n, statement: { ...st, with: [varBinding, ...(st.with ?? [])] } };
     }
@@ -1812,15 +2062,28 @@ const evaluateScalarBindingViaSQL = (
   } as unknown as Statement;
   // captureAll: any compile/run failure just means "leave the binding for
   // the downstream compile to handle".
-  const attempt = tryResult(() => {
-    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-    if (!lowersToSingleSql(compiled.sql)) return undefined;
-    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-  }, { captureAll: true });
+  const attempt = tryResult(
+    () => {
+      const compiled = getCompilerService().compile(schema, stmtAst, {
+        globals: context.globals,
+        params: context.params,
+        target: resolvedRuntimeTarget(context, db),
+      });
+      if (!lowersToSingleSql(compiled.sql)) return undefined;
+      return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+    },
+    { captureAll: true },
+  );
   if (!attempt.ok || attempt.value === undefined) return undefined;
   const rows = attempt.value;
   if (rows.length === 0) return { kind: "set_literal", values: [] } as WithBindingValue;
-  if (rows.length === 1 && (rows[0] === null || typeof rows[0] === "string" || typeof rows[0] === "number" || typeof rows[0] === "boolean")) {
+  if (
+    rows.length === 1 &&
+    (rows[0] === null ||
+      typeof rows[0] === "string" ||
+      typeof rows[0] === "number" ||
+      typeof rows[0] === "boolean")
+  ) {
     return { kind: "literal", value: rows[0] as ScalarValue } as WithBindingValue;
   }
   return undefined;
@@ -1845,7 +2108,10 @@ const captureFreeObjectScalarBindings = (
   // Collect free-object bindings whose entries are scalar (non-mutation) exprs.
   const freeObjectEntries = new Map<string, Map<string, FreeObjectExpr>>();
   for (const binding of withBindings) {
-    const value = binding.value as { kind?: string; expr?: { kind?: string; entries?: Array<{ name?: string; expr?: FreeObjectExpr }> } };
+    const value = binding.value as {
+      kind?: string;
+      expr?: { kind?: string; entries?: Array<{ name?: string; expr?: FreeObjectExpr }> };
+    };
     if (value.kind !== "subquery_expr") continue;
     const ctor = value.expr;
     if (ctor?.kind !== "free_object_constructor" || !Array.isArray(ctor.entries)) continue;
@@ -1853,7 +2119,10 @@ const captureFreeObjectScalarBindings = (
     const entryMap = new Map<string, FreeObjectExpr>();
     let ok = true;
     for (const entry of ctor.entries) {
-      if (typeof entry.name !== "string" || !entry.expr) { ok = false; break; }
+      if (typeof entry.name !== "string" || !entry.expr) {
+        ok = false;
+        break;
+      }
       entryMap.set(entry.name, entry.expr);
     }
     if (ok && entryMap.size > 0) freeObjectEntries.set(binding.name, entryMap);
@@ -1864,21 +2133,27 @@ const captureFreeObjectScalarBindings = (
   // evaluate (and capture) the entries that are read.
   const referenced = new Map<string, Set<string>>();
   const noteRef = (head: string, field: string): void => {
-    if (!freeObjectEntries.has(head)) return;
-    if (!freeObjectEntries.get(head)!.has(field)) return;
-    if (!referenced.has(head)) referenced.set(head, new globalThis.Set());
-    referenced.get(head)!.add(field);
+    const entries = freeObjectEntries.get(head);
+    if (!entries?.has(field)) return;
+    const fields = referenced.get(head) ?? new globalThis.Set<string>();
+    fields.add(field);
+    referenced.set(head, fields);
   };
   const scan = (node: unknown): void => {
-    if (Array.isArray(node)) { node.forEach(scan); return; }
+    if (Array.isArray(node)) {
+      node.forEach(scan);
+      return;
+    }
     if (node === null || typeof node !== "object") return;
     const n = node as Record<string, unknown> & { kind?: string };
     if (n.kind === "path" && typeof n.head === "string" && typeof n.tail === "string") {
       noteRef(n.head, n.tail);
     }
-    if (n.kind === "field_access"
-      && typeof n.field === "string"
-      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref") {
+    if (
+      n.kind === "field_access" &&
+      typeof n.field === "string" &&
+      (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
+    ) {
       noteRef((n.expr as { name: string }).name, n.field);
     }
     for (const v of Object.values(n)) scan(v);
@@ -1889,11 +2164,17 @@ const captureFreeObjectScalarBindings = (
   // Evaluate each referenced entry once and record the captured literal.
   const captured = new Map<string, Map<string, ScalarValue | null>>();
   for (const [head, fields] of referenced) {
-    const entryMap = freeObjectEntries.get(head)!;
+    const entryMap = freeObjectEntries.get(head);
+    if (!entryMap) continue;
     const fieldValues = new Map<string, ScalarValue | null>();
     for (const field of fields) {
-      const evaluated = evaluateScalarBindingViaSQL(db, schema, entryMap.get(field)!, [], context, ast.pos);
-      if (evaluated === undefined || evaluated.kind !== "literal") { fieldValues.clear(); break; }
+      const expression = entryMap.get(field);
+      if (!expression) continue;
+      const evaluated = evaluateScalarBindingViaSQL(db, schema, expression, [], context, ast.pos);
+      if (evaluated === undefined || evaluated.kind !== "literal") {
+        fieldValues.clear();
+        break;
+      }
       fieldValues.set(field, evaluated.value);
     }
     if (fieldValues.size > 0) captured.set(head, fieldValues);
@@ -1909,9 +2190,11 @@ const captureFreeObjectScalarBindings = (
       const fields = captured.get(n.head);
       if (fields?.has(n.tail)) return { kind: "literal", value: fields.get(n.tail) };
     }
-    if (n.kind === "field_access"
-      && typeof n.field === "string"
-      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref") {
+    if (
+      n.kind === "field_access" &&
+      typeof n.field === "string" &&
+      (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
+    ) {
       const head = (n.expr as { name: string }).name;
       const fields = captured.get(head);
       if (fields?.has(n.field)) return { kind: "literal", value: fields.get(n.field as string) };
@@ -1946,11 +2229,18 @@ const evaluateConditionRowsViaSQL = (
     with: withBindings.length > 0 ? [...withBindings] : undefined,
     pos,
   } as unknown as Statement;
-  const attempt = tryResult(() => {
-    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-    if (!lowersToSingleSql(compiled.sql)) return undefined;
-    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-  }, { captureAll: true });
+  const attempt = tryResult(
+    () => {
+      const compiled = getCompilerService().compile(schema, stmtAst, {
+        globals: context.globals,
+        params: context.params,
+        target: resolvedRuntimeTarget(context, db),
+      });
+      if (!lowersToSingleSql(compiled.sql)) return undefined;
+      return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+    },
+    { captureAll: true },
+  );
   return attempt.ok && Array.isArray(attempt.value) ? attempt.value : [];
 };
 
@@ -1967,9 +2257,15 @@ const rewriteEnvRefsInNode = (node: unknown, env: DmlChainEnv): unknown => {
     if (n.kind === "path") {
       const bound = envObjectSet(n.head);
       if (bound) {
-        const ptrSteps = ((n.steps as Array<{ kind?: string; name?: string }> | undefined) ?? [])
-          .filter((step) => step.kind === "ptr" && typeof step.name === "string");
-        const steps = ptrSteps.length > 0 ? ptrSteps : (typeof n.tail === "string" ? [{ kind: "ptr", name: n.tail }] : []);
+        const ptrSteps = (
+          (n.steps as Array<{ kind?: string; name?: string }> | undefined) ?? []
+        ).filter((step) => step.kind === "ptr" && typeof step.name === "string");
+        const steps =
+          ptrSteps.length > 0
+            ? ptrSteps
+            : typeof n.tail === "string"
+              ? [{ kind: "ptr", name: n.tail }]
+              : [];
         let expr: unknown = { kind: "select_expr_subquery", expr: chainByIdSelect(bound) };
         for (const step of steps) {
           expr = { kind: "field_access", expr, field: step.name, optional: false };
@@ -2009,36 +2305,67 @@ const traverseLinkIds = (
   if (realLink && td) {
     const targetType = qualifyChainType(realLink.targetType, typeName.split("::")[0] ?? "default");
     if (usesLinkTable(realLink)) {
-      const lt = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, td, realLink)), realLink);
+      const lt = linkTableName(
+        qualifiedTypeName(resolveLinkStorageOwner(schema, td, realLink)),
+        realLink,
+      );
       const rows = ids.length
-        ? db.prepare(`SELECT DISTINCT ${quoteIdent("target")} AS t FROM ${quoteIdent(lt)} WHERE ${quoteIdent("source")} IN (${placeholders})`).all(...ids) as { t?: unknown }[]
+        ? (db
+            .prepare(
+              `SELECT DISTINCT ${quoteIdent("target")} AS t FROM ${quoteIdent(lt)} WHERE ${quoteIdent("source")} IN (${placeholders})`,
+            )
+            .all(...ids) as { t?: unknown }[])
         : [];
       return { typeName: targetType, ids: rows.map((r) => String(r.t)) };
     }
     const col = `${linkName}_id`;
     const rows = ids.length
-      ? db.prepare(`SELECT DISTINCT ${quoteIdent(col)} AS t FROM ${quoteIdent(tableNameForType(typeName))} WHERE ${quoteIdent("id")} IN (${placeholders})`).all(...ids) as { t?: unknown }[]
+      ? (db
+          .prepare(
+            `SELECT DISTINCT ${quoteIdent(col)} AS t FROM ${quoteIdent(tableNameForType(typeName))} WHERE ${quoteIdent("id")} IN (${placeholders})`,
+          )
+          .all(...ids) as { t?: unknown }[])
       : [];
-    return { typeName: targetType, ids: rows.map((r) => r.t).filter((t): t is string => typeof t === "string") };
+    return {
+      typeName: targetType,
+      ids: rows.map((r) => r.t).filter((t): t is string => typeof t === "string"),
+    };
   }
   const computed = (td?.computeds ?? []).find(
-    (c) => c.kind === "link" && c.name === linkName && (c as { expr?: { kind?: string } }).expr?.kind === "backlink",
+    (c) =>
+      c.kind === "link" &&
+      c.name === linkName &&
+      (c as { expr?: { kind?: string } }).expr?.kind === "backlink",
   ) as { expr?: { link?: string; sourceType?: string } } | undefined;
   if (computed?.expr?.link) {
     const backLink = computed.expr.link;
-    const srcType = qualifyChainType(computed.expr.sourceType ?? typeName, typeName.split("::")[0] ?? "default");
+    const srcType = qualifyChainType(
+      computed.expr.sourceType ?? typeName,
+      typeName.split("::")[0] ?? "default",
+    );
     const srcTd = schema.getType(srcType);
     const backReal = (srcTd?.links ?? []).find((link) => link.name === backLink);
     if (backReal && srcTd && usesLinkTable(backReal)) {
-      const lt = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, srcTd, backReal)), backReal);
+      const lt = linkTableName(
+        qualifiedTypeName(resolveLinkStorageOwner(schema, srcTd, backReal)),
+        backReal,
+      );
       const rows = ids.length
-        ? db.prepare(`SELECT DISTINCT ${quoteIdent("source")} AS s FROM ${quoteIdent(lt)} WHERE ${quoteIdent("target")} IN (${placeholders})`).all(...ids) as { s?: unknown }[]
+        ? (db
+            .prepare(
+              `SELECT DISTINCT ${quoteIdent("source")} AS s FROM ${quoteIdent(lt)} WHERE ${quoteIdent("target")} IN (${placeholders})`,
+            )
+            .all(...ids) as { s?: unknown }[])
         : [];
       return { typeName: srcType, ids: rows.map((r) => String(r.s)) };
     }
     const col = `${backLink}_id`;
     const rows = ids.length
-      ? db.prepare(`SELECT DISTINCT ${quoteIdent("id")} AS s FROM ${quoteIdent(tableNameForType(srcType))} WHERE ${quoteIdent(col)} IN (${placeholders})`).all(...ids) as { s?: unknown }[]
+      ? (db
+          .prepare(
+            `SELECT DISTINCT ${quoteIdent("id")} AS s FROM ${quoteIdent(tableNameForType(srcType))} WHERE ${quoteIdent(col)} IN (${placeholders})`,
+          )
+          .all(...ids) as { s?: unknown }[])
       : [];
     return { typeName: srcType, ids: rows.map((r) => String(r.s)) };
   }
@@ -2054,15 +2381,20 @@ const applyChainSubqueryClauses = (
   node: { orderBy?: unknown; limit?: number; offset?: number },
 ): ObjectSet => {
   let ids = base.ids;
-  const orderBy = node.orderBy as { field?: string; expr?: { field?: string }; direction?: "asc" | "desc" } | undefined;
+  const orderBy = node.orderBy as
+    | { field?: string; expr?: { field?: string }; direction?: "asc" | "desc" }
+    | undefined;
   const orderField = orderBy?.field ?? orderBy?.expr?.field;
   if (orderField && ids.length > 0) {
     const placeholders = ids.map(() => "?").join(", ");
-    const rows = db.prepare(
-      `SELECT ${quoteIdent("id")} AS id, ${quoteIdent(orderField)} AS k FROM ${quoteIdent(tableNameForType(base.typeName))} WHERE ${quoteIdent("id")} IN (${placeholders})`,
-    ).all(...ids) as { id?: unknown; k?: unknown }[];
+    const rows = db
+      .prepare(
+        `SELECT ${quoteIdent("id")} AS id, ${quoteIdent(orderField)} AS k FROM ${quoteIdent(tableNameForType(base.typeName))} WHERE ${quoteIdent("id")} IN (${placeholders})`,
+      )
+      .all(...ids) as { id?: unknown; k?: unknown }[];
     rows.sort((a, b) => {
-      const ka = a.k as string | number, kb = b.k as string | number;
+      const ka = a.k as string | number,
+        kb = b.k as string | number;
       return ka < kb ? -1 : ka > kb ? 1 : 0;
     });
     if (orderBy?.direction === "desc") rows.reverse();
@@ -2126,15 +2458,34 @@ const resolveObjectSet = (
       // argument set directly.
       const call = n.call as { name?: string; args?: unknown[] } | undefined;
       const fnName = (call?.name ?? "").split("::").pop();
-      if (call?.args?.length && ["assert_distinct", "assert_single", "assert_exists", "distinct"].includes(fnName ?? "")) {
+      if (
+        call?.args?.length &&
+        ["assert_distinct", "assert_single", "assert_exists", "distinct"].includes(fnName ?? "")
+      ) {
         return resolveObjectSet(db, schema, call.args[0], env, current, context, defaultModule);
       }
       return { typeName: current?.typeName ?? "", ids: [] };
     }
     case "subquery_statement":
-      return executeDmlChainStatement(db, schema, n.statement as Statement, env, current, context, defaultModule);
+      return executeDmlChainStatement(
+        db,
+        schema,
+        n.statement as Statement,
+        env,
+        current,
+        context,
+        defaultModule,
+      );
     case "mutation_expr":
-      return executeDmlChainStatement(db, schema, n.statement as Statement, env, current, context, defaultModule);
+      return executeDmlChainStatement(
+        db,
+        schema,
+        n.statement as Statement,
+        env,
+        current,
+        context,
+        defaultModule,
+      );
     case "coalesce": {
       // Upsert-by-coalesce: `(SELECT …) ?? (INSERT …)` — the right side (and
       // its mutation) only runs when the left side is empty.
@@ -2148,7 +2499,14 @@ const resolveObjectSet = (
       // variable referenced by the condition is substituted in as a literal by
       // the for_expr case before this point, so the condition compiles
       // standalone.)
-      const condRows = evaluateConditionRowsViaSQL(db, schema, n.condition as FreeObjectExpr, [], context, { line: 0, column: 0 });
+      const condRows = evaluateConditionRowsViaSQL(
+        db,
+        schema,
+        n.condition as FreeObjectExpr,
+        [],
+        context,
+        { line: 0, column: 0 },
+      );
       let typeName = "";
       const ids: string[] = [];
       for (const condRow of condRows) {
@@ -2179,7 +2537,14 @@ const resolveObjectSet = (
       if (iterator?.kind === "set_literal") {
         iterValues = iterator.values ?? [];
       } else {
-        iterValues = evaluateConditionRowsViaSQL(db, schema, n.iterator as FreeObjectExpr, [], context, { line: 0, column: 0 });
+        iterValues = evaluateConditionRowsViaSQL(
+          db,
+          schema,
+          n.iterator as FreeObjectExpr,
+          [],
+          context,
+          { line: 0, column: 0 },
+        );
       }
       let typeName = "";
       const ids: string[] = [];
@@ -2188,7 +2553,15 @@ const resolveObjectSet = (
           return { typeName: current?.typeName ?? "", ids: [] };
         }
         const boundBody = bindLoopVarInForBody(body, variable, iterValue as ScalarValue);
-        const result = resolveObjectSet(db, schema, boundBody, env, current, context, defaultModule);
+        const result = resolveObjectSet(
+          db,
+          schema,
+          boundBody,
+          env,
+          current,
+          context,
+          defaultModule,
+        );
         if (result.typeName) typeName = result.typeName;
         ids.push(...result.ids);
       }
@@ -2199,7 +2572,9 @@ const resolveObjectSet = (
       if (bound) return bound;
       const qn = qualifyChainType(n.name as string, defaultModule);
       if (schema.getType(qn)) {
-        const rows = db.prepare(`SELECT ${quoteIdent("id")} AS id FROM ${quoteIdent(tableNameForType(qn))}`).all() as { id?: unknown }[];
+        const rows = db
+          .prepare(`SELECT ${quoteIdent("id")} AS id FROM ${quoteIdent(tableNameForType(qn))}`)
+          .all() as { id?: unknown }[];
         return { typeName: qn, ids: rows.map((r) => String(r.id)) };
       }
       return { typeName: "", ids: [] };
@@ -2211,16 +2586,19 @@ const resolveObjectSet = (
       const concreteNames = concreteTypeNamesForTypeExprAtRuntime(schema, typeExpr, defaultModule);
       const ids: string[] = [];
       for (const typeName of concreteNames) {
-        const rows = db.prepare(
-          `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tableNameForType(typeName))}`,
-        ).all() as { id?: unknown }[];
+        const rows = db
+          .prepare(
+            `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(tableNameForType(typeName))}`,
+          )
+          .all() as { id?: unknown }[];
         ids.push(...rows.map((row) => String(row.id)));
       }
       let rootExpr = typeExpr;
       while (rootExpr.kind === "type_intersection") rootExpr = rootExpr.left;
-      const rootName = rootExpr.kind === "type_name"
-        ? qualifyChainType(rootExpr.name, defaultModule)
-        : commonAncestorType(schema, concreteNames);
+      const rootName =
+        rootExpr.kind === "type_name"
+          ? qualifyChainType(rootExpr.name, defaultModule)
+          : commonAncestorType(schema, concreteNames);
       return { typeName: rootName || concreteNames[0] || current?.typeName || "", ids };
     }
     case "current_item":
@@ -2230,12 +2608,28 @@ const resolveObjectSet = (
       return traverseLinkIds(db, schema, base.typeName, base.ids, n.field as string);
     }
     case "path": {
-      const base = resolveObjectSet(db, schema, { kind: "binding_ref", name: n.head }, env, current, context, defaultModule);
+      const base = resolveObjectSet(
+        db,
+        schema,
+        { kind: "binding_ref", name: n.head },
+        env,
+        current,
+        context,
+        defaultModule,
+      );
       return n.tail ? traverseLinkIds(db, schema, base.typeName, base.ids, n.tail as string) : base;
     }
     case "path_chain": {
       const parts = n.parts as string[];
-      let cur = resolveObjectSet(db, schema, { kind: "binding_ref", name: parts[0] }, env, current, context, defaultModule);
+      let cur = resolveObjectSet(
+        db,
+        schema,
+        { kind: "binding_ref", name: parts[0] },
+        env,
+        current,
+        context,
+        defaultModule,
+      );
       for (let i = 1; i < parts.length; i += 1) {
         cur = traverseLinkIds(db, schema, cur.typeName, cur.ids, parts[i]);
       }
@@ -2246,9 +2640,15 @@ const resolveObjectSet = (
       // its clauses, not on the wrapped statement. Merge them onto the
       // mutation so its values can resolve them when it executes.
       {
-        const innerBindings = (n.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings;
+        const innerBindings = (n.clauses as { _withBindings?: WithBinding[] } | undefined)
+          ?._withBindings;
         const innerExpr = n.expr as { kind?: string; statement?: Statement } | undefined;
-        if (innerBindings && innerBindings.length > 0 && innerExpr?.kind === "mutation_expr" && innerExpr.statement) {
+        if (
+          innerBindings &&
+          innerBindings.length > 0 &&
+          innerExpr?.kind === "mutation_expr" &&
+          innerExpr.statement
+        ) {
           const stmt = innerExpr.statement as Statement & { with?: WithBinding[] };
           // Inner bindings come last so they shadow same-named outer ones.
           const merged = { ...stmt, with: [...(stmt.with ?? []), ...innerBindings] } as Statement;
@@ -2260,28 +2660,59 @@ const resolveObjectSet = (
       // intersection against another object set. The alias (`_`) on one side
       // marks the iterated element; the other side resolves to the id-set to
       // exclude/keep.
-      const filter = n.filter as { kind?: string; op?: string; left?: { kind?: string; name?: string }; right?: { kind?: string; name?: string } } | undefined;
+      const filter = n.filter as
+        | {
+            kind?: string;
+            op?: string;
+            left?: { kind?: string; name?: string };
+            right?: { kind?: string; name?: string };
+          }
+        | undefined;
       if (filter?.kind === "compare" && (filter.op === "!=" || filter.op === "=")) {
         const alias = (n.alias as string | undefined) ?? "_";
         const isAliasRef = (x: { kind?: string; name?: string } | undefined): boolean =>
           !!x && x.kind === "binding_ref" && (x.name === alias || x.name === "_");
-        const otherSide = isAliasRef(filter.left) ? filter.right : isAliasRef(filter.right) ? filter.left : undefined;
+        const otherSide = isAliasRef(filter.left)
+          ? filter.right
+          : isAliasRef(filter.right)
+            ? filter.left
+            : undefined;
         if (otherSide) {
-          const other = resolveObjectSet(db, schema, otherSide, env, current, context, defaultModule);
+          const other = resolveObjectSet(
+            db,
+            schema,
+            otherSide,
+            env,
+            current,
+            context,
+            defaultModule,
+          );
           const otherSet = new globalThis.Set(other.ids);
           result = {
             typeName: result.typeName,
-            ids: filter.op === "!=" ? result.ids.filter((id) => !otherSet.has(id)) : result.ids.filter((id) => otherSet.has(id)),
+            ids:
+              filter.op === "!="
+                ? result.ids.filter((id) => !otherSet.has(id))
+                : result.ids.filter((id) => otherSet.has(id)),
           };
         }
       }
-      return applyChainSubqueryClauses(db, result, n as { orderBy?: unknown; limit?: number; offset?: number });
+      return applyChainSubqueryClauses(
+        db,
+        result,
+        n as { orderBy?: unknown; limit?: number; offset?: number },
+      );
     }
     case "select": {
       const rows = executeSelectExprRows(
         db,
         schema,
-        { kind: "select", typeName: n.typeName as string, shape: (n.shape as ShapeElement[]) ?? [], clauses: (n.clauses as Record<string, unknown>) ?? {} } as unknown as Extract<InsertValue, { kind: "select" }>,
+        {
+          kind: "select",
+          typeName: n.typeName as string,
+          shape: (n.shape as ShapeElement[]) ?? [],
+          clauses: (n.clauses as Record<string, unknown>) ?? {},
+        } as unknown as Extract<InsertValue, { kind: "select" }>,
         context,
       );
       return {
@@ -2311,8 +2742,11 @@ const concreteTypeNameForId = (
 ): string => {
   const rowExists = (typeDef: TypeDef): boolean => {
     const table = tableNameForType(qualifiedTypeName(typeDef));
-    const row = tryResult(() =>
-      db.prepare(`SELECT 1 FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ? LIMIT 1`).all(id)[0],
+    const row = tryResult(
+      () =>
+        db
+          .prepare(`SELECT 1 FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ? LIMIT 1`)
+          .all(id)[0],
     );
     return row.ok && row.value !== undefined;
   };
@@ -2354,17 +2788,26 @@ const executeDmlChainStatement = (
   const runtimeTarget = resolvedRuntimeTarget(context, db);
 
   if (stmt.kind === "insert") {
-    let rewritten = env.size > 0
-      ? ({ ...stmt, values: rewriteEnvRefsInNode(stmt.values, env) } as typeof stmt)
-      : stmt;
+    let rewritten =
+      env.size > 0
+        ? ({ ...stmt, values: rewriteEnvRefsInNode(stmt.values, env) } as typeof stmt)
+        : stmt;
     const capturedWith: WithBinding[] = [];
     let withChanged = false;
     for (const binding of (rewritten as { with?: WithBinding[] }).with ?? []) {
       if (binding.value.kind === "subquery_expr" && !bindingValueContainsMutation(binding.value)) {
-        const expr = env.size > 0
-          ? rewriteEnvRefsInNode(binding.value.expr, env) as FreeObjectExpr
-          : binding.value.expr;
-        const evaluated = evaluateScalarBindingViaSQL(db, schema, expr, capturedWith, context, stmt.pos);
+        const expr =
+          env.size > 0
+            ? (rewriteEnvRefsInNode(binding.value.expr, env) as FreeObjectExpr)
+            : binding.value.expr;
+        const evaluated = evaluateScalarBindingViaSQL(
+          db,
+          schema,
+          expr,
+          capturedWith,
+          context,
+          stmt.pos,
+        );
         if (evaluated !== undefined) {
           capturedWith.push({ name: binding.name, value: evaluated } as WithBinding);
           withChanged = true;
@@ -2376,23 +2819,51 @@ const executeDmlChainStatement = (
     if (withChanged) {
       rewritten = { ...rewritten, with: capturedWith } as typeof stmt;
     }
-    const compiled = compilerService.compile(schema, rewritten, { globals: context.globals, params: context.params, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, rewritten, {
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+    });
     const subjectType = typeDefForTable(schema, (compiled.ir as { table?: string }).table ?? "");
     if (!subjectType) return { typeName: "", ids: [] };
-    const writeResult = runWriteWithAccessPolicies(db, schema, rewritten, compiled.ir, compiled.sql, subjectType, context);
+    const writeResult = runWriteWithAccessPolicies(
+      db,
+      schema,
+      rewritten,
+      compiled.ir,
+      compiled.sql,
+      subjectType,
+      context,
+    );
     return {
       typeName: qualifiedTypeName(subjectType),
-      ids: (writeResult.rows ?? []).map((r) => (r as { id?: unknown }).id).filter((id): id is string => typeof id === "string"),
+      ids: (writeResult.rows ?? [])
+        .map((r) => (r as { id?: unknown }).id)
+        .filter((id): id is string => typeof id === "string"),
     };
   }
 
   // Resolve the target id-set: an explicit sub-select target, a binding-named
   // subject, or a bare type + FILTER.
-  const stmtAny = stmt as unknown as { target?: unknown; typeName: string; filter?: FilterExpr; values?: Record<string, unknown>; operations?: Record<string, string> };
+  const stmtAny = stmt as unknown as {
+    target?: unknown;
+    typeName: string;
+    filter?: FilterExpr;
+    values?: Record<string, unknown>;
+    operations?: Record<string, string>;
+  };
   let target: ObjectSet;
   const envTarget = env.get(stmtAny.typeName);
   if (stmtAny.target) {
-    target = resolveObjectSet(db, schema, stmtAny.target, env, outerCurrent, context, defaultModule);
+    target = resolveObjectSet(
+      db,
+      schema,
+      stmtAny.target,
+      env,
+      outerCurrent,
+      context,
+      defaultModule,
+    );
   } else if (envTarget) {
     target = envTarget;
   } else {
@@ -2404,10 +2875,18 @@ const executeDmlChainStatement = (
     const rows = executeSelectExprRows(
       db,
       schema,
-      { kind: "select", typeName: stmtAny.typeName, shape: [{ kind: "field", name: "id" }], clauses: { filter: stmtAny.filter, _withBindings: targetWith } } as unknown as Extract<InsertValue, { kind: "select" }>,
+      {
+        kind: "select",
+        typeName: stmtAny.typeName,
+        shape: [{ kind: "field", name: "id" }],
+        clauses: { filter: stmtAny.filter, _withBindings: targetWith },
+      } as unknown as Extract<InsertValue, { kind: "select" }>,
       context,
     );
-    target = { typeName: qualifyChainType(stmtAny.typeName, defaultModule), ids: rows.map((r) => r.id).filter((id): id is string => typeof id === "string") };
+    target = {
+      typeName: qualifyChainType(stmtAny.typeName, defaultModule),
+      ids: rows.map((r) => r.id).filter((id): id is string => typeof id === "string"),
+    };
   }
 
   if (stmt.kind === "delete") {
@@ -2417,9 +2896,18 @@ const executeDmlChainStatement = (
       // re-target each row at the concrete type that physically stores it —
       // deleting from the (abstract/base) ancestor table would miss the row.
       const concreteType = concreteTypeNameForId(db, schema, target.typeName, id);
-      const perId = { kind: "delete", typeName: concreteType, filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id }, pos: { line: 1, column: 1 } } as unknown as DeleteStatement;
+      const perId = {
+        kind: "delete",
+        typeName: concreteType,
+        filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id },
+        pos: { line: 1, column: 1 },
+      } as unknown as DeleteStatement;
       const runDelete = (): void => {
-        const c = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
+        const c = compilerService.compile(schema, perId, {
+          globals: context.globals,
+          params: context.params,
+          target: runtimeTarget,
+        });
         const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
         if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
       };
@@ -2457,14 +2945,22 @@ const executeDmlChainStatement = (
         continue;
       }
       const resolved = resolveObjectSet(db, schema, raw, env, current, context, defaultModule);
-      values[link] = resolved.ids.length === 0
-        ? { kind: "set", values: [] }
-        : {
-            kind: "select",
-            typeName: resolved.typeName,
-            shape: [{ kind: "field", name: "id" }],
-            clauses: { filter: { kind: "in_predicate", target: { kind: "field", field: "id" }, op: "in", values: { kind: "set_literal", values: resolved.ids } } },
-          };
+      values[link] =
+        resolved.ids.length === 0
+          ? { kind: "set", values: [] }
+          : {
+              kind: "select",
+              typeName: resolved.typeName,
+              shape: [{ kind: "field", name: "id" }],
+              clauses: {
+                filter: {
+                  kind: "in_predicate",
+                  target: { kind: "field", field: "id" },
+                  op: "in",
+                  values: { kind: "set_literal", values: resolved.ids },
+                },
+              },
+            };
     }
     const perId = {
       kind: "update",
@@ -2479,7 +2975,11 @@ const executeDmlChainStatement = (
       operations,
       pos: { line: 1, column: 1 },
     } as unknown as UpdateStatement;
-    const c = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
+    const c = compilerService.compile(schema, perId, {
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+    });
     const st = typeDefForTable(schema, (c.ir as { table?: string }).table ?? "");
     if (st) runWriteWithAccessPolicies(db, schema, perId, c.ir, c.sql, st, context);
   }
@@ -2499,7 +2999,11 @@ const bindingValueContainsMutation = (value: WithBindingValue): boolean => {
   const walk = (expr: FreeObjectExpr | undefined): boolean => {
     if (!expr) return false;
     if (expr.kind === "mutation_expr") return true;
-    if (expr.kind === "select_expr_subquery" || expr.kind === "distinct" || expr.kind === "shape_projection") {
+    if (
+      expr.kind === "select_expr_subquery" ||
+      expr.kind === "distinct" ||
+      expr.kind === "shape_projection"
+    ) {
       return walk((expr as { expr: FreeObjectExpr }).expr);
     }
     if (expr.kind === "coalesce") {
@@ -2519,7 +3023,8 @@ const bindingValueContainsMutation = (value: WithBindingValue): boolean => {
       return walk((expr as unknown as { body?: FreeObjectExpr }).body);
     }
     if (expr.kind === "function_call") {
-      const call = (expr as { call?: { args?: Array<{ kind?: string; expr?: FreeObjectExpr }> } }).call;
+      const call = (expr as { call?: { args?: Array<{ kind?: string; expr?: FreeObjectExpr }> } })
+        .call;
       return (call?.args ?? []).some((arg) => arg.kind === "expr" && walk(arg.expr));
     }
     return false;
@@ -2543,7 +3048,8 @@ const mutationNestedInTuple = (node: unknown): boolean => {
     if (n.kind === "shape_projection") return false;
     const nowInsideTuple = insideTuple || n.kind === "tuple" || n.kind === "named_tuple";
     return Object.entries(n).some(([key, value]) =>
-      key === "kind" ? false : walk(value, nowInsideTuple));
+      key === "kind" ? false : walk(value, nowInsideTuple),
+    );
   };
   return walk(node, false);
 };
@@ -2567,9 +3073,13 @@ const substituteMutationLeaves = (
     const n = cur as Record<string, unknown> & { kind?: string; statement?: Statement };
     if (n.kind === "mutation_expr" && n.statement) {
       const resolved = resolveObjectSet(
-        db, schema,
+        db,
+        schema,
         attachWithToNestedMutations(n, passthrough),
-        env, undefined, context, defaultModule,
+        env,
+        undefined,
+        context,
+        defaultModule,
       );
       return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
     }
@@ -2580,7 +3090,9 @@ const substituteMutationLeaves = (
   return walk(node);
 };
 
-const isWithDmlChain = (ast: Statement): ast is UpdateStatement | DeleteStatement | InsertStatement => {
+const isWithDmlChain = (
+  ast: Statement,
+): ast is UpdateStatement | DeleteStatement | InsertStatement => {
   if (ast.kind !== "update" && ast.kind !== "delete" && ast.kind !== "insert") return false;
   const withBindings = (ast as { with?: WithBinding[] }).with ?? [];
   if (withBindings.length === 0) return false;
@@ -2592,10 +3104,12 @@ const isWithDmlChain = (ast: Statement): ast is UpdateStatement | DeleteStatemen
   // concrete type; the polymorphic-type expansion can't (the binding name is
   // not a type).
   const hasDmlBinding = withBindings.some((b) => bindingValueContainsMutation(b.value));
-  const subjectIsBinding = withBindings.some((b) => b.name === (ast as { typeName?: string }).typeName);
+  const subjectIsBinding = withBindings.some(
+    (b) => b.name === (ast as { typeName?: string }).typeName,
+  );
   const target = (ast as { target?: { kind?: string; name?: string } }).target;
-  const targetIsBinding = target?.kind === "binding_ref"
-    && withBindings.some((b) => b.name === target.name);
+  const targetIsBinding =
+    target?.kind === "binding_ref" && withBindings.some((b) => b.name === target.name);
   return hasDmlBinding || subjectIsBinding || targetIsBinding;
 };
 
@@ -2632,11 +3146,14 @@ const runDmlChain = (
   // one statement and re-used by a sibling surfaces as the exclusivity conflict
   // EdgeQL's single-snapshot semantics require (see captureExclusiveSnapshot).
   // Only meaningful when the chain mutates from more than one statement.
-  const chainDmlCount = ((ast as { with?: WithBinding[] }).with ?? [])
-    .filter((b) => bindingValueContainsMutation(b.value)).length
-    + ((ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete") ? 1 : 0);
+  const chainDmlCount =
+    ((ast as { with?: WithBinding[] }).with ?? []).filter((b) =>
+      bindingValueContainsMutation(b.value),
+    ).length + (ast.kind === "insert" || ast.kind === "update" || ast.kind === "delete" ? 1 : 0);
   const chainTypeNames = chainDmlCount >= 2 ? collectChainTypeNames(ast, defaultModule) : undefined;
-  const exclusiveSnapshot = chainTypeNames ? captureExclusiveSnapshot(db, schema, chainTypeNames) : undefined;
+  const exclusiveSnapshot = chainTypeNames
+    ? captureExclusiveSnapshot(db, schema, chainTypeNames)
+    : undefined;
   // Evaluate WITH bindings in declaration order; DML bindings execute (and
   // mutate) as they're evaluated. Scalar/non-DML bindings declared earlier are
   // forwarded onto each DML binding's statement so its values can resolve
@@ -2653,10 +3170,24 @@ const runDmlChain = (
     evaluateScalarBindingViaSQL(db, schema, expr, passthroughWith, context, ast.pos);
   for (const binding of (ast as { with?: WithBinding[] }).with ?? []) {
     if (bindingValueContainsMutation(binding.value)) {
-      env.set(binding.name, resolveObjectSet(db, schema, attachWithToNestedMutations(binding.value, passthroughWith), env, undefined, context, defaultModule));
+      env.set(
+        binding.name,
+        resolveObjectSet(
+          db,
+          schema,
+          attachWithToNestedMutations(binding.value, passthroughWith),
+          env,
+          undefined,
+          context,
+          defaultModule,
+        ),
+      );
       continue;
     }
-    env.set(binding.name, resolveObjectSet(db, schema, binding.value, env, undefined, context, defaultModule));
+    env.set(
+      binding.name,
+      resolveObjectSet(db, schema, binding.value, env, undefined, context, defaultModule),
+    );
     if (binding.value.kind === "subquery_expr") {
       // Materialize a scalar WITH binding to a single literal so every
       // reference shares ONE value. This matters in two cases:
@@ -2679,13 +3210,24 @@ const runDmlChain = (
   }
   // The final statement compiles standalone — bindings that were captured to
   // literals above must shadow their originals there too.
-  const finalAst = replacedBindings.size > 0
-    ? ({
-        ...ast,
-        with: ((ast as { with?: WithBinding[] }).with ?? []).map((binding) => replacedBindings.get(binding.name) ?? binding),
-      } as typeof ast)
-    : ast;
-  const chainResult = executeDmlChainStatement(db, schema, finalAst, env, undefined, context, defaultModule);
+  const finalAst =
+    replacedBindings.size > 0
+      ? ({
+          ...ast,
+          with: ((ast as { with?: WithBinding[] }).with ?? []).map(
+            (binding) => replacedBindings.get(binding.name) ?? binding,
+          ),
+        } as typeof ast)
+      : ast;
+  const chainResult = executeDmlChainStatement(
+    db,
+    schema,
+    finalAst,
+    env,
+    undefined,
+    context,
+    defaultModule,
+  );
   if (exclusiveSnapshot && chainTypeNames) {
     validateExclusiveSnapshot(db, schema, chainTypeNames, exclusiveSnapshot, ast.pos);
   }
@@ -2738,9 +3280,12 @@ const preExecuteMutationExprsInDmlValues = (
       if (conflictField) {
         const resolveBinding = makeBindingResolver(ast, context, ast.pos.line, ast.pos.column);
         const rawValue = ast.values[conflictField];
-        const staticValue = rawValue !== undefined
-          ? tryResult(() => scalarFromInsertValue(rawValue, resolveBinding, ast.pos.line, ast.pos.column))
-          : undefined;
+        const staticValue =
+          rawValue !== undefined
+            ? tryResult(() =>
+                scalarFromInsertValue(rawValue, resolveBinding, ast.pos.line, ast.pos.column),
+              )
+            : undefined;
         if (staticValue?.ok) {
           const table = tableNameForType(qualified);
           const existingId = findConflictRowId(db, table, conflictField, staticValue.value);
@@ -2749,9 +3294,7 @@ const preExecuteMutationExprsInDmlValues = (
             // values so none of them execute. Empty the assignment value.
             const emptied: Record<string, unknown> = {};
             for (const [field, value] of Object.entries(values)) {
-              emptied[field] = containsMutationExpr(value)
-                ? { kind: "set", values: [] }
-                : value;
+              emptied[field] = containsMutationExpr(value) ? { kind: "set", values: [] } : value;
             }
             return { ...ast, values: emptied } as Statement;
           }
@@ -2769,7 +3312,14 @@ const preExecuteMutationExprsInDmlValues = (
   let withChanged = false;
   for (const binding of (ast as { with?: WithBinding[] }).with ?? []) {
     if (binding.value.kind === "subquery_expr" && !bindingValueContainsMutation(binding.value)) {
-      const evaluated = evaluateScalarBindingViaSQL(db, schema, binding.value.expr, outerWith, context, ast.pos);
+      const evaluated = evaluateScalarBindingViaSQL(
+        db,
+        schema,
+        binding.value.expr,
+        outerWith,
+        context,
+        ast.pos,
+      );
       if (evaluated !== undefined) {
         outerWith.push({ name: binding.name, value: evaluated } as WithBinding);
         withChanged = true;
@@ -2797,9 +3347,10 @@ const preExecuteMutationExprsInDmlValues = (
       // Insert values store the assignment either as a raw literal (`'c'`) or
       // wrapped as `{ kind: "expr", expr: … }`. Normalise to a shape-element
       // computed expression.
-      const expr = (raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr")
-        ? (raw as { expr: unknown }).expr
-        : { kind: "literal", value: raw };
+      const expr =
+        raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr"
+          ? (raw as { expr: unknown }).expr
+          : { kind: "literal", value: raw };
       linkPropElements.push({
         kind: "computed",
         name: key,
@@ -2811,16 +3362,26 @@ const preExecuteMutationExprsInDmlValues = (
     }
     return linkPropElements.length > 0 ? linkPropElements : undefined;
   };
-  const runNestedObjectSet = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): ObjectSet => {
+  const runNestedObjectSet = (
+    stmt: Statement & { with?: WithBinding[] },
+    extraWith: WithBinding[],
+  ): ObjectSet => {
     const mergedWith = [...outerWith, ...extraWith, ...(stmt.with ?? [])];
-    const merged = mergedWith.length > 0 ? ({ ...stmt, with: mergedWith } as Statement) : (stmt as Statement);
+    const merged =
+      mergedWith.length > 0 ? ({ ...stmt, with: mergedWith } as Statement) : (stmt as Statement);
     return executeDmlChainStatement(db, schema, merged, env, undefined, context, defaultModule);
   };
-  const runNested = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): unknown => {
+  const runNested = (
+    stmt: Statement & { with?: WithBinding[] },
+    extraWith: WithBinding[],
+  ): unknown => {
     const resolved = runNestedObjectSet(stmt, extraWith);
     return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
   };
-  const resolveDeleteWithoutDeleting = (stmt: Statement & { with?: WithBinding[] }, extraWith: WithBinding[]): ObjectSet => {
+  const resolveDeleteWithoutDeleting = (
+    stmt: Statement & { with?: WithBinding[] },
+    extraWith: WithBinding[],
+  ): ObjectSet => {
     const previousDeferredDeletes = deferredChainDeletes;
     deferredChainDeletes = [];
     try {
@@ -2836,10 +3397,14 @@ const preExecuteMutationExprsInDmlValues = (
     // `(WITH y := …, INSERT …)` — the subquery's WITH bindings live on its
     // clauses, not the wrapped statement; merge them on before executing.
     if (n.kind === "select_expr_subquery") {
-      const innerBindings = (n.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings ?? [];
+      const innerBindings =
+        (n.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings ?? [];
       const innerExpr = n.expr as { kind?: string; statement?: Statement } | undefined;
       if (innerExpr?.kind === "mutation_expr" && innerExpr.statement) {
-        return runNested(innerExpr.statement as Statement & { with?: WithBinding[] }, innerBindings);
+        return runNested(
+          innerExpr.statement as Statement & { with?: WithBinding[] },
+          innerBindings,
+        );
       }
     }
     if (n.kind === "mutation_expr" && n.statement) {
@@ -2869,7 +3434,9 @@ const preExecuteMutationExprsInDmlValues = (
     if (n?.kind === "for") {
       forStmt = node as ForStatement;
     } else {
-      let inner = (n?.kind === "expr" ? n.expr : node) as { kind?: string; expr?: unknown } | undefined;
+      let inner = (n?.kind === "expr" ? n.expr : node) as
+        | { kind?: string; expr?: unknown }
+        | undefined;
       if (inner?.kind === "select_expr_subquery") inner = inner.expr as { kind?: string };
       if (inner?.kind === "for_expr") {
         const f = forExprChainToForStatement(inner as never, ast.pos);
@@ -2877,7 +3444,10 @@ const preExecuteMutationExprsInDmlValues = (
       }
     }
     if (!forStmt) return undefined;
-    const withForOuter = { ...forStmt, with: [...outerWith, ...((forStmt as { with?: WithBinding[] }).with ?? [])] } as ForStatement;
+    const withForOuter = {
+      ...forStmt,
+      with: [...outerWith, ...((forStmt as { with?: WithBinding[] }).with ?? [])],
+    } as ForStatement;
     const inserts = expandForInsertStatements(withForOuter, schema, db, context, []);
     if (inserts === undefined) return undefined;
     const ids: string[] = [];
@@ -2897,12 +3467,16 @@ const preExecuteMutationExprsInDmlValues = (
         for (const key of Object.keys(insVals)) {
           if (!key.startsWith("@")) continue;
           const raw = insVals[key];
-          const body = (raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr")
-            ? (raw as { expr: unknown }).expr
-            : raw;
-          const lit = (body !== null && typeof body === "object" && (body as { kind?: string }).kind === "literal")
-            ? (body as { value: unknown }).value
-            : body;
+          const body =
+            raw !== null && typeof raw === "object" && (raw as { kind?: string }).kind === "expr"
+              ? (raw as { expr: unknown }).expr
+              : raw;
+          const lit =
+            body !== null &&
+            typeof body === "object" &&
+            (body as { kind?: string }).kind === "literal"
+              ? (body as { value: unknown }).value
+              : body;
           const scalar = coerceUnknownToScalar(lit);
           if (scalar !== undefined) {
             hoisted[key] = scalar;
@@ -2911,7 +3485,15 @@ const preExecuteMutationExprsInDmlValues = (
           delete insVals[key];
         }
       }
-      const resolved = executeDmlChainStatement(db, schema, ins as Statement, env, undefined, context, defaultModule);
+      const resolved = executeDmlChainStatement(
+        db,
+        schema,
+        ins as Statement,
+        env,
+        undefined,
+        context,
+        defaultModule,
+      );
       if (resolved.typeName) typeName = resolved.typeName;
       ids.push(...resolved.ids);
       for (const id of resolved.ids) perTargetLinkProps.push({ id, props: hoisted });
@@ -2947,24 +3529,38 @@ const preExecuteMutationExprsInDmlValues = (
     };
   };
 
-  const qualifiedSubject = ast.kind === "insert" || ast.kind === "update"
-    ? qualifyRuntimeTypeName(ast.typeName, defaultModule)
-    : "";
-  const subjectType = qualifiedSubject ? schema.getType(qualifiedSubject) ?? schema.getType((ast as { typeName?: string }).typeName ?? "") : undefined;
+  const qualifiedSubject =
+    ast.kind === "insert" || ast.kind === "update"
+      ? qualifyRuntimeTypeName(ast.typeName, defaultModule)
+      : "";
+  const subjectType = qualifiedSubject
+    ? (schema.getType(qualifiedSubject) ??
+      schema.getType((ast as { typeName?: string }).typeName ?? ""))
+    : undefined;
   const linkNames = new Set((subjectType?.links ?? []).map((link) => link.name));
 
   const rewriteValue = (field: string, value: unknown): unknown => {
     const forReplaced = runForInsertValue(value);
     if (forReplaced !== undefined) return forReplaced;
-    if (value !== null && typeof value === "object" && (value as { kind?: string }).kind === "expr") {
-      let inner = (value as { expr?: unknown }).expr as (Record<string, unknown> & { kind?: string }) | undefined;
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      (value as { kind?: string }).kind === "expr"
+    ) {
+      let inner = (value as { expr?: unknown }).expr as
+        | (Record<string, unknown> & { kind?: string })
+        | undefined;
       let innerBindings: WithBinding[] = [];
       if (inner?.kind === "select_expr_subquery") {
-        innerBindings = (inner.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings ?? [];
+        innerBindings =
+          (inner.clauses as { _withBindings?: WithBinding[] } | undefined)?._withBindings ?? [];
         inner = inner.expr as Record<string, unknown> & { kind?: string };
       }
       if (inner?.kind === "mutation_expr" && inner.statement) {
-        const innerStmt = inner.statement as Statement & { with?: WithBinding[]; values?: Record<string, unknown> };
+        const innerStmt = inner.statement as Statement & {
+          with?: WithBinding[];
+          values?: Record<string, unknown>;
+        };
         if (innerStmt.kind === "delete" && linkNames.has(field)) {
           const resolved = resolveDeleteWithoutDeleting(innerStmt, innerBindings);
           if (resolved.ids.length > 0) {
@@ -2981,8 +3577,11 @@ const preExecuteMutationExprsInDmlValues = (
         // the inner INSERT compiles against only the target type's own fields;
         // re-attach them as a shape projection over the by-id select so the
         // link-assignment path applies them as link properties.
-        const linkPropElements = innerStmt.kind === "insert" ? extractLinkPropShapeElements(innerStmt) : undefined;
-        const replaced = runNested(innerStmt, innerBindings) as { expr: Record<string, unknown> & { shape?: ShapeElement[] } };
+        const linkPropElements =
+          innerStmt.kind === "insert" ? extractLinkPropShapeElements(innerStmt) : undefined;
+        const replaced = runNested(innerStmt, innerBindings) as {
+          expr: Record<string, unknown> & { shape?: ShapeElement[] };
+        };
         if (linkPropElements) {
           const sel = replaced.expr;
           replaced.expr = { ...sel, shape: [...(sel.shape ?? []), ...linkPropElements] };
@@ -3018,7 +3617,10 @@ const exprTreeContainsInlineMutation = (node: unknown): boolean => {
   return Object.values(node as Record<string, unknown>).some(exprTreeContainsInlineMutation);
 };
 
-const validateNoMutationInShapeComputeds = (node: unknown, inTopLevelExposedFreeObject: boolean): void => {
+const validateNoMutationInShapeComputeds = (
+  node: unknown,
+  inTopLevelExposedFreeObject: boolean,
+): void => {
   if (Array.isArray(node)) {
     for (const item of node) validateNoMutationInShapeComputeds(item, false);
     return;
@@ -3035,7 +3637,8 @@ const validateNoMutationInShapeComputeds = (node: unknown, inTopLevelExposedFree
         throw new AppError(
           "E_SEMANTIC",
           "mutations are invalid in a shape's computed expression",
-          1, 1,
+          1,
+          1,
         );
       }
     }
@@ -3052,7 +3655,8 @@ const validateNoMutationInShapeComputeds = (node: unknown, inTopLevelExposedFree
           throw new AppError(
             "E_SEMANTIC",
             "mutations are invalid in a shape's computed expression",
-            1, 1,
+            1,
+            1,
           );
         }
       }
@@ -3091,11 +3695,19 @@ const preExecuteDmlBindings = (
   ast: Statement,
   context: SecurityContext,
 ): Statement => {
-  if (ast.kind !== "select" && ast.kind !== "select_expr" && ast.kind !== "select_free" && ast.kind !== "for") return ast;
+  if (
+    ast.kind !== "select" &&
+    ast.kind !== "select_expr" &&
+    ast.kind !== "select_free" &&
+    ast.kind !== "for"
+  )
+    return ast;
   const withBindings = (ast as { with?: WithBinding[] }).with ?? [];
-  const entries = ast.kind === "select_free"
-    ? ((ast as unknown as { entries?: Array<{ name: string; expr: FreeObjectExpr }> }).entries ?? [])
-    : [];
+  const entries =
+    ast.kind === "select_free"
+      ? ((ast as unknown as { entries?: Array<{ name: string; expr: FreeObjectExpr }> }).entries ??
+        [])
+      : [];
   const entryHasMutation = (expr: FreeObjectExpr): boolean =>
     bindingValueContainsMutation({ kind: "subquery_expr", expr } as WithBindingValue);
   const hasDmlBinding = withBindings.some((binding) => bindingValueContainsMutation(binding.value));
@@ -3107,10 +3719,14 @@ const preExecuteDmlBindings = (
   // query (via WITH bindings or free-object entries), a value freed by one and
   // re-used by a sibling is a conflict (cross_type_conflict_07a/07b/08a/12,
   // and_delete_01). Snapshot the exclusive values before any of them run.
-  const dmlBindingCount = withBindings.filter((b) => bindingValueContainsMutation(b.value)).length
-    + entries.filter((e) => entryHasMutation(e.expr)).length;
-  const chainTypeNames = dmlBindingCount >= 2 ? collectChainTypeNames(ast, defaultModule) : undefined;
-  const exclusiveSnapshot = chainTypeNames ? captureExclusiveSnapshot(db, schema, chainTypeNames) : undefined;
+  const dmlBindingCount =
+    withBindings.filter((b) => bindingValueContainsMutation(b.value)).length +
+    entries.filter((e) => entryHasMutation(e.expr)).length;
+  const chainTypeNames =
+    dmlBindingCount >= 2 ? collectChainTypeNames(ast, defaultModule) : undefined;
+  const exclusiveSnapshot = chainTypeNames
+    ? captureExclusiveSnapshot(db, schema, chainTypeNames)
+    : undefined;
   const env: DmlChainEnv = new Map();
   const newWith: WithBinding[] = [];
   const passthrough: WithBinding[] = [];
@@ -3123,14 +3739,23 @@ const preExecuteDmlBindings = (
     // DML nested inside a tuple element keeps the surrounding tuple/set shape:
     // substitute each mutation leaf with a by-id SELECT and re-bind the value
     // as a plain subquery so the rest lowers to SQL.
-    if (binding.value.kind === "subquery_expr"
-        && mutationNestedInTuple((binding.value as { expr?: unknown }).expr)) {
+    if (
+      binding.value.kind === "subquery_expr" &&
+      mutationNestedInTuple((binding.value as { expr?: unknown }).expr)
+    ) {
       const newExpr = substituteMutationLeaves(
-        db, schema,
+        db,
+        schema,
         (binding.value as { expr: unknown }).expr,
-        env, context, defaultModule, passthrough,
+        env,
+        context,
+        defaultModule,
+        passthrough,
       );
-      newWith.push({ name: binding.name, value: { kind: "subquery_expr", expr: newExpr } } as WithBinding);
+      newWith.push({
+        name: binding.name,
+        value: { kind: "subquery_expr", expr: newExpr },
+      } as WithBinding);
       passthrough.push(binding);
       continue;
     }
@@ -3149,18 +3774,32 @@ const preExecuteDmlBindings = (
     // by-id SELECT (it would emit an unnamed table). Bind it to an empty set so
     // the outer `t.a` / `t` projects nothing.
     if (resolved.typeName === "" && resolved.ids.length === 0) {
-      newWith.push({ name: binding.name, value: { kind: "subquery_expr", expr: { kind: "set_literal", values: [] } } } as unknown as WithBinding);
+      newWith.push({
+        name: binding.name,
+        value: { kind: "subquery_expr", expr: { kind: "set_literal", values: [] } },
+      } as unknown as WithBinding);
       continue;
     }
-    const select = chainByIdSelect(resolved) as { typeName: string; shape: ShapeElement[]; clauses: unknown };
+    const select = chainByIdSelect(resolved) as {
+      typeName: string;
+      shape: ShapeElement[];
+      clauses: unknown;
+    };
     // A FOR statement iterating over this binding needs the value to keep its
     // object typing (so the loop variable binds as an object, not a bare id).
     // The `subquery_expr → select_expr_subquery → select` form preserves it,
     // mirroring a plain `noobs := (select T)` binding; other statements keep
     // the lighter `{kind:"subquery"}` form they already rely on.
-    const bindingValue = ast.kind === "for"
-      ? { kind: "subquery_expr", expr: { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) } }
-      : { kind: "subquery", query: { typeName: select.typeName, shape: select.shape, clauses: select.clauses } };
+    const bindingValue =
+      ast.kind === "for"
+        ? {
+            kind: "subquery_expr",
+            expr: { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) },
+          }
+        : {
+            kind: "subquery",
+            query: { typeName: select.typeName, shape: select.shape, clauses: select.clauses },
+          };
     newWith.push({ name: binding.name, value: bindingValue } as WithBinding);
   }
 
@@ -3169,19 +3808,27 @@ const preExecuteDmlBindings = (
       // `obj := (INSERT T {…}) { name, l2 }` — a shape over the mutation.
       // Resolve the mutation, then re-project the inserted rows through the
       // requested shape (instead of an id-only select).
-      const projShape = (expr as { kind?: string; shape?: ShapeElement[] }).kind === "shape_projection"
-        ? (expr as { shape?: ShapeElement[] }).shape
-        : undefined;
+      const projShape =
+        (expr as { kind?: string; shape?: ShapeElement[] }).kind === "shape_projection"
+          ? (expr as { shape?: ShapeElement[] }).shape
+          : undefined;
       const resolved = resolveObjectSet(
         db,
         schema,
-        attachWithToNestedMutations({ kind: "subquery_expr", expr } as WithBindingValue, passthrough),
+        attachWithToNestedMutations(
+          { kind: "subquery_expr", expr } as WithBindingValue,
+          passthrough,
+        ),
         env,
         undefined,
         context,
         defaultModule,
       );
-      const byId = chainByIdSelect(resolved) as { typeName: string; shape: ShapeElement[]; clauses: unknown };
+      const byId = chainByIdSelect(resolved) as {
+        typeName: string;
+        shape: ShapeElement[];
+        clauses: unknown;
+      };
       if (projShape && projShape.length > 0) {
         byId.shape = projShape;
       }
@@ -3215,14 +3862,19 @@ const preExecuteDmlBindings = (
       // table so the SELECT body can compare against the concrete inserted
       // value. EdgeQL materializes the WITH binding, so the singleton's value
       // is fixed for the whole statement — emitting a literal is faithful.
-      const boundFieldScalar = (root: unknown, field: string): { ok: boolean; value: ScalarValue | null } | undefined => {
+      const boundFieldScalar = (
+        root: unknown,
+        field: string,
+      ): { ok: boolean; value: ScalarValue | null } | undefined => {
         if (typeof root !== "string") return undefined;
         const bound = env.get(root);
         if (!bound || bound.typeName === "" || bound.ids.length !== 1) return undefined;
         try {
-          const rows = db.prepare(
-            `SELECT ${quoteIdent(field)} AS v FROM ${quoteIdent(tableNameForType(bound.typeName))} WHERE ${quoteIdent("id")} = ?`,
-          ).all(bound.ids[0]) as Array<{ v?: unknown }>;
+          const rows = db
+            .prepare(
+              `SELECT ${quoteIdent(field)} AS v FROM ${quoteIdent(tableNameForType(bound.typeName))} WHERE ${quoteIdent("id")} = ?`,
+            )
+            .all(bound.ids[0]) as Array<{ v?: unknown }>;
           if (rows.length !== 1) return undefined;
           const v = rows[0].v;
           if (v === null || v === undefined) return { ok: true, value: null };
@@ -3234,15 +3886,26 @@ const preExecuteDmlBindings = (
       // Resolve a node that references a DML-bound singleton's scalar field
       // (`field_ref{root,field}` or `path` head). Returns the captured scalar
       // (or null) when it resolves, otherwise undefined.
-      const resolveBoundRef = (nn: Record<string, unknown> & { kind?: string }): { value: ScalarValue | null } | undefined => {
-        if (nn.kind === "field_ref" && typeof nn.field === "string" && dmlBoundNames.has(nn.root as string)) {
+      const resolveBoundRef = (
+        nn: Record<string, unknown> & { kind?: string },
+      ): { value: ScalarValue | null } | undefined => {
+        if (
+          nn.kind === "field_ref" &&
+          typeof nn.field === "string" &&
+          dmlBoundNames.has(nn.root as string)
+        ) {
           const r = boundFieldScalar(nn.root, nn.field as string);
           if (r) return { value: r.value };
         }
         if (nn.kind === "path" && dmlBoundNames.has(nn.head as string)) {
           const steps = (nn.steps as Array<{ kind?: string; name?: string }> | undefined) ?? [];
           const ptrSteps = steps.filter((s) => s.kind === "ptr" && typeof s.name === "string");
-          const field = ptrSteps.length === 1 ? ptrSteps[0].name : (typeof nn.tail === "string" ? nn.tail : undefined);
+          const field =
+            ptrSteps.length === 1
+              ? ptrSteps[0].name
+              : typeof nn.tail === "string"
+                ? nn.tail
+                : undefined;
           if (field) {
             const r = boundFieldScalar(nn.head, field as string);
             if (r) return { value: r.value };
@@ -3266,7 +3929,7 @@ const preExecuteDmlBindings = (
         if (nn.kind === "predicate" || nn.kind === "in_predicate") {
           const out: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(nn)) {
-            out[k] = (k === "value" || k === "values") ? rewriteBody(v, false) : rewriteBody(v, true);
+            out[k] = k === "value" || k === "values" ? rewriteBody(v, false) : rewriteBody(v, true);
           }
           return out;
         }
@@ -3307,7 +3970,11 @@ const preExecuteDmlBindings = (
         if (exclusiveSnapshot && chainTypeNames) {
           validateExclusiveSnapshot(db, schema, chainTypeNames, exclusiveSnapshot, ast.pos);
         }
-        return { ...ast, ...rewrittenFields, with: newWith.length > 0 ? newWith : undefined } as Statement;
+        return {
+          ...ast,
+          ...rewrittenFields,
+          with: newWith.length > 0 ? newWith : undefined,
+        } as Statement;
       }
     }
   }
@@ -3325,10 +3992,18 @@ const preExecuteDmlBindings = (
   if (ast.kind === "for") {
     const body = (ast as ForStatement).body as { with?: WithBinding[] } | undefined;
     const bodyWith = body?.with;
-    if (bodyWith && bodyWith.some((b) => withBindings.some((o) => o.name === b.name && bindingValueContainsMutation(o.value)))) {
+    if (
+      bodyWith &&
+      bodyWith.some((b) =>
+        withBindings.some((o) => o.name === b.name && bindingValueContainsMutation(o.value)),
+      )
+    ) {
       const rewrittenByName = new Map(newWith.map((b) => [b.name, b]));
       const newBodyWith = bodyWith.map((b) => rewrittenByName.get(b.name) ?? b);
-      (out as ForStatement).body = { ...(body as object), with: newBodyWith } as ForStatement["body"];
+      (out as ForStatement).body = {
+        ...(body as object),
+        with: newBodyWith,
+      } as ForStatement["body"];
     }
   }
   if (exclusiveSnapshot && chainTypeNames) {
@@ -3355,8 +4030,10 @@ const preExecuteMutationExprsInSelectExpr = (
   // `(DML){shape}` and bare `(DML)` are handled by executeSelectOverMutation /
   // the WITH-DML chain — leave those for the dedicated paths.
   const exprKind = (expr as { kind?: string }).kind;
-  if (exprKind === "shape_projection"
-      && (expr as { expr?: { kind?: string } }).expr?.kind === "mutation_expr") {
+  if (
+    exprKind === "shape_projection" &&
+    (expr as { expr?: { kind?: string } }).expr?.kind === "mutation_expr"
+  ) {
     return ast;
   }
   if (exprKind === "mutation_expr") return ast;
@@ -3384,20 +4061,30 @@ const preExecuteMutationExprsInSelectExpr = (
   // any DML it carries) runs only when the left side is empty. The object-set
   // coalesce path below would mis-handle the `.a` projection / scalar literal,
   // so detect the scalar shape here and honor the short-circuit explicitly.
-  if (coalesceNode && typeof coalesceNode === "object"
-      && (coalesceNode as { kind?: string }).kind === "coalesce"
-      && containsMutationExpr(coalesceNode)
-      && exprKind !== "shape_projection") {
+  if (
+    coalesceNode &&
+    typeof coalesceNode === "object" &&
+    (coalesceNode as { kind?: string }).kind === "coalesce" &&
+    containsMutationExpr(coalesceNode) &&
+    exprKind !== "shape_projection"
+  ) {
     const cn = coalesceNode as { left?: unknown; right?: unknown };
     const peelCo = (node: unknown): unknown => {
       const x = node as { kind?: string; expr?: unknown } | undefined;
-      if (x && (x.kind === "expr" || x.kind === "subquery_expr" || x.kind === "distinct")) return peelCo(x.expr);
+      if (x && (x.kind === "expr" || x.kind === "subquery_expr" || x.kind === "distinct"))
+        return peelCo(x.expr);
       return node;
     };
     const isScalarShape = (node: unknown): boolean => {
       const x = peelCo(node) as { kind?: string } | undefined;
-      return !!x && (x.kind === "field_access" || x.kind === "literal" || x.kind === "op"
-        || x.kind === "binary_op" || x.kind === "unary_op");
+      return (
+        !!x &&
+        (x.kind === "field_access" ||
+          x.kind === "literal" ||
+          x.kind === "op" ||
+          x.kind === "binary_op" ||
+          x.kind === "unary_op")
+      );
     };
     if (isScalarShape(cn.left) || isScalarShape(cn.right)) {
       const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
@@ -3407,14 +4094,28 @@ const preExecuteMutationExprsInSelectExpr = (
         // walk; the result is non-empty (the insert yields a value), so it wins
         // and the right side never runs.
         const leftExpr = walk(cn.left);
-        const leftRows = evaluateConditionRowsViaSQL(db, schema, leftExpr as FreeObjectExpr, passthrough, context, pos);
+        const leftRows = evaluateConditionRowsViaSQL(
+          db,
+          schema,
+          leftExpr as FreeObjectExpr,
+          passthrough,
+          context,
+          pos,
+        );
         if (leftRows.length > 0) return { ...ast, expr: leftExpr } as Statement;
         // Left turned out empty: now the right side (with its DML) runs.
         return { ...ast, expr: walk(cn.right) } as Statement;
       }
       // Only the right side carries DML. Evaluate the (DML-free) left's
       // cardinality; if non-empty the right never runs (its DML is skipped).
-      const leftRows = evaluateConditionRowsViaSQL(db, schema, cn.left as FreeObjectExpr, passthrough, context, pos);
+      const leftRows = evaluateConditionRowsViaSQL(
+        db,
+        schema,
+        cn.left as FreeObjectExpr,
+        passthrough,
+        context,
+        pos,
+      );
       if (leftRows.length > 0) return { ...ast, expr: cn.left } as Statement;
       return { ...ast, expr: walk(cn.right) } as Statement;
     }
@@ -3425,10 +4126,13 @@ const preExecuteMutationExprsInSelectExpr = (
   // the left tuple (nothing on the right runs). Otherwise run the right tuple
   // (executing its mutation). Each object element becomes a by-id select and
   // each scalar element keeps its literal, so the tuple lowers to plain SQL.
-  if (coalesceNode && typeof coalesceNode === "object"
-      && (coalesceNode as { kind?: string }).kind === "coalesce"
-      && containsMutationExpr(coalesceNode)
-      && exprKind !== "shape_projection") {
+  if (
+    coalesceNode &&
+    typeof coalesceNode === "object" &&
+    (coalesceNode as { kind?: string }).kind === "coalesce" &&
+    containsMutationExpr(coalesceNode) &&
+    exprKind !== "shape_projection"
+  ) {
     const cn = coalesceNode as { left?: unknown; right?: unknown };
     const asTuple = (node: unknown): unknown[] | undefined => {
       const t = node as { kind?: string; values?: unknown[] } | undefined;
@@ -3445,22 +4149,40 @@ const preExecuteMutationExprsInSelectExpr = (
       };
       const isObjectElement = (node: unknown): boolean => {
         const n = peel(node) as { kind?: string } | undefined;
-        return n?.kind === "select_expr_subquery" || n?.kind === "select"
-          || n?.kind === "mutation_expr" || n?.kind === "binding_ref";
+        return (
+          n?.kind === "select_expr_subquery" ||
+          n?.kind === "select" ||
+          n?.kind === "mutation_expr" ||
+          n?.kind === "binding_ref"
+        );
       };
       // Resolve the left tuple's object element to decide the branch.
       const leftObjIdx = leftTuple.findIndex(isObjectElement);
       if (leftObjIdx >= 0) {
         const leftObj = resolveObjectSet(
-          db, schema, attachWithToNestedMutations(peel(leftTuple[leftObjIdx]), passthrough),
-          env, undefined, context, defaultModule,
+          db,
+          schema,
+          attachWithToNestedMutations(peel(leftTuple[leftObjIdx]), passthrough),
+          env,
+          undefined,
+          context,
+          defaultModule,
         );
         const chosen = leftObj.ids.length > 0 ? leftTuple : rightTuple;
         const resultElements = chosen.map((el) => {
           if (isObjectElement(el)) {
-            const resolved = (chosen === leftTuple && chosen.indexOf(el) === leftObjIdx)
-              ? leftObj
-              : resolveObjectSet(db, schema, attachWithToNestedMutations(peel(el), passthrough), env, undefined, context, defaultModule);
+            const resolved =
+              chosen === leftTuple && chosen.indexOf(el) === leftObjIdx
+                ? leftObj
+                : resolveObjectSet(
+                    db,
+                    schema,
+                    attachWithToNestedMutations(peel(el), passthrough),
+                    env,
+                    undefined,
+                    context,
+                    defaultModule,
+                  );
             return { kind: "select_expr_subquery", expr: chainByIdSelect(resolved) };
           }
           return peel(el);
@@ -3469,11 +4191,14 @@ const preExecuteMutationExprsInSelectExpr = (
       }
     }
   }
-  if (coalesceNode && typeof coalesceNode === "object"
-      && (coalesceNode as { kind?: string }).kind === "coalesce"
-      && containsMutationExpr(coalesceNode)
-      && exprKind !== "shape_projection"
-      && coalesceIsScalar(coalesceNode)) {
+  if (
+    coalesceNode &&
+    typeof coalesceNode === "object" &&
+    (coalesceNode as { kind?: string }).kind === "coalesce" &&
+    containsMutationExpr(coalesceNode) &&
+    exprKind !== "shape_projection" &&
+    coalesceIsScalar(coalesceNode)
+  ) {
     const cn = coalesceNode as { left?: unknown; right?: unknown };
     const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
     // Scalar `??` whose operand is `(DELETE …).a` (a scalar set, not an object
@@ -3484,16 +4209,24 @@ const preExecuteMutationExprsInSelectExpr = (
     // the right's DML from running when the left is non-empty.
     const leftExpr = containsMutationExpr(cn.left) ? walk(cn.left) : cn.left;
     const leftRows = evaluateConditionRowsViaSQL(
-      db, schema, { ...ast, expr: leftExpr } as unknown as FreeObjectExpr, passthrough, context, pos,
+      db,
+      schema,
+      { ...ast, expr: leftExpr } as unknown as FreeObjectExpr,
+      passthrough,
+      context,
+      pos,
     );
     if (leftRows.length > 0) {
       return { ...ast, expr: { kind: "set_literal", values: leftRows } } as Statement;
     }
     return { ...ast, expr: walk(cn.right) } as Statement;
   }
-  if (coalesceNode && typeof coalesceNode === "object"
-      && (coalesceNode as { kind?: string }).kind === "coalesce"
-      && containsMutationExpr(coalesceNode)) {
+  if (
+    coalesceNode &&
+    typeof coalesceNode === "object" &&
+    (coalesceNode as { kind?: string }).kind === "coalesce" &&
+    containsMutationExpr(coalesceNode)
+  ) {
     const resolved = resolveObjectSet(
       db,
       schema,
@@ -3529,20 +4262,36 @@ const preExecuteMutationExprsInSelectExpr = (
       if (forBody && !exprIsObjectValued(forBody)) {
         const iterator = (n as { iterator?: { kind?: string; values?: unknown[] } }).iterator;
         const variable = (n as { variable?: string }).variable;
-        const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
+        const pos = (ast as { pos?: { line: number; column: number } }).pos ?? {
+          line: 0,
+          column: 0,
+        };
         let iterValues: unknown[];
         if (iterator?.kind === "set_literal") {
           iterValues = iterator.values ?? [];
         } else {
-          iterValues = evaluateConditionRowsViaSQL(db, schema, iterator as FreeObjectExpr, passthrough, context, pos);
+          iterValues = evaluateConditionRowsViaSQL(
+            db,
+            schema,
+            iterator as FreeObjectExpr,
+            passthrough,
+            context,
+            pos,
+          );
         }
         const allRows: unknown[] = [];
         for (const iterValue of iterValues) {
-          const boundBody = variable && (iterValue === null || isScalarValue(iterValue))
-            ? bindLoopVarInForBody(forBody, variable, iterValue as ScalarValue)
-            : forBody;
+          const boundBody =
+            variable && (iterValue === null || isScalarValue(iterValue))
+              ? bindLoopVarInForBody(forBody, variable, iterValue as ScalarValue)
+              : forBody;
           const rows = evaluateConditionRowsViaSQL(
-            db, schema, { ...ast, expr: walk(boundBody) } as unknown as FreeObjectExpr, passthrough, context, pos,
+            db,
+            schema,
+            { ...ast, expr: walk(boundBody) } as unknown as FreeObjectExpr,
+            passthrough,
+            context,
+            pos,
           );
           allRows.push(...rows);
           // A FOR loop sees each prior iteration's deletes: flush the deferred
@@ -3588,7 +4337,14 @@ const preExecuteMutationExprsInSelectExpr = (
     // element. An empty condition set yields no rows.
     if (n.kind === "if_else" && containsMutationExpr(n)) {
       const pos = (ast as { pos?: { line: number; column: number } }).pos ?? { line: 0, column: 0 };
-      const condRows = evaluateConditionRowsViaSQL(db, schema, n.condition as FreeObjectExpr, passthrough, context, pos);
+      const condRows = evaluateConditionRowsViaSQL(
+        db,
+        schema,
+        n.condition as FreeObjectExpr,
+        passthrough,
+        context,
+        pos,
+      );
       // Scalar-result conditional (`if <cond> then (DELETE/INSERT …).a else 99`):
       // the branches yield scalars, not object sets, so resolveObjectSet can't
       // collapse them. Walk only the taken branch per condition element (the
@@ -3629,7 +4385,13 @@ const preExecuteMutationExprsInSelectExpr = (
       // The two branches may produce different (related) types — e.g.
       // `then InsertTest else DerivedTest`. The result set's type is their
       // common ancestor, so the by-id read sees every inserted object.
-      return { kind: "select_expr_subquery", expr: chainByIdSelect({ typeName: commonAncestorType(schema, branchTypes), ids: branchIds }) };
+      return {
+        kind: "select_expr_subquery",
+        expr: chainByIdSelect({
+          typeName: commonAncestorType(schema, branchTypes),
+          ids: branchIds,
+        }),
+      };
     }
     if (n.kind === "mutation_expr" && n.statement) {
       const mutationKind = (n.statement as { kind?: string }).kind;
@@ -3700,7 +4462,10 @@ const preExecuteMutationExprsInSelectExpr = (
 // delete projections away from the object-set resolver when they are scalar.
 const exprIsObjectValued = (node: unknown): boolean => {
   let cur = node as { kind?: string; expr?: unknown } | undefined;
-  while (cur && (cur.kind === "expr" || cur.kind === "distinct" || cur.kind === "shape_projection")) {
+  while (
+    cur &&
+    (cur.kind === "expr" || cur.kind === "distinct" || cur.kind === "shape_projection")
+  ) {
     cur = cur.expr as { kind?: string; expr?: unknown } | undefined;
   }
   const k = cur?.kind;
@@ -3713,8 +4478,13 @@ const exprIsObjectValued = (node: unknown): boolean => {
     const cn = cur as { left?: unknown; right?: unknown };
     return exprIsObjectValued(cn.left) || exprIsObjectValued(cn.right);
   }
-  return k === "mutation_expr" || k === "subquery_statement"
-    || k === "binding_ref" || k === "select" || k === "select_expr_subquery";
+  return (
+    k === "mutation_expr" ||
+    k === "subquery_statement" ||
+    k === "binding_ref" ||
+    k === "select" ||
+    k === "select_expr_subquery"
+  );
 };
 
 // A `??` is scalar-valued when neither operand resolves to an object set.
@@ -3786,13 +4556,16 @@ const executeSelectOverMutation = (
   // The outer SELECT's WITH bindings are in scope for the mutation's values —
   // merge them on (the mutation's own bindings shadow same-named outer ones).
   const outerWith = (ast as { with?: WithBinding[] }).with ?? [];
-  const mutation = outerWith.length > 0
-    ? ({
-        ...parts.mutation,
-        with: [...outerWith, ...((parts.mutation as { with?: WithBinding[] }).with ?? [])],
-        withModule: (parts.mutation as { withModule?: string }).withModule ?? (ast as { withModule?: string }).withModule,
-      } as typeof parts.mutation)
-    : parts.mutation;
+  const mutation =
+    outerWith.length > 0
+      ? ({
+          ...parts.mutation,
+          with: [...outerWith, ...((parts.mutation as { with?: WithBinding[] }).with ?? [])],
+          withModule:
+            (parts.mutation as { withModule?: string }).withModule ??
+            (ast as { withModule?: string }).withModule,
+        } as typeof parts.mutation)
+      : parts.mutation;
   const typeName = mutation.typeName;
   const idShapeElement: ShapeElement = {
     kind: "field",
@@ -3801,7 +4574,11 @@ const executeSelectOverMutation = (
     origin: "explicit",
   } as unknown as ShapeElement;
 
-  const runShapedSelect = (filter: FilterExpr | undefined, selectShape: ShapeElement[], order?: OrderExprChain): { rows: unknown[]; sql: SQLArtifact } => {
+  const runShapedSelect = (
+    filter: FilterExpr | undefined,
+    selectShape: ShapeElement[],
+    order?: OrderExprChain,
+  ): { rows: unknown[]; sql: SQLArtifact } => {
     const selectAst: SelectStatement = {
       kind: "select",
       typeName,
@@ -3811,7 +4588,11 @@ const executeSelectOverMutation = (
       orderBy: order as SelectStatement["orderBy"],
       pos: ast.pos,
     };
-    const compiled = compilerService.compile(schema, selectAst, { globals: context.globals, params: context.params, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, selectAst, {
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+    });
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return { rows, sql: compiled.sql };
   };
@@ -3842,8 +4623,10 @@ const executeSelectOverMutation = (
     if (reorder && out.rows.length > 1) {
       const rank = new Map(ids.map((id, i) => [id, i] as const));
       out.rows = [...out.rows].sort((a, b) => {
-        const ra = rank.get((a as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
-        const rb = rank.get((b as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
+        const ra =
+          rank.get((a as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
+        const rb =
+          rank.get((b as Record<string, unknown>)?.id as string) ?? Number.MAX_SAFE_INTEGER;
         return ra - rb;
       });
     }
@@ -3907,9 +4690,26 @@ const executeSelectOverMutation = (
       // execute up front — but when the *outer* INSERT will be suppressed by
       // UNLESS CONFLICT, this pass detects the conflict and drops the nested
       // DML so it doesn't run (dependent_15/17/21/23/25).
-      const preparedMutation = preExecuteMutationExprsInDmlValues(db, schema, mutation, context) as typeof mutation;
-      lastCompiled = compilerService.compile(schema, preparedMutation, { globals: context.globals, params: context.params, target: runtimeTarget });
-      const writeResult0 = runWriteWithAccessPolicies(db, schema, preparedMutation, lastCompiled.ir, lastCompiled.sql, subjectType, context);
+      const preparedMutation = preExecuteMutationExprsInDmlValues(
+        db,
+        schema,
+        mutation,
+        context,
+      ) as typeof mutation;
+      lastCompiled = compilerService.compile(schema, preparedMutation, {
+        globals: context.globals,
+        params: context.params,
+        target: runtimeTarget,
+      });
+      const writeResult0 = runWriteWithAccessPolicies(
+        db,
+        schema,
+        preparedMutation,
+        lastCompiled.ir,
+        lastCompiled.sql,
+        subjectType,
+        context,
+      );
       affectedIds = (writeResult0.rows ?? [])
         .map((row) => (row && typeof row === "object" ? (row as { id?: unknown }).id : undefined))
         .filter((id): id is string => typeof id === "string");
@@ -3927,23 +4727,40 @@ const executeSelectOverMutation = (
         target: undefined,
         filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: id },
       } as InsertStatement | UpdateStatement | DeleteStatement;
-      lastCompiled = compilerService.compile(schema, perId, { globals: context.globals, params: context.params, target: runtimeTarget });
-      runWriteWithAccessPolicies(db, schema, perId, lastCompiled.ir, lastCompiled.sql, perIdSubjectType, context);
+      lastCompiled = compilerService.compile(schema, perId, {
+        globals: context.globals,
+        params: context.params,
+        target: runtimeTarget,
+      });
+      runWriteWithAccessPolicies(
+        db,
+        schema,
+        perId,
+        lastCompiled.ir,
+        lastCompiled.sql,
+        perIdSubjectType,
+        context,
+      );
     }
   }
 
   // 3. Re-project the affected rows through the requested shape. DELETE was
   //    captured before the write (`deletedProjection`); INSERT/UPDATE rows
   //    survive and are read back here by id.
-  const projected = mutation.kind === "delete"
-    ? (deletedProjection ?? { rows: [], sql: emptyArtifact })
-    : projectAffected(affectedIds);
+  const projected =
+    mutation.kind === "delete"
+      ? (deletedProjection ?? { rows: [], sql: emptyArtifact })
+      : projectAffected(affectedIds);
 
   return {
     ast,
     ir: lastCompiled?.ir,
     sql: projected.sql,
-    compiler: lastCompiled?.cache ?? { key: "select-over-mutation", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+    compiler: lastCompiled?.cache ?? {
+      key: "select-over-mutation",
+      status: "miss",
+      stats: { hits: 0, misses: 0, size: 0 },
+    },
     sqlTrail: lastCompiled ? [lastCompiled.sql, projected.sql] : [projected.sql],
     overlays: lastCompiled ? extractOverlays(lastCompiled.ir) : [],
     result: { kind: "select", rows: projected.rows },
@@ -4043,7 +4860,11 @@ const trivialUdfBodyExpr = (fn: FunctionDef): FreeObjectExpr | undefined => {
     const mutation = { ...(stmt as object), with: undefined } as Statement;
     const mutExpr = { kind: "mutation_expr", statement: mutation } as unknown as FreeObjectExpr;
     if (withBindings && withBindings.length > 0) {
-      return { kind: "select_expr_subquery", expr: mutExpr, clauses: { _withBindings: withBindings } } as unknown as FreeObjectExpr;
+      return {
+        kind: "select_expr_subquery",
+        expr: mutExpr,
+        clauses: { _withBindings: withBindings },
+      } as unknown as FreeObjectExpr;
     }
     return mutExpr;
   }
@@ -4052,7 +4873,11 @@ const trivialUdfBodyExpr = (fn: FunctionDef): FreeObjectExpr | undefined => {
   if (se.orderBy) return undefined;
   // `WITH … SELECT <expr>` body: carry the bindings onto a subquery envelope.
   if (se.with && se.with.length > 0) {
-    return { kind: "select_expr_subquery", expr: se.expr, clauses: { _withBindings: se.with } } as unknown as FreeObjectExpr;
+    return {
+      kind: "select_expr_subquery",
+      expr: se.expr,
+      clauses: { _withBindings: se.with },
+    } as unknown as FreeObjectExpr;
   }
   return se.expr;
 };
@@ -4108,7 +4933,10 @@ const buildUdfParamSubstitutions = (
         .map((a) => callArgToExpr(a))
         .filter((e): e is FreeObjectExpr => e !== undefined);
       cursor = positional.length;
-      subs.set(param.name, { kind: "array_literal_expr", values: packed } as unknown as FreeObjectExpr);
+      subs.set(param.name, {
+        kind: "array_literal_expr",
+        values: packed,
+      } as unknown as FreeObjectExpr);
       continue;
     }
     let chosen: FreeObjectExpr | undefined;
@@ -4116,7 +4944,9 @@ const buildUdfParamSubstitutions = (
       chosen = callArgToExpr(positional[cursor]);
       cursor += 1;
     } else if (named.has(param.name)) {
-      chosen = callArgToExpr(named.get(param.name)!);
+      const namedArg = named.get(param.name);
+      if (namedArg === undefined) return undefined;
+      chosen = callArgToExpr(namedArg);
     } else if (param.default !== undefined) {
       chosen = { kind: "literal", value: param.default } as unknown as FreeObjectExpr;
     } else if (param.defaultExpr !== undefined) {
@@ -4139,14 +4969,19 @@ const substituteParamRefs = (node: unknown, subs: Map<string, FreeObjectExpr>): 
   if (!node || typeof node !== "object") return node;
   if ((node as { kind?: string }).kind === "binding_ref") {
     const name = (node as { name?: string }).name;
-    if (name !== undefined && subs.has(name)) return cloneAstNode(subs.get(name)!);
+    if (name !== undefined) {
+      const replacement = subs.get(name);
+      if (replacement !== undefined) return cloneAstNode(replacement);
+    }
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node as object)) out[k] = substituteParamRefs(v, subs);
   if (out.kind === "select" && typeof out.typeName === "string" && subs.has(out.typeName)) {
     const clauses = out.clauses as Record<string, unknown> | undefined;
     if (!clauses || Object.keys(clauses).length === 0) {
-      const replacement = cloneAstNode(subs.get(out.typeName)!);
+      const source = subs.get(out.typeName);
+      if (source === undefined) return out;
+      const replacement = cloneAstNode(source);
       const shape = out.shape as unknown[] | undefined;
       return shape && shape.length > 0
         ? { kind: "shape_projection", expr: replacement, shape }
@@ -4163,12 +4998,16 @@ const expandInlineDmlFunctionCalls = (
 ): Statement => {
   let changed = false;
   // Resolve a call to its DML-bodied UDF, returning the (unsubstituted) body.
-  const resolveDmlUdfBody = (call: FunctionCallExpr): { fn: FunctionDef; body: FreeObjectExpr } | undefined => {
+  const resolveDmlUdfBody = (
+    call: FunctionCallExpr,
+  ): { fn: FunctionDef; body: FreeObjectExpr } | undefined => {
     const divider = call.name.lastIndexOf("::");
     const moduleName = divider >= 0 ? call.name.slice(0, divider) : defaultModule;
     const shortName = divider >= 0 ? call.name.slice(divider + 2) : call.name;
     if (moduleName === "std" || moduleName === "math" || moduleName === "cal") return undefined;
-    const positionalCount = call.args.filter((a) => (a as { kind?: string }).kind !== "named_arg").length;
+    const positionalCount = call.args.filter(
+      (a) => (a as { kind?: string }).kind !== "named_arg",
+    ).length;
     const fn = schema.findFunction(moduleName, shortName, positionalCount);
     if (!fn) return undefined;
     const body = trivialUdfBodyExpr(fn);
@@ -4177,18 +5016,31 @@ const expandInlineDmlFunctionCalls = (
   };
   // Does a UDF body *ultimately* perform DML — directly, or transitively
   // through a call to another DML-bodied UDF (`foo` body is `inner(x)`)?
-  const bodyIsDml = (body: FreeObjectExpr, seen: globalThis.Set<string>, depth: number): boolean => {
+  const bodyIsDml = (
+    body: FreeObjectExpr,
+    seen: globalThis.Set<string>,
+    depth: number,
+  ): boolean => {
     if (astNodeContainsMutation(body)) return true;
     if (depth > 64) return false;
     let found = false;
     const walk = (node: unknown): void => {
       if (found || !node || typeof node !== "object") return;
-      if (Array.isArray(node)) { node.forEach(walk); return; }
-      if ((node as { kind?: string }).kind === "function_call" && (node as { call?: FunctionCallExpr }).call) {
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      if (
+        (node as { kind?: string }).kind === "function_call" &&
+        (node as { call?: FunctionCallExpr }).call
+      ) {
         const inner = resolveDmlUdfBody((node as { call: FunctionCallExpr }).call);
         if (inner && !seen.has(inner.fn.name)) {
           seen.add(inner.fn.name);
-          if (bodyIsDml(inner.body, seen, depth + 1)) { found = true; return; }
+          if (bodyIsDml(inner.body, seen, depth + 1)) {
+            found = true;
+            return;
+          }
         }
       }
       for (const v of Object.values(node as object)) walk(v);
@@ -4219,7 +5071,10 @@ const expandInlineDmlFunctionCalls = (
   const expand = (node: unknown, depth: number): unknown => {
     if (Array.isArray(node)) return node.map((n) => expand(n, depth));
     if (!node || typeof node !== "object") return node;
-    if ((node as { kind?: string }).kind === "function_call" && (node as { call?: FunctionCallExpr }).call) {
+    if (
+      (node as { kind?: string }).kind === "function_call" &&
+      (node as { call?: FunctionCallExpr }).call
+    ) {
       const replacement = tryExpandCall((node as { call: FunctionCallExpr }).call, depth);
       if (replacement !== undefined) {
         changed = true;
@@ -4248,7 +5103,10 @@ const expandInlineDmlFunctionCalls = (
 // Parameter substitution produces such nodes; the DML resolver handles raw
 // scalars and complex expressions but not the bare literal node, so unwrap it.
 const unwrapBareLiteral = (v: unknown): unknown =>
-  v && typeof v === "object" && (v as { kind?: string }).kind === "literal" && "value" in (v as object)
+  v &&
+  typeof v === "object" &&
+  (v as { kind?: string }).kind === "literal" &&
+  "value" in (v as object)
     ? (v as { value: unknown }).value
     : v;
 
@@ -4259,8 +5117,11 @@ const normalizeDmlLiteralValues = (node: unknown): void => {
   }
   if (!node || typeof node !== "object") return;
   const kind = (node as { kind?: string }).kind;
-  if ((kind === "insert" || kind === "update") && (node as { values?: unknown }).values
-      && typeof (node as { values: unknown }).values === "object") {
+  if (
+    (kind === "insert" || kind === "update") &&
+    (node as { values?: unknown }).values &&
+    typeof (node as { values: unknown }).values === "object"
+  ) {
     const vals = (node as { values: Record<string, unknown> }).values;
     for (const key of Object.keys(vals)) {
       vals[key] = unwrapBareLiteral(vals[key]);
@@ -4302,7 +5163,11 @@ const executeQueryWithTraceImpl = (
           ast,
           ir: undefined,
           sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
-          compiler: { key: "set-global-noop", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+          compiler: {
+            key: "set-global-noop",
+            status: "miss",
+            stats: { hits: 0, misses: 0, size: 0 },
+          },
           sqlTrail: [],
           overlays: [],
           result: { kind: "insert", changes: 0 },
@@ -4342,9 +5207,8 @@ const executeQueryWithTraceImpl = (
     // them inline) and flush it after the result is built. Only the outermost
     // such statement owns the queue — nested executeQueryWithTrace calls inherit
     // it. Plain `DELETE T` and embedded INSERT/UPDATE are unaffected.
-    ownsDeferredDeletes = deferredChainDeletes === null
-      && astHasMutation
-      && statementEmbedsDeleteInSelect(ast);
+    ownsDeferredDeletes =
+      deferredChainDeletes === null && astHasMutation && statementEmbedsDeleteInSelect(ast);
     if (ownsDeferredDeletes) {
       deferredChainDeletes = [];
     }
@@ -4362,7 +5226,11 @@ const executeQueryWithTraceImpl = (
           ast,
           ir: undefined,
           sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
-          compiler: { key: "const-subscript", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+          compiler: {
+            key: "const-subscript",
+            status: "miss",
+            stats: { hits: 0, misses: 0, size: 0 },
+          },
           sqlTrail: [],
           overlays: [],
           result: { kind: "select", rows: constRows },
@@ -4376,10 +5244,12 @@ const executeQueryWithTraceImpl = (
     // an expression carrying DML (a tuple, shaped select, nested FOR). Run each
     // iteration's embedded DML and concatenate the produced rows. Skipped for
     // GROUP iterators (handled below) and bare-INSERT bodies (FOR-INSERT path).
-    if (ast.kind === "for"
-        && ast.body.kind === "select_expr"
-        && !unwrapGroupIteratorExpr(ast.iteratorExpr)
-        && nodeContainsMutationExpr(ast.body.expr)) {
+    if (
+      ast.kind === "for" &&
+      ast.body.kind === "select_expr" &&
+      !unwrapGroupIteratorExpr(ast.iteratorExpr) &&
+      nodeContainsMutationExpr(ast.body.expr)
+    ) {
       const rows = executeForWithDmlBodyExpr(db, schema, ast, context, []);
       if (rows !== undefined) {
         return {
@@ -4397,8 +5267,16 @@ const executeQueryWithTraceImpl = (
     // per-row body lower fully to SQL, the generic path below runs that
     // artifact. Only bodies the SQL stage can't express route through the
     // runtime FOR-group executor.
-    if (ast.kind === "for" && unwrapGroupIteratorExpr(ast.iteratorExpr) && ast.body.kind === "select_expr") {
-      const probe = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget });
+    if (
+      ast.kind === "for" &&
+      unwrapGroupIteratorExpr(ast.iteratorExpr) &&
+      ast.body.kind === "select_expr"
+    ) {
+      const probe = compilerService.compile(schema, ast, {
+        globals: context.globals,
+        params: context.params,
+        target: runtimeTarget,
+      });
       const sqlIsComplete = lowersToSingleSql(probe.sql);
       if (!sqlIsComplete) {
         const traces: QueryExecutionTrace[] = [];
@@ -4428,19 +5306,43 @@ const executeQueryWithTraceImpl = (
     }
     const selectOverMutation = astHasMutation ? detectSelectOverMutation(ast) : undefined;
     if (selectOverMutation) {
-      return executeSelectOverMutation(db, schema, query, ast, selectOverMutation, context, runtimeTarget, compilerService);
+      return executeSelectOverMutation(
+        db,
+        schema,
+        query,
+        ast,
+        selectOverMutation,
+        context,
+        runtimeTarget,
+        compilerService,
+      );
     }
     if (astHasMutation && isWithDmlChain(ast)) {
       return executeWithDmlChain(db, schema, ast, context);
     }
-    const compiled = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
+    const compiled = compilerService.compile(schema, ast, {
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+      allowUserSpecifiedId: allowUserSpecifiedId(schema),
+    });
     const ir = compiled.ir;
-    const subjectType = ir && (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete")
-      ? typeDefForTable(schema, ir.table)
-      : undefined;
-    if (ir && (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete") && !subjectType) {
+    const subjectType =
+      ir && (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete")
+        ? typeDefForTable(schema, ir.table)
+        : undefined;
+    if (
+      ir &&
+      (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete") &&
+      !subjectType
+    ) {
       const astTypeName = "typeName" in ast ? ast.typeName : "<unknown>";
-      throw new AppError("E_SEMANTIC", `Unknown type '${astTypeName}'`, ast.pos.line, ast.pos.column);
+      throw new AppError(
+        "E_SEMANTIC",
+        `Unknown type '${astTypeName}'`,
+        ast.pos.line,
+        ast.pos.column,
+      );
     }
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -4451,7 +5353,15 @@ const executeQueryWithTraceImpl = (
       if (!subjectType) {
         throw new Error("invariant: write IR reached execution without a resolved subject type");
       }
-      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
+      const writeResult = runWriteWithAccessPolicies(
+        db,
+        schema,
+        ast,
+        ir,
+        sqlArtifact,
+        subjectType,
+        context,
+      );
 
       result = {
         kind: ir.kind,
@@ -4463,7 +5373,10 @@ const executeQueryWithTraceImpl = (
       // gelIR SQL artifact via runGelSelectSQL. select_free and top-level GROUP
       // require a complete single-statement lowering — the legacy runtime
       // grouper has been retired, so an incomplete lowering is unsupported.
-      if (ast.kind === "select_free" && classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject") {
+      if (
+        ast.kind === "select_free" &&
+        classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject"
+      ) {
         throw new AppError(
           "E_UNSUPPORTED",
           "select_free requires SQL lowering; runtime fallback disabled",
@@ -4471,8 +5384,16 @@ const executeQueryWithTraceImpl = (
           ast.pos.column,
         );
       }
-      if (ast.kind === "group" && classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject") {
-        throw new AppError("E_UNSUPPORTED", "GROUP statement could not be lowered to SQL", ast.pos.line, ast.pos.column);
+      if (
+        ast.kind === "group" &&
+        classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject"
+      ) {
+        throw new AppError(
+          "E_UNSUPPORTED",
+          "GROUP statement could not be lowered to SQL",
+          ast.pos.line,
+          ast.pos.column,
+        );
       }
       result = {
         kind: "select",
@@ -4523,8 +5444,10 @@ const statementEmbedsDeleteInSelect = (ast: Statement): boolean => {
     if (Array.isArray(node)) return node.some(containsDeleteMutationExpr);
     if (node === null || typeof node !== "object") return false;
     const n = node as { kind?: string; statement?: { kind?: string } };
-    if ((n.kind === "mutation_expr" || n.kind === "subquery_statement")
-        && n.statement?.kind === "delete") {
+    if (
+      (n.kind === "mutation_expr" || n.kind === "subquery_statement") &&
+      n.statement?.kind === "delete"
+    ) {
       return true;
     }
     return Object.values(node).some(containsDeleteMutationExpr);
@@ -4558,9 +5481,15 @@ const extractTargetTypeExpr = (target: FreeObjectExpr): TypeExpr | undefined => 
     return { kind: "type_name", name: target.name };
   }
   if (target.kind === "select") {
-    const hasOnlyDefaultId = !target.shape
-      || target.shape.length === 0
-      || target.shape.every((el) => el.kind === "field" && el.name === "id" && (el as { origin?: string }).origin === "default");
+    const hasOnlyDefaultId =
+      !target.shape ||
+      target.shape.length === 0 ||
+      target.shape.every(
+        (el) =>
+          el.kind === "field" &&
+          el.name === "id" &&
+          (el as { origin?: string }).origin === "default",
+      );
     if (hasOnlyDefaultId) {
       return { kind: "type_name", name: target.typeName };
     }
@@ -4589,7 +5518,8 @@ const concreteTypeNamesForTypeExprAtRuntime = (
     if (node.kind === "type_name") {
       const qualified = qualify(node.name);
       if (qualified === "default::Object" || qualified === "std::Object") {
-        return schema.listTypes()
+        return schema
+          .listTypes()
           .filter((typeDef) => !typeDef.abstract)
           .map((typeDef) => qualifiedTypeName(typeDef));
       }
@@ -4615,7 +5545,8 @@ const expandPolymorphicMutation = (
     const moduleName = ast.withModule ?? "default";
     const qualified = ast.typeName.includes("::") ? ast.typeName : `${moduleName}::${ast.typeName}`;
     if (qualified === "default::Object" || qualified === "std::Object") {
-      const concretes = schema.listTypes()
+      const concretes = schema
+        .listTypes()
         .filter((typeDef) => !typeDef.abstract)
         .map((typeDef) => qualifiedTypeName(typeDef));
       return concretes.map((typeName) => ({ ...ast, typeName }));
@@ -4639,7 +5570,11 @@ const expandPolymorphicMutation = (
   if (!typeExpr) {
     return undefined;
   }
-  const concretes = concreteTypeNamesForTypeExprAtRuntime(schema, typeExpr, ast.withModule ?? "default");
+  const concretes = concreteTypeNamesForTypeExprAtRuntime(
+    schema,
+    typeExpr,
+    ast.withModule ?? "default",
+  );
   if (concretes.length === 0) {
     return [];
   }
@@ -4660,14 +5595,21 @@ const forExprChainToForStatement = (
     cur = (cur as unknown as { expr: FreeObjectExpr }).expr;
   }
   if ((cur as { kind?: string }).kind !== "for_expr") return undefined;
-  const forExpr = cur as unknown as { variable: string; iterator: FreeObjectExpr; optional?: boolean; body: FreeObjectExpr };
+  const forExpr = cur as unknown as {
+    variable: string;
+    iterator: FreeObjectExpr;
+    optional?: boolean;
+    body: FreeObjectExpr;
+  };
   let bodyExpr: FreeObjectExpr = forExpr.body;
   if ((bodyExpr as { kind?: string }).kind === "select_expr_subquery") {
     bodyExpr = (bodyExpr as unknown as { expr: FreeObjectExpr }).expr;
   }
   let innerBody: ForStatement["body"];
-  if ((bodyExpr as { kind?: string }).kind === "mutation_expr"
-    && (bodyExpr as unknown as { statement: Statement }).statement.kind === "insert") {
+  if (
+    (bodyExpr as { kind?: string }).kind === "mutation_expr" &&
+    (bodyExpr as unknown as { statement: Statement }).statement.kind === "insert"
+  ) {
     innerBody = (bodyExpr as unknown as { statement: InsertStatement }).statement;
   } else {
     const nested = forExprChainToForStatement(bodyExpr, pos);
@@ -4714,13 +5656,19 @@ const expandForInsertStatements = (
   // ONE value shared by every iteration — otherwise each cloned leaf re-inlines
   // `random()` and the per-row values diverge. Evaluate each in the scope of
   // the bindings before it (plus accumulated enclosing-loop literals).
-  const rawForWith = ((forAst as { with?: WithBinding[] }).with ?? [])
-    .filter((binding) => binding.name !== forAst.variable);
+  const rawForWith = ((forAst as { with?: WithBinding[] }).with ?? []).filter(
+    (binding) => binding.name !== forAst.variable,
+  );
   const forStatementWith: WithBinding[] = [];
   for (const binding of rawForWith) {
     if (binding.value.kind === "subquery_expr" && !bindingValueContainsMutation(binding.value)) {
       const evaluated = evaluateScalarBindingViaSQL(
-        db, schema, binding.value.expr, [...accumWith, ...forStatementWith], context, forAst.pos,
+        db,
+        schema,
+        binding.value.expr,
+        [...accumWith, ...forStatementWith],
+        context,
+        forAst.pos,
       );
       if (evaluated !== undefined && evaluated.kind === "literal") {
         forStatementWith.push({ name: binding.name, value: evaluated } as WithBinding);
@@ -4735,11 +5683,15 @@ const expandForInsertStatements = (
   const unwrapArrayUnpackObjectIterator = (
     iter: ForStatement["iteratorExpr"],
   ): ForStatement["iteratorExpr"] | undefined => {
-    const n = iter as { kind?: string; call?: { name?: string; args?: Array<{ kind?: string; expr?: unknown }> } };
+    const n = iter as {
+      kind?: string;
+      call?: { name?: string; args?: Array<{ kind?: string; expr?: unknown }> };
+    };
     if (n.kind !== "function_call") return undefined;
     if ((n.call?.name ?? "").split("::").pop() !== "array_unpack") return undefined;
     const arg = n.call?.args?.[0];
-    const arr = arg?.kind === "expr" ? (arg.expr as { kind?: string; values?: unknown[] }) : undefined;
+    const arr =
+      arg?.kind === "expr" ? (arg.expr as { kind?: string; values?: unknown[] }) : undefined;
     if (arr?.kind !== "array_literal_expr" || arr.values?.length !== 1) return undefined;
     const el = arr.values[0] as { kind?: string };
     if (el?.kind === "select") return el as ForStatement["iteratorExpr"];
@@ -4754,11 +5706,15 @@ const expandForInsertStatements = (
   const unwrapArrayUnpackSingleTupleObjectIterator = (
     iter: ForStatement["iteratorExpr"],
   ): ForStatement["iteratorExpr"] | undefined => {
-    const n = iter as { kind?: string; call?: { name?: string; args?: Array<{ kind?: string; expr?: unknown }> } };
+    const n = iter as {
+      kind?: string;
+      call?: { name?: string; args?: Array<{ kind?: string; expr?: unknown }> };
+    };
     if (n.kind !== "function_call") return undefined;
     if ((n.call?.name ?? "").split("::").pop() !== "array_unpack") return undefined;
     const arg = n.call?.args?.[0];
-    const arr = arg?.kind === "expr" ? (arg.expr as { kind?: string; values?: unknown[] }) : undefined;
+    const arr =
+      arg?.kind === "expr" ? (arg.expr as { kind?: string; values?: unknown[] }) : undefined;
     if (arr?.kind !== "array_literal_expr" || arr.values?.length !== 1) return undefined;
     const tup = arr.values[0] as { kind?: string; values?: unknown[] };
     if (tup?.kind !== "tuple" || tup.values?.length !== 1) return undefined;
@@ -4775,10 +5731,12 @@ const expandForInsertStatements = (
     if (Array.isArray(node)) return node.map((item) => collapseTupleZeroRefs(item, varName));
     if (node === null || typeof node !== "object") return node;
     const n = node as Record<string, unknown> & { kind?: string };
-    if (n.kind === "index_access"
-      && n.index === 0
-      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
-      && (n.expr as { name?: string }).name === varName) {
+    if (
+      n.kind === "index_access" &&
+      n.index === 0 &&
+      (n.expr as { kind?: string; name?: string })?.kind === "binding_ref" &&
+      (n.expr as { name?: string }).name === varName
+    ) {
       return { kind: "binding_ref", name: varName };
     }
     if (n.kind === "path" && n.head === varName && Array.isArray(n.steps)) {
@@ -4821,30 +5779,38 @@ const expandForInsertStatements = (
     return undefined;
   };
 
-  const normalizedObjIterator = forAst.iteratorExpr.kind === "select_expr_subquery"
-      || forAst.iteratorExpr.kind === "select"
-    ? forAst.iteratorExpr
-    : unwrapArrayUnpackObjectIterator(forAst.iteratorExpr)
-      ?? unwrapSingletonSetObjectIterator(forAst.iteratorExpr);
+  const normalizedObjIterator =
+    forAst.iteratorExpr.kind === "select_expr_subquery" || forAst.iteratorExpr.kind === "select"
+      ? forAst.iteratorExpr
+      : (unwrapArrayUnpackObjectIterator(forAst.iteratorExpr) ??
+        unwrapSingletonSetObjectIterator(forAst.iteratorExpr));
   if (normalizedObjIterator) {
     forAst = { ...forAst, iteratorExpr: normalizedObjIterator };
   }
-  if (forAst.iteratorExpr.kind === "select_expr_subquery" || forAst.iteratorExpr.kind === "select") {
+  if (
+    forAst.iteratorExpr.kind === "select_expr_subquery" ||
+    forAst.iteratorExpr.kind === "select"
+  ) {
     const objectRows = evaluateForObjectIteratorRows(
-      forAst.iteratorExpr, referencedFields, schema, db, context,
+      forAst.iteratorExpr,
+      referencedFields,
+      schema,
+      db,
+      context,
     );
     if (objectRows === undefined) return undefined;
     // `FOR optional Q IN (<empty>) …` yields a single null iteration; the body
     // can't read any field off the (absent) Q, so emit one row's worth of
     // inserts with no substitution.
-    const effectiveRows: (Record<string, unknown> | null)[] = objectRows.length === 0 && forAst.optional
-      ? [null]
-      : objectRows;
+    const effectiveRows: (Record<string, unknown> | null)[] =
+      objectRows.length === 0 && forAst.optional ? [null] : objectRows;
     // The iterator's object type — used to bind a by-id object WITH binding for
     // bare loop-variable references (`subject := x`, not just `x.field`).
-    const iterSel = (forAst.iteratorExpr.kind === "select_expr_subquery"
-      ? (forAst.iteratorExpr as { expr?: { typeName?: string } }).expr
-      : forAst.iteratorExpr) as { typeName?: string } | undefined;
+    const iterSel = (
+      forAst.iteratorExpr.kind === "select_expr_subquery"
+        ? (forAst.iteratorExpr as { expr?: { typeName?: string } }).expr
+        : forAst.iteratorExpr
+    ) as { typeName?: string } | undefined;
     const iterTypeName = iterSel?.typeName;
     const out: InsertStatement[] = [];
     for (const row of effectiveRows) {
@@ -4852,16 +5818,30 @@ const expandForInsertStatements = (
       // field_access nodes with literals, and bind the loop variable itself to
       // a by-id object SELECT so bare `var` references (e.g. as a link target)
       // resolve to the iterated object.
-      const substituted = row === null
-        ? body
-        : substituteBindingRefFields(body, forAst.variable, row) as ForStatement["body"];
-      const objBinding: WithBinding[] = row !== null && typeof row.id === "string" && iterTypeName
-        ? [{
-            name: forAst.variable,
-            value: { kind: "subquery_expr", expr: { kind: "select_expr_subquery", expr: chainByIdSelect({ typeName: iterTypeName, ids: [row.id as string] }) } },
-          } as WithBinding]
-        : [];
-      const expanded = expandBodyToInserts(substituted, schema, db, context, [...accumWith, ...forStatementWith, ...objBinding]);
+      const substituted =
+        row === null
+          ? body
+          : (substituteBindingRefFields(body, forAst.variable, row) as ForStatement["body"]);
+      const objBinding: WithBinding[] =
+        row !== null && typeof row.id === "string" && iterTypeName
+          ? [
+              {
+                name: forAst.variable,
+                value: {
+                  kind: "subquery_expr",
+                  expr: {
+                    kind: "select_expr_subquery",
+                    expr: chainByIdSelect({ typeName: iterTypeName, ids: [row.id as string] }),
+                  },
+                },
+              } as WithBinding,
+            ]
+          : [];
+      const expanded = expandBodyToInserts(substituted, schema, db, context, [
+        ...accumWith,
+        ...forStatementWith,
+        ...objBinding,
+      ]);
       if (expanded === undefined) return undefined;
       out.push(...expanded);
     }
@@ -4877,8 +5857,15 @@ const expandForInsertStatements = (
   if (tupleIterRows !== undefined) {
     const out: InsertStatement[] = [];
     for (const tuple of tupleIterRows) {
-      const substituted = substituteTupleIndexRefs(body, forAst.variable, tuple) as ForStatement["body"];
-      const expanded = expandBodyToInserts(substituted, schema, db, context, [...accumWith, ...forStatementWith]);
+      const substituted = substituteTupleIndexRefs(
+        body,
+        forAst.variable,
+        tuple,
+      ) as ForStatement["body"];
+      const expanded = expandBodyToInserts(substituted, schema, db, context, [
+        ...accumWith,
+        ...forStatementWith,
+      ]);
       if (expanded === undefined) return undefined;
       out.push(...expanded);
     }
@@ -4899,26 +5886,28 @@ const expandForInsertStatements = (
     iterValues = sqlValues ?? [];
   } else {
     try {
-      iterValues = forAst.iteratorExpr.kind === "set_literal"
-        ? forAst.iteratorExpr.values
-        : evaluateForIteratorValues(forAst.iteratorExpr, schema, db, context);
+      iterValues =
+        forAst.iteratorExpr.kind === "set_literal"
+          ? forAst.iteratorExpr.values
+          : evaluateForIteratorValues(forAst.iteratorExpr, schema, db, context);
     } catch {
       iterValues = [];
     }
     // Iterators referencing the FOR's own WITH bindings (`WITH raw := …, FOR
     // item IN json_array_unpack(raw)`) can't be materialised by the standalone
     // evaluator — compile a one-off SELECT with those bindings in scope.
-    if (!iterValues.every((v) => v === null || isScalarValue(v))
-      || (iterValues.length === 0 && ((forAst as { with?: WithBinding[] }).with?.length ?? 0) > 0)) {
+    if (
+      !iterValues.every((v) => v === null || isScalarValue(v)) ||
+      (iterValues.length === 0 && ((forAst as { with?: WithBinding[] }).with?.length ?? 0) > 0)
+    ) {
       const sqlValues = evaluateForScalarIteratorViaSql(forAst, schema, db, context);
       if (sqlValues !== undefined) iterValues = sqlValues;
     }
   }
   // Object rows leaking through evaluateForIteratorValues aren't scalar-bindable.
   if (!iterValues.every((v) => v === null || isScalarValue(v))) return undefined;
-  const effectiveValues: (ScalarValue | null)[] = iterValues.length === 0 && forAst.optional
-    ? [null]
-    : (iterValues as (ScalarValue | null)[]);
+  const effectiveValues: (ScalarValue | null)[] =
+    iterValues.length === 0 && forAst.optional ? [null] : (iterValues as (ScalarValue | null)[]);
   const out: InsertStatement[] = [];
   for (const value of effectiveValues) {
     // For a direct INSERT body, substitute any top-level `name := <var>` with
@@ -4930,10 +5919,15 @@ const expandForInsertStatements = (
     const substitutedBody = directlySubstitutable
       ? substituteTopLevelInsertVarRefs(body as InsertStatement, forAst.variable, value)
       : body;
-    const varBinding: WithBinding[] = value !== null && isScalarValue(value)
-      ? [{ name: forAst.variable, value: { kind: "literal", value } }]
-      : [];
-    const expanded = expandBodyToInserts(substitutedBody, schema, db, context, [...accumWith, ...forStatementWith, ...varBinding]);
+    const varBinding: WithBinding[] =
+      value !== null && isScalarValue(value)
+        ? [{ name: forAst.variable, value: { kind: "literal", value } }]
+        : [];
+    const expanded = expandBodyToInserts(substitutedBody, schema, db, context, [
+      ...accumWith,
+      ...forStatementWith,
+      ...varBinding,
+    ]);
     if (expanded === undefined) return undefined;
     out.push(...expanded);
   }
@@ -4950,9 +5944,13 @@ const substituteTopLevelInsertVarRefs = (
 ): InsertStatement => {
   const values: Record<string, InsertValue> = {};
   for (const [key, v] of Object.entries(insert.values)) {
-    if (typeof v === "object" && v !== null && "kind" in v
-      && (v as { kind?: unknown }).kind === "binding_ref"
-      && (v as { name?: unknown }).name === varName) {
+    if (
+      typeof v === "object" &&
+      v !== null &&
+      "kind" in v &&
+      (v as { kind?: unknown }).kind === "binding_ref" &&
+      (v as { name?: unknown }).name === varName
+    ) {
       values[key] = value as unknown as InsertValue;
     } else {
       values[key] = v;
@@ -4982,10 +5980,17 @@ const evaluateForScalarIteratorViaSql = (
     withModule: forAst.withModule,
     pos: forAst.pos,
   } as unknown as Statement;
-  const rows = tryRunSingleSqlRows(db, schema, stmtAst, context, { globals: context.globals, params: context.params });
+  const rows = tryRunSingleSqlRows(db, schema, stmtAst, context, {
+    globals: context.globals,
+    params: context.params,
+  });
   if (!rows) return undefined;
-  const mapped = rows.map((row) => (row !== null && typeof row === "object" ? JSON.stringify(row) : row));
-  return mapped.every((row) => row === null || isScalarValue(row)) ? (mapped as (ScalarValue | null)[]) : undefined;
+  const mapped = rows.map((row) =>
+    row !== null && typeof row === "object" ? JSON.stringify(row) : row,
+  );
+  return mapped.every((row) => row === null || isScalarValue(row))
+    ? (mapped as (ScalarValue | null)[])
+    : undefined;
 };
 
 // Expand a FOR body (an INSERT leaf or a nested FOR) into concrete INSERTs,
@@ -5011,15 +6016,24 @@ const expandBodyToInserts = (
 };
 
 // Field names referenced as `<var>.<field>` anywhere in a FOR body.
-const collectBindingRefFields = (node: unknown, varName: string, acc = new globalThis.Set<string>()): string[] => {
+const collectBindingRefFields = (
+  node: unknown,
+  varName: string,
+  acc = new globalThis.Set<string>(),
+): string[] => {
   const walk = (cur: unknown): void => {
-    if (Array.isArray(cur)) { cur.forEach(walk); return; }
+    if (Array.isArray(cur)) {
+      cur.forEach(walk);
+      return;
+    }
     if (cur === null || typeof cur !== "object") return;
     const n = cur as Record<string, unknown> & { kind?: string };
-    if (n.kind === "field_access"
-      && typeof n.field === "string"
-      && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
-      && (n.expr as { name?: string }).name === varName) {
+    if (
+      n.kind === "field_access" &&
+      typeof n.field === "string" &&
+      (n.expr as { kind?: string; name?: string })?.kind === "binding_ref" &&
+      (n.expr as { name?: string }).name === varName
+    ) {
       acc.add(n.field);
     }
     // `t.name` references off an object loop variable also parse as a `path`
@@ -5035,14 +6049,21 @@ const collectBindingRefFields = (node: unknown, varName: string, acc = new globa
 
 // Replace every `<var>.<field>` field-access in a node with a literal of the
 // corresponding value from `row`.
-const substituteBindingRefFields = (node: unknown, varName: string, row: Record<string, unknown>): unknown => {
-  if (Array.isArray(node)) return node.map((item) => substituteBindingRefFields(item, varName, row));
+const substituteBindingRefFields = (
+  node: unknown,
+  varName: string,
+  row: Record<string, unknown>,
+): unknown => {
+  if (Array.isArray(node))
+    return node.map((item) => substituteBindingRefFields(item, varName, row));
   if (node === null || typeof node !== "object") return node;
   const n = node as Record<string, unknown> & { kind?: string };
-  if (n.kind === "field_access"
-    && typeof n.field === "string"
-    && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
-    && (n.expr as { name?: string }).name === varName) {
+  if (
+    n.kind === "field_access" &&
+    typeof n.field === "string" &&
+    (n.expr as { kind?: string; name?: string })?.kind === "binding_ref" &&
+    (n.expr as { name?: string }).name === varName
+  ) {
     return { kind: "literal", value: row[n.field as string] ?? null };
   }
   // `t.name` written as a `path` node (head = loop variable, tail = field).
@@ -5064,21 +6085,43 @@ const attachLoopVarToNestedSelects = (node: unknown, binding: WithBinding): unkn
   if (Array.isArray(node)) return node.map((item) => attachLoopVarToNestedSelects(item, binding));
   if (node === null || typeof node !== "object") return node;
   const n = node as Record<string, unknown> & { kind?: string };
-  if (n.kind === "insert" || n.kind === "update" || n.kind === "delete" || n.kind === "mutation_expr") {
+  if (
+    n.kind === "insert" ||
+    n.kind === "update" ||
+    n.kind === "delete" ||
+    n.kind === "mutation_expr"
+  ) {
     return n;
   }
   if (n.kind === "select_expr_subquery") {
-    const inner = n.expr as { kind?: string; clauses?: { _withBindings?: WithBinding[] } } | undefined;
+    const inner = n.expr as
+      | { kind?: string; clauses?: { _withBindings?: WithBinding[] } }
+      | undefined;
     if (inner?.kind === "select") {
-      const clauses = (inner.clauses ?? {}) as Record<string, unknown> & { _withBindings?: WithBinding[] };
+      const clauses = (inner.clauses ?? {}) as Record<string, unknown> & {
+        _withBindings?: WithBinding[];
+      };
       const existing = clauses._withBindings ?? [];
       if (!existing.some((b) => b.name === binding.name)) {
         // Recurse into the inner select's clauses (filter etc.) first, then
         // attach the binding at this level — without recursing into the binding
         // value itself (which would re-attach forever).
-        const recursedInner = attachLoopVarToNestedSelects(inner, binding) as typeof inner & { clauses?: Record<string, unknown> & { _withBindings?: WithBinding[] } };
-        const recursedClauses = (recursedInner.clauses ?? {}) as Record<string, unknown> & { _withBindings?: WithBinding[] };
-        return { ...n, expr: { ...recursedInner, clauses: { ...recursedClauses, _withBindings: [binding, ...(recursedClauses._withBindings ?? [])] } } };
+        const recursedInner = attachLoopVarToNestedSelects(inner, binding) as typeof inner & {
+          clauses?: Record<string, unknown> & { _withBindings?: WithBinding[] };
+        };
+        const recursedClauses = (recursedInner.clauses ?? {}) as Record<string, unknown> & {
+          _withBindings?: WithBinding[];
+        };
+        return {
+          ...n,
+          expr: {
+            ...recursedInner,
+            clauses: {
+              ...recursedClauses,
+              _withBindings: [binding, ...(recursedClauses._withBindings ?? [])],
+            },
+          },
+        };
       }
     }
   }
@@ -5100,7 +6143,7 @@ const evaluateForTupleIteratorRows = (
   const n = iteratorExpr as { kind?: string; values?: unknown[] };
   if (n.kind !== "set_expr" || !Array.isArray(n.values) || n.values.length === 0) return undefined;
   const peelExpr = (node: unknown): unknown =>
-    (node !== null && typeof node === "object" && (node as { kind?: string }).kind === "expr")
+    node !== null && typeof node === "object" && (node as { kind?: string }).kind === "expr"
       ? (node as { expr: unknown }).expr
       : node;
   const rows: ScalarValue[][] = [];
@@ -5117,7 +6160,10 @@ const evaluateForTupleIteratorRows = (
         continue;
       }
       // Non-literal tuple member (`(x, a ++ "c")`) — evaluate via SQL.
-      const evaluated = evaluateScalarBindingViaSQL(db, schema, member as never, [], context, { line: 1, column: 1 });
+      const evaluated = evaluateScalarBindingViaSQL(db, schema, member as never, [], context, {
+        line: 1,
+        column: 1,
+      });
       if (evaluated === undefined || evaluated.kind !== "literal") return undefined;
       const scalar = coerceUnknownToScalar((evaluated as { value: unknown }).value);
       if (scalar === undefined) return undefined;
@@ -5130,18 +6176,30 @@ const evaluateForTupleIteratorRows = (
 
 // Substitute the loop variable's tuple-element accesses (`x.0`, `x.1` —
 // `index_access` over a `binding_ref`/`path`) with literals from one tuple.
-const substituteTupleIndexRefs = (node: unknown, varName: string, tuple: ScalarValue[]): unknown => {
-  if (Array.isArray(node)) return node.map((item) => substituteTupleIndexRefs(item, varName, tuple));
+const substituteTupleIndexRefs = (
+  node: unknown,
+  varName: string,
+  tuple: ScalarValue[],
+): unknown => {
+  if (Array.isArray(node))
+    return node.map((item) => substituteTupleIndexRefs(item, varName, tuple));
   if (node === null || typeof node !== "object") return node;
   const n = node as Record<string, unknown> & { kind?: string };
-  if (n.kind === "index_access"
-    && typeof n.index === "number"
-    && (n.expr as { kind?: string; name?: string })?.kind === "binding_ref"
-    && (n.expr as { name?: string }).name === varName) {
+  if (
+    n.kind === "index_access" &&
+    typeof n.index === "number" &&
+    (n.expr as { kind?: string; name?: string })?.kind === "binding_ref" &&
+    (n.expr as { name?: string }).name === varName
+  ) {
     return { kind: "literal", value: tuple[n.index as number] ?? null };
   }
   // `x.0` parsed as a path with a numeric tail step.
-  if (n.kind === "path" && n.head === varName && typeof n.tail === "string" && /^\d+$/.test(n.tail)) {
+  if (
+    n.kind === "path" &&
+    n.head === varName &&
+    typeof n.tail === "string" &&
+    /^\d+$/.test(n.tail)
+  ) {
     return { kind: "literal", value: tuple[Number(n.tail)] ?? null };
   }
   const out: Record<string, unknown> = {};
@@ -5164,7 +6222,14 @@ const evaluateForObjectIteratorRows = (
   let sel = iteratorExpr as Record<string, unknown> & { kind?: string };
   let extraWith: WithBinding[] | undefined;
   if (sel.kind === "select_expr_subquery") {
-    const sub = sel as unknown as { expr: Record<string, unknown> & { kind?: string }; filter?: unknown; orderBy?: unknown; limit?: unknown; offset?: unknown; clauses?: { _withBindings?: WithBinding[] } };
+    const sub = sel as unknown as {
+      expr: Record<string, unknown> & { kind?: string };
+      filter?: unknown;
+      orderBy?: unknown;
+      limit?: unknown;
+      offset?: unknown;
+      clauses?: { _withBindings?: WithBinding[] };
+    };
     extraWith = sub.clauses?._withBindings;
     sel = sub.expr;
   }
@@ -5172,12 +6237,20 @@ const evaluateForObjectIteratorRows = (
   // The AST `select` expr stores its FILTER/ORDER BY/pagination on `clauses`,
   // not as top-level SelectStatement fields — flatten them so the compiled
   // SELECT keeps the iterator's filter (otherwise it scans the whole extent).
-  const selExpr = sel as unknown as { typeName: string; shape?: ShapeElement[]; clauses?: ClauseChain };
+  const selExpr = sel as unknown as {
+    typeName: string;
+    shape?: ShapeElement[];
+    clauses?: ClauseChain;
+  };
   const clauses: ClauseChain = selExpr.clauses ?? {};
   // Build a shape that includes id plus every read field (schema or computed).
   const shape: ShapeElement[] = [...(selExpr.shape ?? [])];
   const haveField = (name: string): boolean =>
-    shape.some((e) => (e.kind === "field" && e.name === name) || (e.kind === "computed" && (e as { name?: string }).name === name));
+    shape.some(
+      (e) =>
+        (e.kind === "field" && e.name === name) ||
+        (e.kind === "computed" && (e as { name?: string }).name === name),
+    );
   if (!haveField("id")) shape.unshift({ kind: "field", name: "id" } as ShapeElement);
   for (const f of fields) {
     if (!haveField(f)) shape.push({ kind: "field", name: f } as ShapeElement);
@@ -5199,10 +6272,15 @@ const evaluateForObjectIteratorRows = (
     pos: { line: 1, column: 1 },
   };
   try {
-    const compiled = getCompilerService().compile(schema, augmented as unknown as Statement, { globals: context.globals, params: context.params });
+    const compiled = getCompilerService().compile(schema, augmented as unknown as Statement, {
+      globals: context.globals,
+      params: context.params,
+    });
     if (!lowersToSingleSql(compiled.sql)) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-    return rows.map((r) => (r !== null && typeof r === "object" ? r as Record<string, unknown> : { __scalar: r }));
+    return rows.map((r) =>
+      r !== null && typeof r === "object" ? (r as Record<string, unknown>) : { __scalar: r },
+    );
   } catch {
     return undefined;
   }
@@ -5258,11 +6336,12 @@ export const executeQueryUnitWithTrace = (
         }
         let inner: FreeObjectExpr = outer.expr;
         const innerWith: WithBinding[] = [];
-        if (inner.kind === "select_expr_subquery"
-          && inner.filter === undefined
-          && inner.orderBy === undefined
-          && inner.limit === undefined
-          && inner.offset === undefined
+        if (
+          inner.kind === "select_expr_subquery" &&
+          inner.filter === undefined &&
+          inner.orderBy === undefined &&
+          inner.limit === undefined &&
+          inner.offset === undefined
         ) {
           if (inner.clauses?._withBindings) {
             innerWith.push(...inner.clauses._withBindings);
@@ -5271,7 +6350,11 @@ export const executeQueryUnitWithTrace = (
         }
         if (inner.kind !== "mutation_expr") return null;
         const mutation = inner.statement;
-        if (mutation.kind !== "insert" && mutation.kind !== "update" && mutation.kind !== "delete") {
+        if (
+          mutation.kind !== "insert" &&
+          mutation.kind !== "update" &&
+          mutation.kind !== "delete"
+        ) {
           return null;
         }
         const mergedWith = [...(outer.with ?? []), ...innerWith, ...(mutation.with ?? [])];
@@ -5325,11 +6408,12 @@ export const executeQueryUnitWithTrace = (
         if (outer.orderBy === undefined) {
           let bodyExpr: FreeObjectExpr = outer.expr;
           const innerWith: WithBinding[] = [];
-          if (bodyExpr.kind === "select_expr_subquery"
-            && bodyExpr.filter === undefined
-            && bodyExpr.orderBy === undefined
-            && bodyExpr.limit === undefined
-            && bodyExpr.offset === undefined
+          if (
+            bodyExpr.kind === "select_expr_subquery" &&
+            bodyExpr.filter === undefined &&
+            bodyExpr.orderBy === undefined &&
+            bodyExpr.limit === undefined &&
+            bodyExpr.offset === undefined
           ) {
             if (bodyExpr.clauses?._withBindings) {
               innerWith.push(...bodyExpr.clauses._withBindings);
@@ -5372,7 +6456,12 @@ export const executeQueryUnitWithTrace = (
       // DML bound in a FOR's WITH executes once for the whole statement —
       // rewrite those bindings to by-id selects before the per-value desugar
       // clones the body.
-      if (rawUnitAst.kind === "for" && ((rawUnitAst as { with?: WithBinding[] }).with ?? []).some((binding) => bindingValueContainsMutation(binding.value))) {
+      if (
+        rawUnitAst.kind === "for" &&
+        ((rawUnitAst as { with?: WithBinding[] }).with ?? []).some((binding) =>
+          bindingValueContainsMutation(binding.value),
+        )
+      ) {
         rawUnitAst = preExecuteDmlBindings(db, schema, rawUnitAst, context) as typeof rawUnitAst;
         expanded[stmtIdx] = rawUnitAst;
       }
@@ -5380,8 +6469,10 @@ export const executeQueryUnitWithTrace = (
       // A FOR-INSERT child (desugared below) carries a snapshot cache shared by
       // all its siblings so snapshot-valued expression defaults resolve once.
       const unitSnapshotDefaultCache = forInsertSnapshotDefaultCaches.get(rawUnitAst);
-      if (rawUnitAst.kind === "for"
-        && (rawUnitAst.body.kind === "insert" || rawUnitAst.body.kind === "for")) {
+      if (
+        rawUnitAst.kind === "for" &&
+        (rawUnitAst.body.kind === "insert" || rawUnitAst.body.kind === "for")
+      ) {
         // Desugar `FOR v IN <iter> ( … INSERT … )` — including nested FORs and
         // object-set iterators — into one cleanly-lowered INSERT per element of
         // the (cartesian) iteration. Each loop variable is bound as a WITH
@@ -5422,12 +6513,23 @@ export const executeQueryUnitWithTrace = (
       if (ast.kind === "ddl") {
         if (ast.action === "create" && ast.objectKind === "function" && ast.functionDecl) {
           applyParsedFunctionDDL(schema, ast, parserOptions.defaultModule ?? "default");
-          populateSchemaIntrospection(db, schema, listAllRuntimeAliasNames(schema), runtimeExprAliases.get(schema));
+          populateSchemaIntrospection(
+            db,
+            schema,
+            listAllRuntimeAliasNames(schema),
+            runtimeExprAliases.get(schema),
+          );
           compilerService.clear();
         } else if (ast.action === "create" && ast.objectKind === "global") {
           // Register the global and (for computed globals) cache its default
           // value, then refresh the context so later statements read it.
-          applyCreateGlobalDDL(db, schema, ast, parserOptions.defaultModule ?? "default", globalsDeps());
+          applyCreateGlobalDDL(
+            db,
+            schema,
+            ast,
+            parserOptions.defaultModule ?? "default",
+            globalsDeps(),
+          );
           context.globals = withSessionGlobals(schema, context).globals;
           compilerService.clear();
         }
@@ -5496,7 +6598,18 @@ export const executeQueryUnitWithTrace = (
       {
         const selectOverMutation = detectSelectOverMutation(ast);
         if (selectOverMutation) {
-          traces.push(executeSelectOverMutation(db, schema, script, ast, selectOverMutation, context, runtimeTarget, compilerService));
+          traces.push(
+            executeSelectOverMutation(
+              db,
+              schema,
+              script,
+              ast,
+              selectOverMutation,
+              context,
+              runtimeTarget,
+              compilerService,
+            ),
+          );
           continue;
         }
       }
@@ -5509,7 +6622,11 @@ export const executeQueryUnitWithTrace = (
             ast,
             ir: undefined,
             sql: { sql: "", params: [], loweringMode: "single_statement" } as SQLArtifact,
-            compiler: { key: "const-subscript", status: "miss", stats: { hits: 0, misses: 0, size: 0 } },
+            compiler: {
+              key: "const-subscript",
+              status: "miss",
+              stats: { hits: 0, misses: 0, size: 0 },
+            },
             sqlTrail: [],
             overlays: [],
             result: { kind: "select", rows: constRows },
@@ -5522,18 +6639,34 @@ export const executeQueryUnitWithTrace = (
       // `INSERT std::FreeObject;` / `INSERT InsertTest;` — fall through to
       // compilation and let the IR pass raise the right diagnostic instead.)
 
-      const compiled = compilerService.compile(schema, ast, { overlays, globals: context.globals, params: context.params, target: runtimeTarget, allowUserSpecifiedId: allowUserSpecifiedId(schema) });
+      const compiled = compilerService.compile(schema, ast, {
+        overlays,
+        globals: context.globals,
+        params: context.params,
+        target: runtimeTarget,
+        allowUserSpecifiedId: allowUserSpecifiedId(schema),
+      });
       const ir = compiled.ir;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-      const subjectType = ir && (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete")
-        ? typeDefForTable(schema, ir.table)
-        : undefined;
-      if (ir && (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete") && !subjectType) {
+      const subjectType =
+        ir && (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete")
+          ? typeDefForTable(schema, ir.table)
+          : undefined;
+      if (
+        ir &&
+        (ir.kind === "insert" || ir.kind === "update" || ir.kind === "delete") &&
+        !subjectType
+      ) {
         const astTypeName = "typeName" in ast ? ast.typeName : "<unknown>";
-        throw new AppError("E_SEMANTIC", `Unknown type '${astTypeName}'`, ast.pos.line, ast.pos.column);
+        throw new AppError(
+          "E_SEMANTIC",
+          `Unknown type '${astTypeName}'`,
+          ast.pos.line,
+          ast.pos.column,
+        );
       }
 
       let result: QueryResult;
@@ -5541,7 +6674,16 @@ export const executeQueryUnitWithTrace = (
         if (!subjectType) {
           throw new Error("invariant: write IR reached execution without a resolved subject type");
         }
-        const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context, unitSnapshotDefaultCache);
+        const writeResult = runWriteWithAccessPolicies(
+          db,
+          schema,
+          ast,
+          ir,
+          sqlArtifact,
+          subjectType,
+          context,
+          unitSnapshotDefaultCache,
+        );
         result = { kind: ir.kind, changes: writeResult.changes, rows: writeResult.rows };
       } else if (ast.kind === "group") {
         throw new AppError(
@@ -5553,7 +6695,10 @@ export const executeQueryUnitWithTrace = (
       } else {
         // SELECT / SELECT-expr / SELECT-free / FOR execute off the gelIR SQL
         // artifact. select_free requires a complete single-statement lowering.
-        if (ast.kind === "select_free" && classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject") {
+        if (
+          ast.kind === "select_free" &&
+          classifyExecutionStrategy(ast, sqlArtifact, schema) === "reject"
+        ) {
           throw new AppError(
             "E_UNSUPPORTED",
             "select_free requires SQL lowering; runtime fallback disabled",
@@ -5561,7 +6706,10 @@ export const executeQueryUnitWithTrace = (
             ast.pos.column,
           );
         }
-        result = { kind: "select", rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact) };
+        result = {
+          kind: "select",
+          rows: runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact),
+        };
       }
 
       const currentOverlays = extractOverlays(ir);
@@ -5598,24 +6746,33 @@ export const executeQueryUnitWithTrace = (
       // don't aggregate those — keep the legacy single-trace result so their
       // observable behaviour is unchanged.
       let hasConflict = false;
-      for (; j < traces.length && (traces[j].ast as { __forGroup?: number }).__forGroup === groupId; j += 1) {
+      for (
+        ;
+        j < traces.length && (traces[j].ast as { __forGroup?: number }).__forGroup === groupId;
+        j += 1
+      ) {
         const r = traces[j].result as { rows?: unknown[]; changes?: number };
         if ((traces[j].ast as { conflict?: unknown }).conflict !== undefined) hasConflict = true;
         if (Array.isArray(r.rows)) groupRows.push(...r.rows);
         changes += r.changes ?? 0;
       }
-      mergedTraces.push(hasConflict
-        ? traces[j - 1]
-        : {
-            ...traces[j - 1],
-            result: { kind: "insert", changes, rows: groupRows },
-          });
+      mergedTraces.push(
+        hasConflict
+          ? traces[j - 1]
+          : {
+              ...traces[j - 1],
+              result: { kind: "insert", changes, rows: groupRows },
+            },
+      );
       i = j - 1;
     }
 
     return {
       traces: mergedTraces,
-      result: mergedTraces.length > 0 ? mergedTraces[mergedTraces.length - 1].result : { kind: "insert", changes: 0 },
+      result:
+        mergedTraces.length > 0
+          ? mergedTraces[mergedTraces.length - 1].result
+          : { kind: "insert", changes: 0 },
     };
   } catch (err) {
     throw asAppError(decorateErrorWithUnsupportedTag(err, script));
@@ -5627,7 +6784,8 @@ const substituteBindingInFreeObjectExpr = (
   variable: string,
   value: ScalarValue,
 ): FreeObjectExpr => {
-  const rec = (e: FreeObjectExpr): FreeObjectExpr => substituteBindingInFreeObjectExpr(e, variable, value);
+  const rec = (e: FreeObjectExpr): FreeObjectExpr =>
+    substituteBindingInFreeObjectExpr(e, variable, value);
   switch (expr.kind) {
     case "binding_ref":
       return expr.name === variable ? { kind: "literal", value } : expr;
@@ -5655,7 +6813,12 @@ const substituteBindingInFreeObjectExpr = (
     case "tuple":
       return { ...expr, values: expr.values.map((v) => rec(v)) };
     case "if_else":
-      return { ...expr, thenExpr: rec(expr.thenExpr), condition: rec(expr.condition), elseExpr: rec(expr.elseExpr) };
+      return {
+        ...expr,
+        thenExpr: rec(expr.thenExpr),
+        condition: rec(expr.condition),
+        elseExpr: rec(expr.elseExpr),
+      };
     case "coalesce":
       return { ...expr, left: rec(expr.left), right: rec(expr.right) };
     default:
@@ -5670,7 +6833,13 @@ const substituteBindingInASTFilter = (
 ): FilterExpr => {
   if (filter.kind === "predicate") {
     const fv = filter.value;
-    if (typeof fv === "object" && fv !== null && "kind" in fv && fv.kind === "binding_ref" && fv.name === variable) {
+    if (
+      typeof fv === "object" &&
+      fv !== null &&
+      "kind" in fv &&
+      fv.kind === "binding_ref" &&
+      fv.name === variable
+    ) {
       return { ...filter, value };
     }
     return filter;
@@ -5698,9 +6867,7 @@ const substituteBindingInASTFilter = (
 // back into a FreeObjectExpr AST so it can be inlined as a synthetic WITH
 // binding value. Objects become free_object_constructor, arrays become
 // set_expr of nested constructors/literals, scalars become literal nodes.
-const jsValueToFreeObjectExpr = (
-  value: unknown,
-): FreeObjectExpr => {
+const jsValueToFreeObjectExpr = (value: unknown): FreeObjectExpr => {
   if (value === null || value === undefined) {
     return { kind: "literal", value: null };
   }
@@ -5734,7 +6901,7 @@ const runCompiledGroup = (
   schema: SchemaSnapshot,
   compiled: { ir: IRStatement | undefined; sql: SQLArtifact; gelIr?: unknown },
   context: SecurityContext,
-  sqlTrail: SQLArtifact[],
+  _sqlTrail: SQLArtifact[],
 ): Record<string, unknown>[] => {
   if (lowersToSingleSql(compiled.sql)) {
     return runGelSelectSQL(
@@ -5759,9 +6926,9 @@ const preEvaluateGroupBindings = (
 ): Statement => {
   if (!ast.with || ast.with.length === 0) return ast;
   const isGroupBindingValue = (value: WithBinding["value"]): boolean =>
-    value.kind === "subquery_expr"
-    && (value.expr.kind === "group_expr"
-      || (value.expr.kind === "select_expr_subquery" && value.expr.expr.kind === "group_expr"));
+    value.kind === "subquery_expr" &&
+    (value.expr.kind === "group_expr" ||
+      (value.expr.kind === "select_expr_subquery" && value.expr.expr.kind === "group_expr"));
   if (!ast.with.some((binding) => isGroupBindingValue(binding.value))) return ast;
   // The gelIR pipeline lowers WITH-bound groups directly (group_rows in
   // compileGroupExprSet); pre-evaluating into literal AST rows is only the
@@ -5769,7 +6936,8 @@ const preEvaluateGroupBindings = (
   // engine's own compile of the unchanged AST reuses it.
   try {
     const compiled = getCompilerService().compile(schema, ast, {
-      globals: context.globals, params: context.params,
+      globals: context.globals,
+      params: context.params,
       target: resolvedRuntimeTarget(context, db),
     });
     if (lowersToSingleSql(compiled.sql)) {
@@ -5788,7 +6956,10 @@ const preEvaluateGroupBindings = (
     if (value.kind === "subquery_expr") {
       if (value.expr.kind === "group_expr") {
         groupExpr = value.expr;
-      } else if (value.expr.kind === "select_expr_subquery" && value.expr.expr.kind === "group_expr") {
+      } else if (
+        value.expr.kind === "select_expr_subquery" &&
+        value.expr.expr.kind === "group_expr"
+      ) {
         groupExpr = value.expr.expr;
       }
     }
@@ -5808,7 +6979,8 @@ const preEvaluateGroupBindings = (
     };
     try {
       const compiled = getCompilerService().compile(schema, groupStatement, {
-        globals: context.globals, params: context.params,
+        globals: context.globals,
+        params: context.params,
         target: resolvedRuntimeTarget(context, db),
       });
       if (groupStatement.kind !== "group") return binding;
@@ -5882,35 +7054,57 @@ const executeForWithDmlBodyExpr = (
   // substituted as literals. The embedded INSERT runs through the standard path
   // each iteration; the tuple/shape is returned alongside. The FOR iterates
   // each set element separately (`{T, T}` yields each extent twice).
-  const isObjectIterator = ast.iteratorExpr.kind === "select_expr_subquery"
-    || ast.iteratorExpr.kind === "select"
-    || ast.iteratorExpr.kind === "set_expr";
+  const isObjectIterator =
+    ast.iteratorExpr.kind === "select_expr_subquery" ||
+    ast.iteratorExpr.kind === "select" ||
+    ast.iteratorExpr.kind === "set_expr";
   if (accumWith.length === 0 && isObjectIterator) {
-    const setVals = ast.iteratorExpr.kind === "set_expr"
-      ? (ast.iteratorExpr as { values: Array<{ kind?: string }> }).values
-      : [ast.iteratorExpr as { kind?: string }];
-    const allObjectSelects = setVals.length > 0
-      && setVals.every((v) => v?.kind === "select" || v?.kind === "select_expr_subquery");
+    const setVals =
+      ast.iteratorExpr.kind === "set_expr"
+        ? (ast.iteratorExpr as { values: Array<{ kind?: string }> }).values
+        : [ast.iteratorExpr as { kind?: string }];
+    const allObjectSelects =
+      setVals.length > 0 &&
+      setVals.every((v) => v?.kind === "select" || v?.kind === "select_expr_subquery");
     if (allObjectSelects) {
       const referencedFields = collectBindingRefFields(body.expr, ast.variable);
-      const forStatementWith0 = ((ast as { with?: WithBinding[] }).with ?? [])
-        .filter((b) => b.name !== ast.variable);
+      const forStatementWith0 = ((ast as { with?: WithBinding[] }).with ?? []).filter(
+        (b) => b.name !== ast.variable,
+      );
       const out: unknown[] = [];
       for (const selNode of setVals) {
         const rows = evaluateForObjectIteratorRows(
-          selNode as ForStatement["iteratorExpr"], referencedFields, schema, db, context,
+          selNode as ForStatement["iteratorExpr"],
+          referencedFields,
+          schema,
+          db,
+          context,
         );
         if (rows === undefined) return undefined;
-        const iterSel = (selNode as { kind?: string; expr?: { typeName?: string }; typeName?: string });
-        const iterTypeName = iterSel.kind === "select_expr_subquery" ? iterSel.expr?.typeName : iterSel.typeName;
+        const iterSel = selNode as {
+          kind?: string;
+          expr?: { typeName?: string };
+          typeName?: string;
+        };
+        const iterTypeName =
+          iterSel.kind === "select_expr_subquery" ? iterSel.expr?.typeName : iterSel.typeName;
         for (const row of rows) {
           let substituted = substituteBindingRefFields(body.expr, ast.variable, row);
-          const objBinding: WithBinding[] = typeof row.id === "string" && iterTypeName
-            ? [{
-                name: ast.variable,
-                value: { kind: "subquery_expr", expr: { kind: "select_expr_subquery", expr: chainByIdSelect({ typeName: iterTypeName, ids: [row.id as string] }) } },
-              } as WithBinding]
-            : [];
+          const objBinding: WithBinding[] =
+            typeof row.id === "string" && iterTypeName
+              ? [
+                  {
+                    name: ast.variable,
+                    value: {
+                      kind: "subquery_expr",
+                      expr: {
+                        kind: "select_expr_subquery",
+                        expr: chainByIdSelect({ typeName: iterTypeName, ids: [row.id as string] }),
+                      },
+                    },
+                  } as WithBinding,
+                ]
+              : [];
           // A coalesce / nested select inside the body reads the loop variable
           // by name (`.subject = sub`); the runtime coalesce evaluator compiles
           // those nested selects standalone (without the outer WITH), so push
@@ -5944,26 +7138,28 @@ const executeForWithDmlBodyExpr = (
     iterValues = viaSql ?? [];
   } else {
     try {
-      iterValues = ast.iteratorExpr.kind === "set_literal"
-        ? ast.iteratorExpr.values
-        : evaluateForIteratorValues(ast.iteratorExpr, schema, db, context);
+      iterValues =
+        ast.iteratorExpr.kind === "set_literal"
+          ? ast.iteratorExpr.values
+          : evaluateForIteratorValues(ast.iteratorExpr, schema, db, context);
     } catch {
       iterValues = [];
     }
   }
   if (!iterValues.every((v) => v === null || isScalarValue(v))) return undefined;
-  const effective: (ScalarValue | null)[] = iterValues.length === 0 && ast.optional
-    ? [null]
-    : (iterValues as (ScalarValue | null)[]);
+  const effective: (ScalarValue | null)[] =
+    iterValues.length === 0 && ast.optional ? [null] : (iterValues as (ScalarValue | null)[]);
 
-  const forStatementWith = ((ast as { with?: WithBinding[] }).with ?? [])
-    .filter((b) => b.name !== ast.variable);
+  const forStatementWith = ((ast as { with?: WithBinding[] }).with ?? []).filter(
+    (b) => b.name !== ast.variable,
+  );
 
   const out: unknown[] = [];
   for (const value of effective) {
-    const varBinding: WithBinding[] = value !== null && isScalarValue(value)
-      ? [{ name: ast.variable, value: { kind: "literal", value } } as WithBinding]
-      : [];
+    const varBinding: WithBinding[] =
+      value !== null && isScalarValue(value)
+        ? [{ name: ast.variable, value: { kind: "literal", value } } as WithBinding]
+        : [];
     const iterWith = [...accumWith, ...forStatementWith, ...varBinding];
 
     // A nested FOR (`FOR a … UNION (FOR b … UNION (…INSERT…))`) recurses with
@@ -6035,15 +7231,17 @@ const executeForLoop = (
     };
     const compiled = compilerService.compile(schema, groupStatement, {
       overlays,
-      globals: context.globals, params: context.params,
+      globals: context.globals,
+      params: context.params,
       target: runtimeTarget,
     });
     const ir = compiled.ir;
     const sqlArtifact = compiled.sql;
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
-    const groupRows = groupStatement.kind === "group"
-      ? runCompiledGroup(db, schema, compiled, context, sqlTrail)
-      : [];
+    const groupRows =
+      groupStatement.kind === "group"
+        ? runCompiledGroup(db, schema, compiled, context, sqlTrail)
+        : [];
     const outputRows = groupRows.flatMap((groupRow): unknown[] => {
       const bindings = new Map<string, unknown>([[ast.variable, groupRow]]);
       const result = evalGroupRowExpr(body.expr, groupRow, bindings, { db, schema });
@@ -6086,7 +7284,13 @@ const executeForLoop = (
     for (const value of iteratorValues) {
       const insertValues: Record<string, InsertValue> = {};
       for (const [key, v] of Object.entries(body.values)) {
-        if (typeof v === "object" && v !== null && "kind" in v && v.kind === "binding_ref" && v.name === ast.variable) {
+        if (
+          typeof v === "object" &&
+          v !== null &&
+          "kind" in v &&
+          v.kind === "binding_ref" &&
+          v.name === ast.variable
+        ) {
           insertValues[key] = value as InsertValue;
         } else {
           insertValues[key] = v;
@@ -6109,16 +7313,35 @@ const executeForLoop = (
         : `${insertAst.withModule ?? ast.withModule ?? "default"}::${insertAst.typeName}`;
       const subjectType = schema.getType(subjectTypeName);
       if (!subjectType) {
-        throw new AppError("E_SEMANTIC", `Unknown type '${insertAst.typeName}'`, ast.pos.line, ast.pos.column);
+        throw new AppError(
+          "E_SEMANTIC",
+          `Unknown type '${insertAst.typeName}'`,
+          ast.pos.line,
+          ast.pos.column,
+        );
       }
 
-      const compiled = compilerService.compile(schema, insertAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
+      const compiled = compilerService.compile(schema, insertAst, {
+        overlays,
+        globals: context.globals,
+        params: context.params,
+        target: runtimeTarget,
+      });
       const ir = compiled.ir;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-      const writeResult = runWriteWithAccessPolicies(db, schema, insertAst, ir, sqlArtifact, subjectType, context, snapshotDefaultCache);
+      const writeResult = runWriteWithAccessPolicies(
+        db,
+        schema,
+        insertAst,
+        ir,
+        sqlArtifact,
+        subjectType,
+        context,
+        snapshotDefaultCache,
+      );
 
       const currentOverlays = extractOverlays(ir);
       if (ir) {
@@ -6171,7 +7394,12 @@ const executeForLoop = (
     // executeFunctionCall. `tryRuntimeSelectExprEvaluationAst` returns
     // undefined when the body doesn't need runtime eval, so plain FOR loops
     // still fall through to the SQL path below.
-    const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, syntheticAst, {
+      overlays,
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+    });
     const ir = compiled.ir;
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
@@ -6180,18 +7408,21 @@ const executeForLoop = (
     // A FOR over GROUP rows lowers fully to SQL (group_rows iterator +
     // per-row body) — when that artifact is complete, it wins over the AST
     // evaluator, which doesn't model group rows.
-    const iteratesGroupRows = iteratorExpr.kind === "group_expr"
-      || (iteratorExpr.kind === "select_expr_subquery" && iteratorExpr.expr.kind === "group_expr");
+    const iteratesGroupRows =
+      iteratorExpr.kind === "group_expr" ||
+      (iteratorExpr.kind === "select_expr_subquery" && iteratorExpr.expr.kind === "group_expr");
     const sqlIsComplete = lowersToSingleSql(sqlArtifact);
-    const runtimeResult = iteratesGroupRows && sqlIsComplete
-      ? undefined
-      : tryRuntimeSelectExprEvaluationAst(db, schema, syntheticAst, context);
+    const runtimeResult =
+      iteratesGroupRows && sqlIsComplete
+        ? undefined
+        : tryRuntimeSelectExprEvaluationAst(db, schema, syntheticAst, context);
 
-    const rows = runtimeResult?.kind === "select"
-      ? runtimeResult.rows
-      : syntheticAst.kind === "select_expr"
-        ? runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact)
-        : [];
+    const rows =
+      runtimeResult?.kind === "select"
+        ? runtimeResult.rows
+        : syntheticAst.kind === "select_expr"
+          ? runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact)
+          : [];
 
     const currentOverlays = extractOverlays(ir);
     traces.push({
@@ -6233,15 +7464,21 @@ const executeForLoop = (
       pos: ast.pos,
     };
 
-    const compiled = compilerService.compile(schema, syntheticAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, syntheticAst, {
+      overlays,
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+    });
     const ir = compiled.ir;
     const sqlArtifact = compiled.sql;
     assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
     const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-    const rows = syntheticAst.kind === "select_expr"
-      ? runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact)
-      : [];
+    const rows =
+      syntheticAst.kind === "select_expr"
+        ? runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact)
+        : [];
 
     const currentOverlays = extractOverlays(ir);
     traces.push({
@@ -6276,13 +7513,21 @@ const executeForLoop = (
     for (const value of iteratorValues) {
       const selectAst = bindSelectAstVariable(selectBody, ast.variable, value);
 
-      const compiled = compilerService.compile(schema, selectAst, { overlays, globals: context.globals, params: context.params, target: runtimeTarget });
+      const compiled = compilerService.compile(schema, selectAst, {
+        overlays,
+        globals: context.globals,
+        params: context.params,
+        target: runtimeTarget,
+      });
       const ir = compiled.ir;
       const sqlArtifact = compiled.sql;
       assertTargetSqlCompatibility(sqlArtifact.sql, runtimeTarget);
       const sqlTrail: SQLArtifact[] = [sqlArtifact];
 
-      const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact) as Record<string, unknown>[];
+      const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, sqlArtifact) as Record<
+        string,
+        unknown
+      >[];
       allRows.push(...rows);
 
       const currentOverlays = extractOverlays(ir);
@@ -6316,7 +7561,8 @@ const evaluateForIteratorValues = (
   }
 
   if (expr.kind === "select") {
-    const shape = expr.shape.length > 0 ? [...expr.shape] : [{ kind: "field", name: "id" } as const];
+    const shape =
+      expr.shape.length > 0 ? [...expr.shape] : [{ kind: "field", name: "id" } as const];
     const hasId = shape.some((element) => element.kind === "field" && element.name === "id");
     if (!hasId) {
       shape.unshift({ kind: "field", name: "id" });
@@ -6338,7 +7584,11 @@ const evaluateForIteratorValues = (
     };
 
     const compiler = getCompilerService();
-    const compiled = compiler.compile(schema, selectAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
+    const compiled = compiler.compile(schema, selectAst, {
+      globals: context.globals,
+      params: context.params,
+      target: resolvedRuntimeTarget(context, db),
+    });
     assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
     if (compiled.ir !== undefined) {
       return [];
@@ -6352,7 +7602,12 @@ const evaluateForIteratorValues = (
   }
 
   if (expr.kind === "distinct") {
-    const values = evaluateForIteratorValues(expr.expr as ForStatement["iteratorExpr"], schema, db, context);
+    const values = evaluateForIteratorValues(
+      expr.expr as ForStatement["iteratorExpr"],
+      schema,
+      db,
+      context,
+    );
     const seen = new Set<string>();
     const out: unknown[] = [];
     for (const item of values) {
@@ -6385,14 +7640,26 @@ const evaluateForIteratorValues = (
     const qualifiedName = expr.call.name.includes("::")
       ? expr.call.name
       : `default::${expr.call.name}`;
-    const fnResult = executeFunctionCall(schema, db, context, qualifiedName, args, fnDispatchDeps());
+    const fnResult = executeFunctionCall(
+      schema,
+      db,
+      context,
+      qualifiedName,
+      args,
+      fnDispatchDeps(),
+    );
     return Array.isArray(fnResult) ? fnResult : [fnResult];
   }
 
   if (expr.kind === "concat") {
     let results: unknown[] = [""];
     for (const part of expr.parts) {
-      const partValues = evaluateForIteratorValues(part as ForStatement["iteratorExpr"], schema, db, context);
+      const partValues = evaluateForIteratorValues(
+        part as ForStatement["iteratorExpr"],
+        schema,
+        db,
+        context,
+      );
       const next: unknown[] = [];
       for (const left of results) {
         for (const right of partValues) {
@@ -6418,14 +7685,21 @@ const evaluateForIteratorValues = (
     // similar set-comprehension iterators.
     const out: unknown[] = [];
     for (const value of (expr as { values: FreeObjectExpr[] }).values) {
-      out.push(...evaluateForIteratorValues(value as ForStatement["iteratorExpr"], schema, db, context));
+      out.push(
+        ...evaluateForIteratorValues(value as ForStatement["iteratorExpr"], schema, db, context),
+      );
     }
     return out;
   }
 
   if (expr.kind === "cast") {
-    const inner = evaluateForIteratorValues((expr as { expr: FreeObjectExpr }).expr as ForStatement["iteratorExpr"], schema, db, context);
-    const stripModule = (t: string): string => t.startsWith("std::") ? t.slice(5) : t;
+    const inner = evaluateForIteratorValues(
+      (expr as { expr: FreeObjectExpr }).expr as ForStatement["iteratorExpr"],
+      schema,
+      db,
+      context,
+    );
+    const stripModule = (t: string): string => (t.startsWith("std::") ? t.slice(5) : t);
     const target = stripModule((expr as { castType?: string }).castType ?? "").toLowerCase();
     return inner.map((value) => {
       if (value === null || value === undefined) return value;
@@ -6452,7 +7726,7 @@ const evaluateForIteratorValues = (
  * yet). Used by the top-level FOR-INSERT desugar so iterators like
  * `{'A','B'} ++ {'1','2'}` lower through the normal IR/SQL pipeline.
  */
-const tryEvaluateScalarIteratorValues = (
+const _tryEvaluateScalarIteratorValues = (
   expr: ForStatement["iteratorExpr"],
   schema: SchemaSnapshot,
   db: SQLiteDatabase,
@@ -6578,7 +7852,11 @@ function substituteTupleIndexAccess(
   const rec = (e: FreeObjectExpr): FreeObjectExpr => substituteTupleIndexAccess(e, variable, tuple);
   switch (expr.kind) {
     case "index_access":
-      if (expr.expr.kind === "binding_ref" && expr.expr.name === variable && typeof expr.index === "number") {
+      if (
+        expr.expr.kind === "binding_ref" &&
+        expr.expr.name === variable &&
+        typeof expr.index === "number"
+      ) {
         return literalOf(tuple[expr.index]);
       }
       return { ...expr, expr: rec(expr.expr) };
@@ -6606,7 +7884,12 @@ function substituteTupleIndexAccess(
     case "tuple":
       return { ...expr, values: expr.values.map(rec) };
     case "if_else":
-      return { ...expr, thenExpr: rec(expr.thenExpr), condition: rec(expr.condition), elseExpr: rec(expr.elseExpr) };
+      return {
+        ...expr,
+        thenExpr: rec(expr.thenExpr),
+        condition: rec(expr.condition),
+        elseExpr: rec(expr.elseExpr),
+      };
     case "coalesce":
       return { ...expr, left: rec(expr.left), right: rec(expr.right) };
     case "select_expr":
@@ -6674,12 +7957,18 @@ const evaluateFreeExprForShape = (
   resolveCurrentField?: (field: string) => unknown,
   evalFunctionCall?: (functionName: string, args: RuntimeFunctionArg[]) => unknown,
 ): unknown => {
-  const rec = (e: FreeObjectExpr): unknown => evaluateFreeExprForShape(e, row, resolveCurrentField, evalFunctionCall);
+  const rec = (e: FreeObjectExpr): unknown =>
+    evaluateFreeExprForShape(e, row, resolveCurrentField, evalFunctionCall);
   if (expr.kind === "literal") {
     return expr.value;
   }
   if (expr.kind === "field_access") {
-    if (!expr.expr || (expr.expr.kind !== "select" && expr.expr.kind !== "current_item" && expr.expr.kind !== "binding_ref")) {
+    if (
+      !expr.expr ||
+      (expr.expr.kind !== "select" &&
+        expr.expr.kind !== "current_item" &&
+        expr.expr.kind !== "binding_ref")
+    ) {
       // Nested field accesses (e.g. Issue.x.y) are not supported here yet.
       return undefined;
     }
@@ -6716,7 +8005,11 @@ const evaluateFreeExprForShape = (
           // Surface that as SHAPE_EMPTY_SET upstream.
           return SHAPE_EMPTY_SET;
         }
-        argValues.push(flat.length === 1 ? flat[0] as ScalarValue : { kind: "array", values: flat as ScalarValue[] });
+        argValues.push(
+          flat.length === 1
+            ? (flat[0] as ScalarValue)
+            : { kind: "array", values: flat as ScalarValue[] },
+        );
         continue;
       }
       if (arg.kind === "function_call") {
@@ -6733,7 +8026,9 @@ const evaluateFreeExprForShape = (
     const rawName = expr.call.name;
     const candidateName = rawName.includes("::")
       ? rawName
-      : (resolveStdlibFunction(`std::${rawName}`, argValues.length) ? `std::${rawName}` : `default::${rawName}`);
+      : resolveStdlibFunction(`std::${rawName}`, argValues.length)
+        ? `std::${rawName}`
+        : `default::${rawName}`;
     return evalFunctionCall(candidateName, argValues);
   }
   if (expr.kind === "unary") {
@@ -6836,13 +8131,20 @@ const evaluateFreeExprForShape = (
     }
     const cmpOne = (a: unknown, b: unknown): boolean => {
       switch (expr.op) {
-        case "=": return a === b;
-        case "!=": return a !== b;
-        case "<": return (a as number) < (b as number);
-        case "<=": return (a as number) <= (b as number);
-        case ">": return (a as number) > (b as number);
-        case ">=": return (a as number) >= (b as number);
-        default: return false;
+        case "=":
+          return a === b;
+        case "!=":
+          return a !== b;
+        case "<":
+          return (a as number) < (b as number);
+        case "<=":
+          return (a as number) <= (b as number);
+        case ">":
+          return (a as number) > (b as number);
+        case ">=":
+          return (a as number) >= (b as number);
+        default:
+          return false;
       }
     };
     const out: boolean[] = [];
@@ -6918,7 +8220,8 @@ const resolveBacklinkRowsForSubject = (
   };
   for (const candidate of schema.listTypes()) {
     const candidateName = qualifiedTypeName(candidate);
-    if (filterSource && !schema.concreteTypeNamesUnder(filterSource).includes(candidateName)) continue;
+    if (filterSource && !schema.concreteTypeNamesUnder(filterSource).includes(candidateName))
+      continue;
     const linkDef = findRuntimeLinkDef(schema, candidateName, link);
     if (!linkDef) continue;
     const usesTable = usesLinkTable(linkDef.link);
@@ -6928,9 +8231,11 @@ const resolveBacklinkRowsForSubject = (
       for (const concrete of schema.listConcreteTypesAssignableTo(candidateName)) {
         const concreteName = qualifiedTypeName(concrete);
         const concreteTable = tableNameForType(concreteName);
-        const rows = db.prepare(
-          `SELECT s.*, j.* FROM ${quoteIdent(concreteTable)} s JOIN ${quoteIdent(linkTable)} j ON j.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE j.${quoteIdent("target")} = ?`
-        ).all(r.id) as Record<string, unknown>[];
+        const rows = db
+          .prepare(
+            `SELECT s.*, j.* FROM ${quoteIdent(concreteTable)} s JOIN ${quoteIdent(linkTable)} j ON j.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE j.${quoteIdent("target")} = ?`,
+          )
+          .all(r.id) as Record<string, unknown>[];
         for (const linkRow of rows) {
           const merged: Record<string, unknown> = { ...linkRow, __source_type: concreteName };
           for (const property of linkDef.link.properties ?? []) {
@@ -6943,7 +8248,11 @@ const resolveBacklinkRowsForSubject = (
       for (const concrete of schema.listConcreteTypesAssignableTo(candidateName)) {
         const concreteName = qualifiedTypeName(concrete);
         const concreteTable = tableNameForType(concreteName);
-        const rows = db.prepare(`SELECT * FROM ${quoteIdent(concreteTable)} WHERE ${quoteIdent(`${linkDef.link.name}_id`)} = ?`).all(r.id) as Record<string, unknown>[];
+        const rows = db
+          .prepare(
+            `SELECT * FROM ${quoteIdent(concreteTable)} WHERE ${quoteIdent(`${linkDef.link.name}_id`)} = ?`,
+          )
+          .all(r.id) as Record<string, unknown>[];
         for (const linkRow of rows) {
           pushUnique(concreteName, { ...linkRow, __source_type: concreteName });
         }
@@ -6963,7 +8272,9 @@ const collectBacklinkSourceRows = (
 ): Array<{ row: Record<string, unknown>; typeName: string }> => {
   const sourceTypeHint = body.sourceType;
   if (!sourceTypeHint) return [];
-  const sourceTypeQualified = sourceTypeHint.includes("::") ? sourceTypeHint : `default::${sourceTypeHint}`;
+  const sourceTypeQualified = sourceTypeHint.includes("::")
+    ? sourceTypeHint
+    : `default::${sourceTypeHint}`;
   const concreteSourceTypes = schema.listConcreteTypesAssignableTo(sourceTypeQualified);
   const sourceRows: Array<{ row: Record<string, unknown>; typeName: string }> = [];
   for (const sourceType of concreteSourceTypes) {
@@ -6974,7 +8285,9 @@ const collectBacklinkSourceRows = (
       const owner = resolveLinkStorageOwner(schema, sourceType, link);
       const linkTable = linkTableName(qualifiedTypeName(owner), link);
       const linkRows = db
-        .prepare(`SELECT s.* FROM ${quoteIdent(sourceTable)} s JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`)
+        .prepare(
+          `SELECT s.* FROM ${quoteIdent(sourceTable)} s JOIN ${quoteIdent(linkTable)} l ON l.${quoteIdent("source")} = s.${quoteIdent("id")} WHERE l.${quoteIdent("target")} = ?`,
+        )
         .all(targetId) as Record<string, unknown>[];
       for (const r of linkRows) {
         sourceRows.push({ row: r, typeName: qualifiedTypeName(sourceType) });
@@ -7040,7 +8353,9 @@ const tryEvaluateBacklinkShapeExpr = (
     // A source row contributes a non-empty comparison iff its projected
     // field value is non-null; null operands in EdgeQL `=` evaluate to the
     // empty set rather than a boolean, so they don't increase cardinality.
-    return sourceRows.some((entry) => entry.row[lhs.field] !== null && entry.row[lhs.field] !== undefined);
+    return sourceRows.some(
+      (entry) => entry.row[lhs.field] !== null && entry.row[lhs.field] !== undefined,
+    );
   }
 
   if (cursor.kind === "shape_projection") {
@@ -7063,7 +8378,9 @@ const tryEvaluateBacklinkShapeExpr = (
     return [];
   }
 
-  const sourceTypeQualified = sourceTypeHint.includes("::") ? sourceTypeHint : `default::${sourceTypeHint}`;
+  const sourceTypeQualified = sourceTypeHint.includes("::")
+    ? sourceTypeHint
+    : `default::${sourceTypeHint}`;
   const sourceTypeDef = schema.getType(sourceTypeQualified);
   if (!sourceTypeDef) {
     return [];
@@ -7088,7 +8405,13 @@ const tryEvaluateBacklinkShapeExpr = (
         continue;
       }
       if (shapeEl.kind === "computed") {
-        const value = evaluateSelectExprShapeEntry(db, schema, shapeEl.expr as unknown as FreeObjectExpr, entry.row, entry.typeName);
+        const value = evaluateSelectExprShapeEntry(
+          db,
+          schema,
+          shapeEl.expr as unknown as FreeObjectExpr,
+          entry.row,
+          entry.typeName,
+        );
         out[shapeEl.name] = value;
         continue;
       }
@@ -7135,12 +8458,18 @@ const evaluateSelectExprShapeEntry = (
         return null;
       }
       const targetType = db
-        .prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`)
+        .prepare(
+          `SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`,
+        )
         .all(targetId)[0] as { type_name?: unknown } | undefined;
-      const fallbackTarget = normalizeLinkTargetNames(linkDef.targetType, schema.getType(sourceType)?.module ?? "default")[0];
-      const targetTypeName = typeof targetType?.type_name === "string"
-        ? resolveRuntimeStoredTypeName(schema, targetType.type_name)
-        : fallbackTarget;
+      const fallbackTarget = normalizeLinkTargetNames(
+        linkDef.targetType,
+        schema.getType(sourceType)?.module ?? "default",
+      )[0];
+      const targetTypeName =
+        typeof targetType?.type_name === "string"
+          ? resolveRuntimeStoredTypeName(schema, targetType.type_name)
+          : fallbackTarget;
       if (!targetTypeName) {
         return null;
       }
@@ -7149,10 +8478,24 @@ const evaluateSelectExprShapeEntry = (
     };
 
     if (usesLinkTable(linkDef)) {
-      const owner = resolveLinkStorageOwner(schema, schema.getType(sourceType) ?? { module: sourceType.split("::").slice(0, -1).join("::"), name: sourceType.split("::").at(-1) ?? sourceType, fields: [] }, linkDef);
+      const owner = resolveLinkStorageOwner(
+        schema,
+        schema.getType(sourceType) ?? {
+          module: sourceType.split("::").slice(0, -1).join("::"),
+          name: sourceType.split("::").at(-1) ?? sourceType,
+          fields: [],
+        },
+        linkDef,
+      );
       const linkTable = linkTableName(qualifiedTypeName(owner), linkDef);
-      const linkRows = db.prepare(`SELECT ${quoteIdent("target")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).all(row.id) as Array<{ target?: unknown }>;
-      return linkRows.map((linkRow) => loadTargetById(linkRow.target)).filter((target): target is Record<string, unknown> => target !== null);
+      const linkRows = db
+        .prepare(
+          `SELECT ${quoteIdent("target")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`,
+        )
+        .all(row.id) as Array<{ target?: unknown }>;
+      return linkRows
+        .map((linkRow) => loadTargetById(linkRow.target))
+        .filter((target): target is Record<string, unknown> => target !== null);
     }
 
     return loadTargetById(sourceRow[`${linkDef.name}_id`]);
@@ -7173,7 +8516,8 @@ const evaluateSelectExprShapeEntry = (
   // we don't know how to evaluate this; fall back to the legacy
   // path-steps/type-intersection handler below.
   const general = evaluateFreeExprForShape(expr, row, resolveCurrentField, (functionName, args) =>
-    executeFunctionCall(schema, db, DEFAULT_SECURITY_CONTEXT, functionName, args, fnDispatchDeps()));
+    executeFunctionCall(schema, db, DEFAULT_SECURITY_CONTEXT, functionName, args, fnDispatchDeps()),
+  );
   if (general !== undefined) {
     if (general === SHAPE_EMPTY_SET) return null;
     return general;
@@ -7183,7 +8527,9 @@ const evaluateSelectExprShapeEntry = (
   const head = steps[0];
   if (!head || head.kind !== "type_intersection") return null;
 
-  const typeExpr = head.typeExpr ?? (head.typeName ? { kind: "type_name" as const, name: head.typeName } : undefined);
+  const typeExpr =
+    head.typeExpr ??
+    (head.typeName ? { kind: "type_name" as const, name: head.typeName } : undefined);
   if (!typeExpr) return null;
 
   const concreteMatches = (typeName: string, t: TypeExpr): boolean => {
@@ -7218,12 +8564,16 @@ const evaluateSelectExprShapeEntry = (
 
     if (typeof raw !== "string") return null;
     const globalType = db
-      .prepare(`SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`)
+      .prepare(
+        `SELECT ${quoteIdent("type_name")} AS ${quoteIdent("type_name")} FROM ${quoteIdent("__gel_global_ids")} WHERE ${quoteIdent("id")} = ?`,
+      )
       .all(raw)[0] as { type_name?: unknown } | undefined;
     if (!globalType || typeof globalType.type_name !== "string") return null;
     const currentTypeName = resolveRuntimeStoredTypeName(schema, globalType.type_name);
     const table = currentTypeName.replaceAll("::", "__").toLowerCase();
-    const next = db.prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ?`).all(raw)[0] as Record<string, unknown> | undefined;
+    const next = db
+      .prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ?`)
+      .all(raw)[0] as Record<string, unknown> | undefined;
     if (!next) return null;
     current = next;
   }
@@ -7242,7 +8592,7 @@ const materializeFieldValue = (
     return value;
   }
 
-      if (field.multi) {
+  if (field.multi) {
     if (value === null || value === undefined) {
       return [];
     }
@@ -7274,7 +8624,10 @@ const materializeFieldValue = (
 
   if (field.collection && typeof value === "string") {
     const trimmed = value.trim();
-    if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+    if (
+      (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+      (trimmed.startsWith("{") && trimmed.endsWith("}"))
+    ) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(trimmed);
@@ -7293,8 +8646,14 @@ const materializeFieldValue = (
       }
 
       if (field.collection.kind === "tuple") {
-        if (Array.isArray(parsed) && field.collection.elementNames && field.collection.elementNames.length === parsed.length) {
-          return Object.fromEntries(field.collection.elementNames.map((name, idx) => [name, parsed[idx]]));
+        if (
+          Array.isArray(parsed) &&
+          field.collection.elementNames &&
+          field.collection.elementNames.length === parsed.length
+        ) {
+          return Object.fromEntries(
+            field.collection.elementNames.map((name, idx) => [name, parsed[idx]]),
+          );
         }
         return parsed;
       }
@@ -7304,7 +8663,7 @@ const materializeFieldValue = (
   return coerceScalarForOutput(field.type, value);
 };
 
-const evaluateComputedLinkPropertyExpr = (
+const _evaluateComputedLinkPropertyExpr = (
   expr: ComputedLinkPropertyExpr,
   targetRow: Record<string, unknown>,
   linkProperties: Record<string, unknown>,
@@ -7321,12 +8680,12 @@ const evaluateComputedLinkPropertyExpr = (
     return linkProperties[`@${expr.name}`] ?? linkProperties[expr.name] ?? null;
   }
 
-  const left = evaluateComputedLinkPropertyExpr(expr.left, targetRow, linkProperties);
+  const left = _evaluateComputedLinkPropertyExpr(expr.left, targetRow, linkProperties);
   if (expr.op === "??") {
-    return left ?? evaluateComputedLinkPropertyExpr(expr.right, targetRow, linkProperties);
+    return left ?? _evaluateComputedLinkPropertyExpr(expr.right, targetRow, linkProperties);
   }
 
-  const right = evaluateComputedLinkPropertyExpr(expr.right, targetRow, linkProperties);
+  const right = _evaluateComputedLinkPropertyExpr(expr.right, targetRow, linkProperties);
   if (expr.op === "++") {
     return `${left ?? ""}${right ?? ""}`;
   }
@@ -7424,11 +8783,7 @@ interface GroupRowCtx {
 // are flattened one level (EdgeQL set semantics: `g.elements.name` is the set
 // of all names). A leading `<` marks a backlink step which is resolved against
 // the DB for each (object) element.
-const stepGroupRowField = (
-  current: unknown,
-  step: string,
-  ctx?: GroupRowCtx,
-): unknown => {
+const stepGroupRowField = (current: unknown, step: string, ctx?: GroupRowCtx): unknown => {
   if (current == null) return null;
   if (Array.isArray(current)) {
     const out: unknown[] = [];
@@ -7567,12 +8922,18 @@ const evalGroupRowExpr = (
       const left = Number(evalGroupRowExpr(expr.left, row, bindings, ctx) ?? 0);
       const right = Number(evalGroupRowExpr(expr.right, row, bindings, ctx) ?? 0);
       switch (expr.op) {
-        case "+": return left + right;
-        case "-": return left - right;
-        case "*": return left * right;
-        case "/": return right === 0 ? null : normalizeRuntimeFloat(left / right);
-        case "%": return right === 0 ? null : left % right;
-        default: return null;
+        case "+":
+          return left + right;
+        case "-":
+          return left - right;
+        case "*":
+          return left * right;
+        case "/":
+          return right === 0 ? null : normalizeRuntimeFloat(left / right);
+        case "%":
+          return right === 0 ? null : left % right;
+        default:
+          return null;
       }
     }
     case "concat": {
@@ -7668,7 +9029,9 @@ const projectShape = (
         continue;
       }
       if (Array.isArray(linkValue)) {
-        projected[element.name] = linkValue.map((item) => projectShape(item, linkShape, bindings, ctx));
+        projected[element.name] = linkValue.map((item) =>
+          projectShape(item, linkShape, bindings, ctx),
+        );
       } else if (linkValue && typeof linkValue === "object") {
         projected[element.name] = projectShape(linkValue, linkShape, bindings, ctx);
       } else {
@@ -7778,15 +9141,24 @@ const asNumericList = (value: unknown): number[] => {
 
 const applyComparisonOp = (op: string, left: unknown, right: unknown): unknown => {
   switch (op) {
-    case "=": return canonicalCompareEqual(left, right);
-    case "!=": return !canonicalCompareEqual(left, right);
-    case "<": return Number(left) < Number(right);
-    case ">": return Number(left) > Number(right);
-    case "<=": return Number(left) <= Number(right);
-    case ">=": return Number(left) >= Number(right);
-    case "and": return Boolean(left) && Boolean(right);
-    case "or": return Boolean(left) || Boolean(right);
-    default: return null;
+    case "=":
+      return canonicalCompareEqual(left, right);
+    case "!=":
+      return !canonicalCompareEqual(left, right);
+    case "<":
+      return Number(left) < Number(right);
+    case ">":
+      return Number(left) > Number(right);
+    case "<=":
+      return Number(left) <= Number(right);
+    case ">=":
+      return Number(left) >= Number(right);
+    case "and":
+      return Boolean(left) && Boolean(right);
+    case "or":
+      return Boolean(left) || Boolean(right);
+    default:
+      return null;
   }
 };
 
@@ -7799,7 +9171,7 @@ const canonicalCompareEqual = (left: unknown, right: unknown): boolean => {
   return false;
 };
 
-const compareScalar = (a: unknown, b: unknown): number => {
+const _compareScalar = (a: unknown, b: unknown): number => {
   if (a == null && b == null) return 0;
   if (a == null) return -1;
   if (b == null) return 1;
@@ -7822,7 +9194,9 @@ const runGelSelectSQL = (
   options: { keepInternalId?: boolean } = {},
 ): unknown[] => {
   const rows = db.prepare(sqlArtifact.sql).all(...sqlArtifact.params) as Record<string, unknown>[];
-  const visibleRows = rows.filter((row) => evaluateGelSelectPolicies(schema, db, statement, row, context));
+  const visibleRows = rows.filter((row) =>
+    evaluateGelSelectPolicies(schema, db, statement, row, context),
+  );
   return materializeGelSQLRows(visibleRows, {
     keepInternalId: options.keepInternalId ?? gelStatementProjectsId(statement),
     scalarResultIsStr: gelStatementScalarResultIsStr(statement),
@@ -7857,9 +9231,8 @@ const evaluateGelSelectPolicies = (
   row: Record<string, unknown>,
   context: SecurityContext,
 ): boolean => {
-  const sourceType = typeof row.__source_type === "string"
-    ? row.__source_type
-    : gelStatementSourceType(statement);
+  const sourceType =
+    typeof row.__source_type === "string" ? row.__source_type : gelStatementSourceType(statement);
   if (!sourceType) return true;
   const typeDef = schema.getType(sourceType);
   return typeDef ? evaluateSelectPolicies(schema, db, typeDef, row, context) : true;
@@ -7900,13 +9273,13 @@ const gelShapeElementName = (element: GelIRShapeElement): string | undefined => 
 const qualifiedGelTypeName = (typeref: GelIRTypeRef): string =>
   typeref.nameHint.includes("::") ? typeref.nameHint : `${typeref.module}::${typeref.nameHint}`;
 
-
-
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
 
 const isScalarValue = (value: unknown): value is ScalarValue =>
-  value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
-
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "number" ||
+  typeof value === "boolean";
 
 const rowSourceType = (row: Record<string, unknown>, fallbackType: string): string => {
   const type = row.__source_type;
@@ -7929,7 +9302,8 @@ const scalarToEdgeQLLiteral = (value: unknown): string | undefined => {
   if (value === null || value === undefined) return undefined;
   if (typeof value === "number") return String(value);
   if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "string") return `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+  if (typeof value === "string")
+    return `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
   return undefined;
 };
 
@@ -7952,11 +9326,12 @@ const resolveSiblingReferencingDefaults = (
   // Candidate fields: have a sibling-referencing default and were NOT given an
   // explicit value in this INSERT (those keep the user value).
   const givenFields = new Set(Object.keys(ast.values ?? {}));
-  const candidates = subjectType.fields.filter((f) =>
-    f.hasDefault
-    && !givenFields.has(f.name)
-    && typeof f.defaultExprText === "string"
-    && /(?:^|[^A-Za-z0-9_.])\.[A-Za-z_]/.test(f.defaultExprText),
+  const candidates = subjectType.fields.filter(
+    (f) =>
+      f.hasDefault &&
+      !givenFields.has(f.name) &&
+      typeof f.defaultExprText === "string" &&
+      /(?:^|[^A-Za-z0-9_.])\.[A-Za-z_]/.test(f.defaultExprText),
   );
   if (candidates.length === 0) return;
 
@@ -7980,29 +9355,51 @@ const resolveSiblingReferencingDefaults = (
   while (pending.size > 0 && progressed) {
     progressed = false;
     for (const [name, field] of [...pending]) {
-      const refs = referencedFields(field.defaultExprText!);
+      const defaultExprText = field.defaultExprText;
+      if (defaultExprText === undefined) {
+        pending.delete(name);
+        continue;
+      }
+      const refs = referencedFields(defaultExprText);
       // All referenced siblings must be resolvable: either a non-candidate
       // column (its current row value is final) or an already-resolved candidate.
       const ready = refs.every((r) => !pending.has(r) || resolved.has(r));
       if (!ready) continue;
       // Substitute each `.name` with the (current or freshly-resolved) value.
-      let exprText = field.defaultExprText!;
+      let exprText = defaultExprText;
       let substitutable = true;
       exprText = exprText.replaceAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g, (_m, ref: string) => {
         const value = ref in updates ? updates[ref] : row[ref];
         const lit = scalarToEdgeQLLiteral(value);
-        if (lit === undefined) { substitutable = false; return _m; }
+        if (lit === undefined) {
+          substitutable = false;
+          return _m;
+        }
         return lit;
       });
-      if (!substitutable) { pending.delete(name); continue; }
-      const attempt = tryResult(() => {
-        const parsed = parseEdgeQL(`SELECT (${exprText})`);
-        const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
-        const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, target: resolvedRuntimeTarget(context, db) });
-        if (!lowersToSingleSql(compiled.sql)) return undefined;
-        return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-      }, { captureAll: true });
-      if (attempt.ok && attempt.value !== undefined && attempt.value.length === 1 && isScalarValue(attempt.value[0])) {
+      if (!substitutable) {
+        pending.delete(name);
+        continue;
+      }
+      const attempt = tryResult(
+        () => {
+          const parsed = parseEdgeQL(`SELECT (${exprText})`);
+          const stmt = (Array.isArray(parsed) ? parsed[0] : parsed) as Statement;
+          const compiled = getCompilerService().compile(schema, stmt, {
+            globals: context.globals,
+            target: resolvedRuntimeTarget(context, db),
+          });
+          if (!lowersToSingleSql(compiled.sql)) return undefined;
+          return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+        },
+        { captureAll: true },
+      );
+      if (
+        attempt.ok &&
+        attempt.value !== undefined &&
+        attempt.value.length === 1 &&
+        isScalarValue(attempt.value[0])
+      ) {
         updates[name] = attempt.value[0] as ScalarValue;
         resolved.add(name);
       }
@@ -8014,8 +9411,10 @@ const resolveSiblingReferencingDefaults = (
   const cols = Object.keys(updates);
   if (cols.length === 0) return;
   const setClause = cols.map((c) => `${quoteIdent(c)} = ?`).join(", ");
-  db.prepare(`UPDATE ${quoteIdent(table)} SET ${setClause} WHERE ${quoteIdent("id")} = ?`)
-    .run(...cols.map((c) => updates[c]), rowId);
+  db.prepare(`UPDATE ${quoteIdent(table)} SET ${setClause} WHERE ${quoteIdent("id")} = ?`).run(
+    ...cols.map((c) => updates[c]),
+    rowId,
+  );
 };
 
 // Allocate the next value for a named sequence (a user scalar type extending
@@ -8032,8 +9431,8 @@ const nextSequenceValue = (db: SQLiteDatabase, sequenceName: string): number => 
   }
   const rows = db
     .prepare(
-      "INSERT INTO __gel_sequences (seq_name, last_value) VALUES (?, 1) "
-      + "ON CONFLICT(seq_name) DO UPDATE SET last_value = last_value + 1 RETURNING last_value",
+      "INSERT INTO __gel_sequences (seq_name, last_value) VALUES (?, 1) " +
+        "ON CONFLICT(seq_name) DO UPDATE SET last_value = last_value + 1 RETURNING last_value",
     )
     .all(sequenceName) as Array<{ last_value?: unknown }>;
   const value = rows[0]?.last_value;
@@ -8070,7 +9469,9 @@ const validateLinkAssignments = (
     return;
   }
 
-  const typeDef = schema.listTypes().find((candidate) => tableNameForType(qualifiedTypeName(candidate)) === ir.table);
+  const typeDef = schema
+    .listTypes()
+    .find((candidate) => tableNameForType(qualifiedTypeName(candidate)) === ir.table);
   if (!typeDef) {
     return;
   }
@@ -8093,7 +9494,12 @@ const validateLinkAssignments = (
       continue;
     }
     if (typeof assignedId !== "string") {
-      throw new AppError("E_SEMANTIC", `Invalid id for link '${link.name}': expected string`, ast.pos.line, ast.pos.column);
+      throw new AppError(
+        "E_SEMANTIC",
+        `Invalid id for link '${link.name}': expected string`,
+        ast.pos.line,
+        ast.pos.column,
+      );
     }
 
     const row = db
@@ -8149,14 +9555,23 @@ const typeDefForInsertIR = (schema: SchemaSnapshot, table: string): TypeDef | un
 // failure (same-table index or shared cross-type bookkeeping table, including
 // the `id` PRIMARY KEY) becomes "<prop> violates exclusivity constraint";
 // anything else is returned unchanged so the original error still propagates.
-const translateExclusivityWriteError = (writeErr: unknown, line: number, column: number): unknown => {
+const translateExclusivityWriteError = (
+  writeErr: unknown,
+  line: number,
+  column: number,
+): unknown => {
   const message = String((writeErr as Error)?.message ?? writeErr);
   if (/(?:UNIQUE|PRIMARY KEY) constraint failed:.*\.id\b/.test(message)) {
     return new AppError("E_VALIDATION", "id violates exclusivity constraint", line, column);
   }
   const exclusivity = parseExclusivityViolation(message);
   if (exclusivity) {
-    return new AppError("E_VALIDATION", `${exclusivity.property} violates exclusivity constraint`, line, column);
+    return new AppError(
+      "E_VALIDATION",
+      `${exclusivity.property} violates exclusivity constraint`,
+      line,
+      column,
+    );
   }
   return writeErr;
 };
@@ -8174,7 +9589,11 @@ const translateExclusivityWriteError = (writeErr: unknown, line: number, column:
 // check covering the chain's subject types at chain start, then re-reading it
 // at chain end. If any exclusive value is held by a DIFFERENT row at the end
 // than at the start, some statement re-used a reserved value → conflict.
-type ExclusiveSnapshot = Array<{ property: string; valueToId: Map<string, string>; valueToIds?: Map<string, Set<string>> }>;
+type ExclusiveSnapshot = Array<{
+  property: string;
+  valueToId: Map<string, string>;
+  valueToIds?: Map<string, Set<string>>;
+}>;
 
 const snapshotKeyForValue = (value: unknown): string => JSON.stringify(value);
 
@@ -8210,11 +9629,15 @@ const captureExclusiveSnapshotInternal = (
         // table's column; expand each element to (value → owner id).
         const col = check.multiProp;
         for (const tbl of check.tables) {
-          const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+          const cols = (
+            db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
           if (!cols.includes(col)) continue;
-          const rows = db.prepare(
-            `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteIdent(col)} AS ${quoteIdent("v")} FROM ${quoteIdent(tbl)}`,
-          ).all() as Array<{ id?: unknown; v?: unknown }>;
+          const rows = db
+            .prepare(
+              `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")}, ${quoteIdent(col)} AS ${quoteIdent("v")} FROM ${quoteIdent(tbl)}`,
+            )
+            .all() as Array<{ id?: unknown; v?: unknown }>;
           for (const row of rows) {
             if (typeof row.id !== "string" || row.v === null || row.v === undefined) continue;
             let elements: unknown[];
@@ -8233,16 +9656,35 @@ const captureExclusiveSnapshotInternal = (
         }
       } else {
         for (const tbl of check.tables) {
-          const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>).map((c) => c.name);
+          const cols = (
+            db.prepare(`PRAGMA table_info(${quoteIdent(tbl)})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
           if (!check.columns.every((c) => cols.includes(c))) continue;
-          const hasExcept = check.exceptColumn !== undefined && cols.includes(check.exceptColumn);
-          const selectCols = [...check.columns, ...(hasExcept ? [check.exceptColumn!] : [])].map((c) => quoteIdent(c)).join(", ");
-          const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")}, ${selectCols} FROM ${quoteIdent(tbl)}`).all() as Array<Record<string, unknown>>;
+          const exceptColumn = check.exceptColumn;
+          const hasExcept = exceptColumn !== undefined && cols.includes(exceptColumn);
+          const selectCols = [
+            ...check.columns,
+            ...(hasExcept && exceptColumn !== undefined ? [exceptColumn] : []),
+          ]
+            .map((c) => quoteIdent(c))
+            .join(", ");
+          const rows = db
+            .prepare(
+              `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")}, ${selectCols} FROM ${quoteIdent(tbl)}`,
+            )
+            .all() as Array<Record<string, unknown>>;
           for (const row of rows) {
             if (typeof row.id !== "string") continue;
             // `except (.flag)` — rows with a truthy flag are exempt.
-            if (hasExcept && (row[check.exceptColumn!] === 1 || row[check.exceptColumn!] === true)) continue;
-            const vals = check.columns.map((c) => (check.lower && typeof row[c] === "string" ? (row[c] as string).toLowerCase() : row[c]));
+            if (
+              exceptColumn !== undefined &&
+              hasExcept &&
+              (row[exceptColumn] === 1 || row[exceptColumn] === true)
+            )
+              continue;
+            const vals = check.columns.map((c) =>
+              check.lower && typeof row[c] === "string" ? (row[c] as string).toLowerCase() : row[c],
+            );
             if (vals.some((v) => v === null || v === undefined)) continue;
             record(snapshotKeyForValue(vals), row.id);
           }
@@ -8259,9 +9701,10 @@ const captureExclusiveSnapshotInternal = (
         const declaresTuple = (t: TypeDef): boolean =>
           (t.typeConstraints ?? []).some((tc) => {
             if (!constraintIsExclusiveLike(tc)) return false;
-            const refs = (tc.fieldRefs.length > 0
-              ? tc.fieldRefs
-              : [...(tc.exprText ?? "").matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]));
+            const refs =
+              tc.fieldRefs.length > 0
+                ? tc.fieldRefs
+                : [...(tc.exprText ?? "").matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
             return [...new Set(refs)].sort().join(",") === wanted;
           });
         let owner: TypeDef | undefined = declaresTuple(typeDef) ? typeDef : undefined;
@@ -8270,7 +9713,7 @@ const captureExclusiveSnapshotInternal = (
         }
         if (owner) {
           const qn = qualifiedTypeName(owner);
-          property = qn.includes("::") ? qn.split("::").pop()! : qn;
+          property = qn.includes("::") ? (qn.split("::").pop() ?? qn) : qn;
         }
       }
       out.push({ property, valueToId, valueToIds });
@@ -8321,14 +9764,24 @@ const validateExclusiveSnapshot = (
       // collided on the same (possibly new) value (07a/08a tuple constraints
       // that have no materialised DB index to catch the clash directly).
       if (afterIds.size > 1) {
-        throw new AppError("E_VALIDATION", `${property} violates exclusivity constraint`, pos.line, pos.column);
+        throw new AppError(
+          "E_VALIDATION",
+          `${property} violates exclusivity constraint`,
+          pos.line,
+          pos.column,
+        );
       }
       // (b) A value occupied at snapshot start now held by a DIFFERENT row: a
       // sibling freed a reserved value and another re-used it.
       const beforeId = beforeMap?.get(valueKey);
       const afterId = [...afterIds][0];
       if (beforeId !== undefined && afterId !== undefined && afterId !== beforeId) {
-        throw new AppError("E_VALIDATION", `${property} violates exclusivity constraint`, pos.line, pos.column);
+        throw new AppError(
+          "E_VALIDATION",
+          `${property} violates exclusivity constraint`,
+          pos.line,
+          pos.column,
+        );
       }
     }
   }
@@ -8342,7 +9795,10 @@ const captureExclusiveSnapshotMulti = (
   typeNames: Iterable<string>,
 ): Array<{ property: string; valueToIds: Map<string, Set<string>> }> => {
   const base = captureExclusiveSnapshotInternal(db, schema, typeNames, true);
-  return base.map((e) => ({ property: e.property, valueToIds: e.valueToIds! }));
+  return base.map((entry) => {
+    if (!entry.valueToIds) throw new Error("Exclusive snapshot is missing owner ids");
+    return { property: entry.property, valueToIds: entry.valueToIds };
+  });
 };
 
 // Collect every type name referenced by a DML chain AST (subject + WITH-bound
@@ -8353,10 +9809,18 @@ const collectChainTypeNames = (ast: Statement, defaultModule: string): Set<strin
     if (typeof raw === "string" && raw.length > 0) names.add(qualifyChainType(raw, defaultModule));
   };
   const walk = (node: unknown): void => {
-    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
     if (node === null || typeof node !== "object") return;
     const n = node as Record<string, unknown> & { kind?: string; typeName?: unknown };
-    if ((n.kind === "insert" || n.kind === "update" || n.kind === "delete" || n.kind === "mutation_expr")) {
+    if (
+      n.kind === "insert" ||
+      n.kind === "update" ||
+      n.kind === "delete" ||
+      n.kind === "mutation_expr"
+    ) {
       add(n.typeName);
     }
     for (const [k, v] of Object.entries(n)) {
@@ -8411,8 +9875,6 @@ const findConflictRowId = (
   return typeof row?.id === "string" ? row.id : undefined;
 };
 
-
-
 // One exclusive constraint visible on a type, with its origin (the type in the
 // hierarchy that actually declares it). `property` is set for a single-property
 // constraint; `exprText` is set for a type-level (composite/expression) one.
@@ -8428,7 +9890,10 @@ interface IsolationConstraint {
 // each with the ancestor that originally declares it. Inherited single-property
 // constraints don't reappear on the child's own `fields`, so this walks the
 // whole ancestor chain — matching how `exclusiveChecksFor` finds the owner.
-const gatherIsolationConstraints = (schema: SchemaSnapshot, typ: TypeDef): IsolationConstraint[] => {
+const gatherIsolationConstraints = (
+  schema: SchemaSnapshot,
+  typ: TypeDef,
+): IsolationConstraint[] => {
   const chain = [typ, ...typeAncestorsOf(schema, typ)];
   const out: IsolationConstraint[] = [];
 
@@ -8439,7 +9904,8 @@ const gatherIsolationConstraints = (schema: SchemaSnapshot, typ: TypeDef): Isola
   for (const t of chain) {
     for (const field of t.fields ?? []) {
       if (field.name === "id") continue;
-      const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean }> }).constraints ?? [];
+      const constraints =
+        (field as { constraints?: Array<{ name: string; delegated?: boolean }> }).constraints ?? [];
       const excl = constraints.find(constraintIsExclusiveLike);
       if (excl) propOwner.set(field.name, { owner: t, delegated: excl.delegated ?? false });
     }
@@ -8514,13 +9980,17 @@ const checkIsolationConflicts = (
       if (originName === typeName && constr.delegated) continue;
       // UPDATE: when the base type being updated is itself covered, the danger
       // is reported for the ancestor — skip the noisier per-child duplicate.
-      if (!isInsert && updateTypeName && updateTypeName !== typeName
-        && allConcrete.includes(updateTypeName)) continue;
+      if (
+        !isInsert &&
+        updateTypeName &&
+        updateTypeName !== typeName &&
+        allConcrete.includes(updateTypeName)
+      )
+        continue;
 
       const typeVN = `object type '${typeName}'`;
-      const subjectVN = constr.property !== undefined
-        ? `property '${constr.property}' of ${typeVN}`
-        : typeVN;
+      const subjectVN =
+        constr.property !== undefined ? `property '${constr.property}' of ${typeVN}` : typeVN;
       let vn = `${op} to ${typeVN} affects an exclusive constraint on ${subjectVN}`;
       if (constr.exprText !== undefined && constr.exprText !== "") {
         vn += ` with expression '${constr.exprText}'`;
@@ -8567,10 +10037,12 @@ const insertValueToScalarSet = (
   if (v.kind === "binding_ref" && typeof v.name === "string") {
     const resolve = makeBindingResolver(ast, context, line, column);
     const resolved = resolve(v.name);
-    return Array.isArray(resolved) ? resolved as ScalarValue[] : [resolved];
+    return Array.isArray(resolved) ? (resolved as ScalarValue[]) : [resolved];
   }
   // A single scalar wrapped in an expr node.
-  return [scalarFromInsertValue(value, makeBindingResolver(ast, context, line, column), line, column)];
+  return [
+    scalarFromInsertValue(value, makeBindingResolver(ast, context, line, column), line, column),
+  ];
 };
 
 const makeBindingResolver = (
@@ -8579,7 +10051,9 @@ const makeBindingResolver = (
   line: number,
   column: number,
 ): ((name: string) => ScalarValue) => {
-  const bindings = new Map((ast.with ?? []).map((binding) => [binding.name, binding.value] as const));
+  const bindings = new Map(
+    (ast.with ?? []).map((binding) => [binding.name, binding.value] as const),
+  );
   const cache = new Map<string, ScalarValue>();
   const pending = new Set<string>();
 
@@ -8605,11 +10079,21 @@ const makeBindingResolver = (
     } else if (binding.kind === "parameter") {
       const globals = context.globals ?? {};
       if (!Object.prototype.hasOwnProperty.call(globals, binding.name)) {
-        throw new AppError("E_SEMANTIC", `Unknown query parameter '$${binding.name}'`, line, column);
+        throw new AppError(
+          "E_SEMANTIC",
+          `Unknown query parameter '$${binding.name}'`,
+          line,
+          column,
+        );
       }
       value = globals[binding.name] as ScalarValue;
     } else {
-      throw new AppError("E_SEMANTIC", `With binding '${name}' is a subquery and cannot be scalar`, line, column);
+      throw new AppError(
+        "E_SEMANTIC",
+        `With binding '${name}' is a subquery and cannot be scalar`,
+        line,
+        column,
+      );
     }
 
     pending.delete(name);
@@ -8647,20 +10131,29 @@ const executeSelectExprRows = (
   };
 
   const compiler = getCompilerService();
-  const compiled = compiler.compile(schema, ast, { globals: context.globals, params: context.params });
+  const compiled = compiler.compile(schema, ast, {
+    globals: context.globals,
+    params: context.params,
+  });
   assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
   if (compiled.ir !== undefined) {
     return [];
   }
-  return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
-    .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+  return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, {
+    keepInternalId: true,
+  }).filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
 };
 
 const statementTypeOf = (statement: Statement): "select" | "insert" | "update" | "delete" => {
   if (statement.kind === "for") {
     return statement.body.kind === "insert" ? "insert" : "select";
   }
-  if (statement.kind === "select" || statement.kind === "insert" || statement.kind === "update" || statement.kind === "delete") {
+  if (
+    statement.kind === "select" ||
+    statement.kind === "insert" ||
+    statement.kind === "update" ||
+    statement.kind === "delete"
+  ) {
     return statement.kind;
   }
   return "select";
@@ -8670,7 +10163,9 @@ const normalizeSecurityContext = (context: SecurityContext): SecurityContext => 
   return {
     roleName: context.roleName ?? DEFAULT_SECURITY_CONTEXT.roleName,
     isSuperuser: context.isSuperuser ?? DEFAULT_SECURITY_CONTEXT.isSuperuser,
-    permissions: context.permissions ? [...context.permissions] : [...(DEFAULT_SECURITY_CONTEXT.permissions ?? [])],
+    permissions: context.permissions
+      ? [...context.permissions]
+      : [...(DEFAULT_SECURITY_CONTEXT.permissions ?? [])],
     globals: { ...(DEFAULT_SECURITY_CONTEXT.globals ?? {}), ...(context.globals ?? {}) },
     params: context.params ? { ...context.params } : undefined,
     runtimeTarget: context.runtimeTarget ?? DEFAULT_SECURITY_CONTEXT.runtimeTarget,
@@ -8721,18 +10216,23 @@ const evaluatePolicyUsingExpr = (
   usingExprText: string,
 ): boolean => {
   const qname = qualifiedTypeName(typeDef);
-  const moduleName = typeDef.module ?? (qname.includes("::") ? qname.slice(0, qname.lastIndexOf("::")) : "default");
+  const moduleName =
+    typeDef.module ?? (qname.includes("::") ? qname.slice(0, qname.lastIndexOf("::")) : "default");
   const shortName = qname.includes("::") ? qname.slice(qname.lastIndexOf("::") + 2) : qname;
   // subjectId is a DB-generated UUID (hex + dashes), safe to inline as an
   // EdgeQL uuid literal.
-  const query = `with module ${moduleName}\n`
-    + `select ${shortName} { __ap_check := (${usingExprText}) } filter .id = <uuid>'${subjectId}'`;
+  const query =
+    `with module ${moduleName}\n` +
+    `select ${shortName} { __ap_check := (${usingExprText}) } filter .id = <uuid>'${subjectId}'`;
   const elevated: SecurityContext = { ...context, isSuperuser: true };
-  const probe = tryResult(
-    () => executeQueryWithTraceImpl(db, schema, query, elevated),
-    { captureAll: true },
-  );
-  if (!probe.ok || probe.value.result.kind !== "select" || !Array.isArray(probe.value.result.rows)) {
+  const probe = tryResult(() => executeQueryWithTraceImpl(db, schema, query, elevated), {
+    captureAll: true,
+  });
+  if (
+    !probe.ok ||
+    probe.value.result.kind !== "select" ||
+    !Array.isArray(probe.value.result.rows)
+  ) {
     return false;
   }
   const row = probe.value.result.rows[0] as Record<string, unknown> | undefined;
@@ -8741,16 +10241,18 @@ const evaluatePolicyUsingExpr = (
 
 // Build the `evalUsingExpr` injection access_policy.ts uses to resolve a
 // predicate-bearing policy against a concrete subject row (keyed by id).
-const policyExprEvaluator = (
-  db: SQLiteDatabase,
-  schema: SchemaSnapshot,
-  context: SecurityContext,
-  subjectType: TypeDef,
-): PolicyExprEvaluator => (policy, row) => {
-  const id = row.id;
-  if (typeof id !== "string" || policy.usingExprText === undefined) return false;
-  return evaluatePolicyUsingExpr(db, schema, context, subjectType, id, policy.usingExprText);
-};
+const policyExprEvaluator =
+  (
+    db: SQLiteDatabase,
+    schema: SchemaSnapshot,
+    context: SecurityContext,
+    subjectType: TypeDef,
+  ): PolicyExprEvaluator =>
+  (policy, row) => {
+    const id = row.id;
+    if (typeof id !== "string" || policy.usingExprText === undefined) return false;
+    return evaluatePolicyUsingExpr(db, schema, context, subjectType, id, policy.usingExprText);
+  };
 
 // ── Decolored DELETE write core (ADR 0060 / db_effect) ──────────────────────
 // The delete path as a DbEffect: it yields its DB ops, so the SAME logic runs
@@ -8782,7 +10284,10 @@ function* applyOnTargetDeletePoliciesEffect(
     return;
   }
   const targetQualifiedName = qualifiedTypeName(targetType);
-  const linkTargetsType = (link: NonNullable<TypeDef["links"]>[number], sourceModule: string): boolean => {
+  const linkTargetsType = (
+    link: NonNullable<TypeDef["links"]>[number],
+    sourceModule: string,
+  ): boolean => {
     const targets = normalizeLinkTargetNames(link.targetType, sourceModule);
     return targets.some((target) => {
       if (target === targetQualifiedName) {
@@ -8805,7 +10310,10 @@ function* applyOnTargetDeletePoliciesEffect(
       const sourceIds = new Set<string>();
 
       if (usesLinkTable(link)) {
-        const linkTable = linkTableName(qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, link)), link);
+        const linkTable = linkTableName(
+          qualifiedTypeName(resolveLinkStorageOwner(schema, sourceType, link)),
+          link,
+        );
         const placeholders = targetIds.map(() => "?").join(", ");
         const rows = (yield* dbAll(
           `SELECT ${quoteIdent("source")} AS ${quoteIdent("source")} FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("target")} IN (${placeholders})`,
@@ -8865,7 +10373,12 @@ export function* deleteWriteEffect(
 ): DbEffect<{ changes: number; rows?: Record<string, unknown>[] }> {
   const preRows = yield* readTargetRowsForFilterEffect(ir.table, ir.filter);
   enforcePolicies(preRows);
-  yield* applyOnTargetDeletePoliciesEffect(schema, subjectType, preRows.map((row) => String(row.id)), astPos);
+  yield* applyOnTargetDeletePoliciesEffect(
+    schema,
+    subjectType,
+    preRows.map((row) => String(row.id)),
+    astPos,
+  );
   if (/\bRETURNING\b/i.test(sqlArtifact.sql)) {
     const rows = yield* dbAll(sqlArtifact.sql, ...sqlArtifact.params);
     return { changes: rows.length, rows };
@@ -8966,19 +10479,28 @@ export function* insertScalarWriteEffect(
   applyPendingInsertDefaults(insertValues, {
     subjectType,
     evalSelect: () => {
-      throw new AsyncUnsupportedError("INSERT default requires a subquery — not supported on the async write path");
+      throw new AsyncUnsupportedError(
+        "INSERT default requires a subquery — not supported on the async write path",
+      );
     },
     evalFunctionCall: () => {
-      throw new AsyncUnsupportedError("INSERT default requires a function call — not supported on the async write path");
+      throw new AsyncUnsupportedError(
+        "INSERT default requires a function call — not supported on the async write path",
+      );
     },
     isResolvedSourceValue: (v) =>
-      v !== undefined && v !== PENDING_INSERT_REWRITE_VALUE && v !== PENDING_INLINE_LINK_VALUE && v !== PENDING_INSERT_SQL_EXPR_VALUE,
+      v !== undefined &&
+      v !== PENDING_INSERT_REWRITE_VALUE &&
+      v !== PENDING_INLINE_LINK_VALUE &&
+      v !== PENDING_INSERT_SQL_EXPR_VALUE,
     isPendingRewriteValue: (v) => v === PENDING_INSERT_REWRITE_VALUE,
   });
 
   for (const field of subjectType.fields) {
     if (insertValues[field.name] === PENDING_INSERT_SEQUENCE_VALUE) {
-      throw new AsyncUnsupportedError("sequence-backed INSERT is not supported on the async write path");
+      throw new AsyncUnsupportedError(
+        "sequence-backed INSERT is not supported on the async write path",
+      );
     }
   }
 
@@ -8992,15 +10514,25 @@ export function* insertScalarWriteEffect(
     return true;
   });
 
-  const builtInsert = buildInsertRowSql(ir.table, normalizedEntries, sqlArtifact.insertColumns ?? [], ast.pos);
+  const builtInsert = buildInsertRowSql(
+    ir.table,
+    normalizedEntries,
+    sqlArtifact.insertColumns ?? [],
+    ast.pos,
+  );
   const writeResult = yield* dbRun(builtInsert.sql, ...builtInsert.params);
   const idRows = yield* dbAll(
     `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`,
   );
   const insertedId = typeof idRows[0]?.id === "string" ? (idRows[0].id as string) : undefined;
-  const insertMeta = ast.kind === "insert"
-    ? { __tid__: insertedId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }
-    : {};
+  const insertMeta =
+    ast.kind === "insert"
+      ? {
+          __tid__: insertedId,
+          __tname__: qualifiedTypeName(subjectType),
+          __source_type: qualifiedTypeName(subjectType),
+        }
+      : {};
   return {
     changes: writeResult.changes,
     rows: insertedId !== undefined ? [{ id: insertedId, ...insertMeta }] : undefined,
@@ -9035,11 +10567,20 @@ const runWriteWithAccessPolicies = (
   validateLinkAssignments(db, schema, ir, ast);
 
   if (ast.kind === "update") {
-    const readonlyFields = new Set(subjectType.fields.filter((field) => field.readonly).map((field) => field.name));
-    const readonlyLinks = new Set((subjectType.links ?? []).filter((link) => link.readonly).map((link) => link.name));
+    const readonlyFields = new Set(
+      subjectType.fields.filter((field) => field.readonly).map((field) => field.name),
+    );
+    const readonlyLinks = new Set(
+      (subjectType.links ?? []).filter((link) => link.readonly).map((link) => link.name),
+    );
     for (const fieldName of Object.keys(ast.values)) {
       if (readonlyFields.has(fieldName) || readonlyLinks.has(fieldName)) {
-        throw new AppError("E_SEMANTIC", `cannot update read-only pointer '${fieldName}'`, ast.pos.line, ast.pos.column);
+        throw new AppError(
+          "E_SEMANTIC",
+          `cannot update read-only pointer '${fieldName}'`,
+          ast.pos.line,
+          ast.pos.column,
+        );
       }
     }
   }
@@ -9065,13 +10606,21 @@ const runWriteWithAccessPolicies = (
         subjectType,
         snapshotDefaultCache,
         evalSelect: (stmt) => {
-          const compiled = getCompilerService().compile(schema, stmt, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
+          const compiled = getCompilerService().compile(schema, stmt, {
+            globals: context.globals,
+            params: context.params,
+            target: resolvedRuntimeTarget(context, db),
+          });
           if (!lowersToSingleSql(compiled.sql)) return undefined;
           return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
         },
-        evalFunctionCall: (name, args) => executeFunctionCall(schema, db, context, name, args, fnDispatchDeps()),
+        evalFunctionCall: (name, args) =>
+          executeFunctionCall(schema, db, context, name, args, fnDispatchDeps()),
         isResolvedSourceValue: (v) =>
-          v !== undefined && v !== PENDING_INSERT_REWRITE_VALUE && v !== PENDING_INLINE_LINK_VALUE && v !== PENDING_INSERT_SQL_EXPR_VALUE,
+          v !== undefined &&
+          v !== PENDING_INSERT_REWRITE_VALUE &&
+          v !== PENDING_INLINE_LINK_VALUE &&
+          v !== PENDING_INSERT_SQL_EXPR_VALUE,
         isPendingRewriteValue: (v) => v === PENDING_INSERT_REWRITE_VALUE,
       });
 
@@ -9116,12 +10665,19 @@ const runWriteWithAccessPolicies = (
       // The final column set is known only now — after defaults, sequences,
       // and inline-link targets resolve — so the INSERT row SQL is emitted at
       // write time by the pure builder in runtime/dml_sql.ts. See docs/adr/0046.
-      const builtInsert = buildInsertRowSql(ir.table, normalizedEntries, sqlArtifact.insertColumns ?? [], ast.pos);
+      const builtInsert = buildInsertRowSql(
+        ir.table,
+        normalizedEntries,
+        sqlArtifact.insertColumns ?? [],
+        ast.pos,
+      );
       sqlArtifact.sql = builtInsert.sql;
       sqlArtifact.params = builtInsert.params;
       // The compiled SQL expressions for planner-deferred columns, reused by
       // the UNLESS CONFLICT resolved-value probe further below.
-      const sqlExprByColumn = new Map((sqlArtifact.insertColumns ?? []).map((entry) => [entry.column, entry]));
+      const sqlExprByColumn = new Map(
+        (sqlArtifact.insertColumns ?? []).map((entry) => [entry.column, entry]),
+      );
 
       // Access-policy enforcement runs AFTER the row + its links are written
       // (see below), so a `USING (...)` predicate over the inserted object's
@@ -9135,10 +10691,16 @@ const runWriteWithAccessPolicies = (
       // DDL-synthesized types, whose constraint metadata isn't fully tracked
       // (the runtime CREATE TYPE pre-pass drops `CREATE CONSTRAINT`), to avoid
       // false positives.
-      const ddlTracked = subjectType.ddlSynthesized
-        || (subjectType.extends ?? []).some((b) => schema.getType(b)?.ddlSynthesized);
-      if (!ddlTracked && ast.kind === "insert" && ast.conflict?.onField !== undefined
-          && ast.conflict.onFields === undefined && ast.conflict.onField !== "id") {
+      const ddlTracked =
+        subjectType.ddlSynthesized ||
+        (subjectType.extends ?? []).some((b) => schema.getType(b)?.ddlSynthesized);
+      if (
+        !ddlTracked &&
+        ast.kind === "insert" &&
+        ast.conflict?.onField !== undefined &&
+        ast.conflict.onFields === undefined &&
+        ast.conflict.onField !== "id"
+      ) {
         const onProp = ast.conflict.onField;
         const fieldDef = subjectType.fields.find((f) => f.name === onProp);
         if (!fieldDef) {
@@ -9149,11 +10711,14 @@ const runWriteWithAccessPolicies = (
             ast.pos.column,
           );
         }
-        const fieldExclusive = ((fieldDef as { constraints?: Array<{ name: string }> }).constraints ?? []).some(
-          (c) => c.name === "std::exclusive" || c.name === "exclusive",
-        );
+        const fieldExclusive = (
+          (fieldDef as { constraints?: Array<{ name: string }> }).constraints ?? []
+        ).some((c) => c.name === "std::exclusive" || c.name === "exclusive");
         const typeExclusive = (subjectType.typeConstraints ?? []).some(
-          (c) => (c.name === "std::exclusive" || c.name === "exclusive") && c.fieldRefs.length === 1 && c.fieldRefs[0] === onProp,
+          (c) =>
+            (c.name === "std::exclusive" || c.name === "exclusive") &&
+            c.fieldRefs.length === 1 &&
+            c.fieldRefs[0] === onProp,
         );
         if (!fieldExclusive && !typeExclusive) {
           throw new AppError(
@@ -9169,7 +10734,9 @@ const runWriteWithAccessPolicies = (
       // ON (.name)) can't be reconciled with an existing row — reject it
       // (test _16b). Only applies when an explicit ON target names the field.
       if (!ddlTracked && ast.kind === "insert" && ast.conflict) {
-        const onTargetFields = ast.conflict.onFields ?? (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
+        const onTargetFields =
+          ast.conflict.onFields ??
+          (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
         if (onTargetFields) {
           for (const targetField of onTargetFields) {
             if (insertValueIsVolatile(ast.values[targetField])) {
@@ -9188,7 +10755,9 @@ const runWriteWithAccessPolicies = (
         // Conflict target → the exclusive constraints to test. An explicit
         // `ON (...)` restricts to the constraint over exactly those fields; a
         // bare UNLESS CONFLICT tests every exclusive constraint on the type.
-        const targetFields = ast.conflict.onFields ?? (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
+        const targetFields =
+          ast.conflict.onFields ??
+          (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
         const checks = exclusiveChecksFor(schema, subjectType, targetFields);
 
         if (checks.length > 0) {
@@ -9199,7 +10768,10 @@ const runWriteWithAccessPolicies = (
           // the parent type is fine — it correctly reaches that row (test
           // _20b: `ELSE (UPDATE Person …)` while inserting DerivedPerson).
           if (ast.conflict.else && checks.some((c) => c.fromParent)) {
-            const elseType = qualifyChainType(ast.conflict.else.typeName, ast.withModule ?? "default");
+            const elseType = qualifyChainType(
+              ast.conflict.else.typeName,
+              ast.withModule ?? "default",
+            );
             const insertedType = qualifiedTypeName(subjectType);
             if (elseType === insertedType) {
               throw new AppError(
@@ -9225,24 +10797,36 @@ const runWriteWithAccessPolicies = (
             // set of values, not an own-table column.
             if (checks.some((c) => c.multiProp === col)) {
               const rawMulti = ast.values[col];
-              const attempt = tryResult(() => insertValueToScalarSet(rawMulti, ast, context, ast.pos.line, ast.pos.column), { captureAll: true });
-              resolvedColumnValues[col] = attempt.ok ? attempt.value as unknown as ScalarValue : undefined;
+              const attempt = tryResult(
+                () => insertValueToScalarSet(rawMulti, ast, context, ast.pos.line, ast.pos.column),
+                { captureAll: true },
+              );
+              resolvedColumnValues[col] = attempt.ok
+                ? (attempt.value as unknown as ScalarValue)
+                : undefined;
               continue;
             }
-            if (Object.prototype.hasOwnProperty.call(insertValues, col)
-                && insertValues[col] !== PENDING_INSERT_SQL_EXPR_VALUE
-                && insertValues[col] !== PENDING_INLINE_LINK_VALUE
-                && insertValues[col] !== PENDING_INSERT_REWRITE_VALUE
-                && isScalarValue(insertValues[col])) {
+            if (
+              Object.prototype.hasOwnProperty.call(insertValues, col) &&
+              insertValues[col] !== PENDING_INSERT_SQL_EXPR_VALUE &&
+              insertValues[col] !== PENDING_INLINE_LINK_VALUE &&
+              insertValues[col] !== PENDING_INSERT_REWRITE_VALUE &&
+              isScalarValue(insertValues[col])
+            ) {
               resolvedColumnValues[col] = insertValues[col];
               continue;
             }
             const compiledColumn = sqlExprByColumn.get(col);
             if (compiledColumn) {
-              const attempt = tryResult(() => {
-                const row = db.prepare(`SELECT ${compiledColumn.sql} AS ${quoteIdent("v")}`).all(...compiledColumn.params)[0] as { v?: unknown } | undefined;
-                return row && isScalarValue(row.v) ? row.v : undefined;
-              }, { captureAll: true });
+              const attempt = tryResult(
+                () => {
+                  const row = db
+                    .prepare(`SELECT ${compiledColumn.sql} AS ${quoteIdent("v")}`)
+                    .all(...compiledColumn.params)[0] as { v?: unknown } | undefined;
+                  return row && isScalarValue(row.v) ? row.v : undefined;
+                },
+                { captureAll: true },
+              );
               resolvedColumnValues[col] = attempt.ok ? attempt.value : undefined;
             }
           }
@@ -9269,16 +10853,40 @@ const runWriteWithAccessPolicies = (
                 kind: "update",
                 with: (ast as { with?: WithBinding[] }).with,
                 withModule: (ast as { withModule?: string }).withModule,
-                withModuleAliases: (ast as { withModuleAliases?: WithModuleAlias[] }).withModuleAliases,
+                withModuleAliases: (ast as { withModuleAliases?: WithModuleAlias[] })
+                  .withModuleAliases,
                 typeName: ast.conflict.else.typeName,
-                filter: { kind: "predicate", target: { kind: "field", field: "id" }, op: "=", value: existingId } as unknown as UpdateStatement["filter"],
+                filter: {
+                  kind: "predicate",
+                  target: { kind: "field", field: "id" },
+                  op: "=",
+                  value: existingId,
+                } as unknown as UpdateStatement["filter"],
                 values: ast.conflict.else.values,
                 operations: ast.conflict.else.operations,
                 pos: ast.pos,
               } as unknown as UpdateStatement;
               db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
-              executeDmlChainStatement(db, schema, elseUpdate, new Map(), undefined, context, ast.withModule ?? "default");
-              return { changes: 1, rows: [{ id: existingId, __tid__: existingId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }] };
+              executeDmlChainStatement(
+                db,
+                schema,
+                elseUpdate,
+                new Map(),
+                undefined,
+                context,
+                ast.withModule ?? "default",
+              );
+              return {
+                changes: 1,
+                rows: [
+                  {
+                    id: existingId,
+                    __tid__: existingId,
+                    __tname__: qualifiedTypeName(subjectType),
+                    __source_type: qualifiedTypeName(subjectType),
+                  },
+                ],
+              };
             }
 
             db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
@@ -9286,7 +10894,17 @@ const runWriteWithAccessPolicies = (
             // yields the empty set (an empty rows array so the result reads
             // as `[]`, e.g. test_edgeql_insert_explicit_id_05).
             return ast.conflict.else
-              ? { changes: 0, rows: [{ id: existingId, __tid__: existingId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }] }
+              ? {
+                  changes: 0,
+                  rows: [
+                    {
+                      id: existingId,
+                      __tid__: existingId,
+                      __tname__: qualifiedTypeName(subjectType),
+                      __source_type: qualifiedTypeName(subjectType),
+                    },
+                  ],
+                }
               : { changes: 0, rows: [] };
           }
         }
@@ -9296,7 +10914,9 @@ const runWriteWithAccessPolicies = (
       try {
         writeResult = db.prepare(sqlArtifact.sql).run(...sqlArtifact.params);
       } catch (writeErr) {
-        const exclusivity = parseExclusivityViolation(String((writeErr as Error).message ?? writeErr));
+        const exclusivity = parseExclusivityViolation(
+          String((writeErr as Error).message ?? writeErr),
+        );
         // UNLESS CONFLICT (without ELSE) suppresses conflicts the static
         // pre-check above couldn't resolve — the UNIQUE failure IS the
         // conflict, so the insert quietly does nothing. Plain UNLESS CONFLICT
@@ -9308,7 +10928,9 @@ const runWriteWithAccessPolicies = (
           // constraint still surfaces (test _22: `ON (.foo)` does not swallow a
           // `bar` violation). A bare UNLESS CONFLICT covers any same-type
           // constraint but not a shared cross-type one.
-          const onTargetFields = ast.conflict.onFields ?? (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
+          const onTargetFields =
+            ast.conflict.onFields ??
+            (ast.conflict.onField !== undefined ? [ast.conflict.onField] : undefined);
           // This catch path only fires for conflicts the pre-check above did
           // NOT resolve. For a fully-tracked schema that means the clashing row
           // did not exist before this statement — i.e. a same-statement
@@ -9322,10 +10944,18 @@ const runWriteWithAccessPolicies = (
           // cross_type_conflict_08/09). The conflicting value lives in the
           // shared/own exclusivity table keyed by the violated property; if the
           // only matching row was inserted this statement, refuse suppression.
-          const sameStatement = conflictIsAgainstSameStatementRow(db, schema, subjectType, exclusivity.property, context.statementInsertedIds);
-          const suppress = !sameStatement && (onTargetFields !== undefined
-            ? onTargetFields.includes(exclusivity.property)
-            : (!exclusivity.crossType || ddlTracked));
+          const sameStatement = conflictIsAgainstSameStatementRow(
+            db,
+            schema,
+            subjectType,
+            exclusivity.property,
+            context.statementInsertedIds,
+          );
+          const suppress =
+            !sameStatement &&
+            (onTargetFields !== undefined
+              ? onTargetFields.includes(exclusivity.property)
+              : !exclusivity.crossType || ddlTracked);
           if (suppress) {
             db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
             return { changes: 0, rows: [] };
@@ -9334,8 +10964,13 @@ const runWriteWithAccessPolicies = (
         // A plain UNIQUE failure with no parsed exclusivity metadata still
         // suppresses under UNLESS CONFLICT (no ELSE), unless the clash is
         // against a same-statement row.
-        if (ast.kind === "insert" && ast.conflict && !ast.conflict.else && !exclusivity
-            && String((writeErr as Error).message ?? writeErr).includes("UNIQUE constraint failed")) {
+        if (
+          ast.kind === "insert" &&
+          ast.conflict &&
+          !ast.conflict.else &&
+          !exclusivity &&
+          String((writeErr as Error).message ?? writeErr).includes("UNIQUE constraint failed")
+        ) {
           db.prepare(dmlUsesSavepoint ? "RELEASE gel_dml" : "COMMIT").run();
           return { changes: 0, rows: [] };
         }
@@ -9365,11 +11000,15 @@ const runWriteWithAccessPolicies = (
         // A SQL-lowered assignment that evaluates to the empty set inserts
         // NULL; the schema's NOT NULL constraint then fires. Surface it with
         // EdgeQL's required-pointer wording instead of SQLite's.
-        const match = /NOT NULL constraint failed: [^.]+\.(\S+)/.exec(String((writeErr as Error).message ?? writeErr));
+        const match = /NOT NULL constraint failed: [^.]+\.(\S+)/.exec(
+          String((writeErr as Error).message ?? writeErr),
+        );
         if (match) {
           const column = match[1];
           const linkName = column.endsWith("_id") ? column.slice(0, -3) : undefined;
-          const isLink = linkName !== undefined && (subjectType.links ?? []).some((link) => link.name === linkName);
+          const isLink =
+            linkName !== undefined &&
+            (subjectType.links ?? []).some((link) => link.name === linkName);
           throw new AppError(
             "E_VALIDATION",
             `missing value for required ${isLink ? "link" : "property"} '${isLink ? linkName : column}' of object type '${qualifiedTypeName(subjectType)}'`,
@@ -9383,14 +11022,18 @@ const runWriteWithAccessPolicies = (
       let insertedId: string | undefined;
       if (ast.kind === "insert") {
         const inserted = db
-          .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`)
+          .prepare(
+            `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(ir.table)} ORDER BY rowid DESC LIMIT 1`,
+          )
           .all()[0] as { id?: unknown } | undefined;
         if (typeof inserted?.id === "string") {
           insertedId = inserted.id;
           context.statementInsertedIds?.add(inserted.id);
           const postInsertIR = {
             ...ir,
-            linkAssignments: ir.linkAssignments?.filter((assignment) => assignment.storage !== "inline"),
+            linkAssignments: ir.linkAssignments?.filter(
+              (assignment) => assignment.storage !== "inline",
+            ),
           };
           applyInsertLinkAssignments(db, schema, postInsertIR, ast, inserted.id, context);
         }
@@ -9400,7 +11043,15 @@ const runWriteWithAccessPolicies = (
         // or other defaults. Resolve them against the written row now, in
         // dependency order, then patch the row (test_edgeql_insert_default_07/08).
         if (typeof inserted?.id === "string") {
-          resolveSiblingReferencingDefaults(db, schema, subjectType, ir.table, inserted.id, ast, context);
+          resolveSiblingReferencingDefaults(
+            db,
+            schema,
+            subjectType,
+            ir.table,
+            inserted.id,
+            ast,
+            context,
+          );
         }
       }
 
@@ -9422,10 +11073,18 @@ const runWriteWithAccessPolicies = (
       // free shape behaves like any object set — clients/tooling that inspect
       // the object's type (test_edgeql_insert_returning_02) see them, while
       // result comparison ignores extra keys.
-      const insertMeta = ast.kind === "insert"
-        ? { __tid__: insertedId, __tname__: qualifiedTypeName(subjectType), __source_type: qualifiedTypeName(subjectType) }
-        : {};
-      return { changes: writeResult.changes, rows: insertedId !== undefined ? [{ id: insertedId, ...insertMeta }] : undefined };
+      const insertMeta =
+        ast.kind === "insert"
+          ? {
+              __tid__: insertedId,
+              __tname__: qualifiedTypeName(subjectType),
+              __source_type: qualifiedTypeName(subjectType),
+            }
+          : {};
+      return {
+        changes: writeResult.changes,
+        rows: insertedId !== undefined ? [{ id: insertedId, ...insertMeta }] : undefined,
+      };
     }
 
     if (ir.kind === "update") {
@@ -9441,13 +11100,35 @@ const runWriteWithAccessPolicies = (
           ast.pos,
           ast.kind === "update",
           (preRows) =>
-            enforceUpdateReadPolicies(subjectType, preRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType)),
+            enforceUpdateReadPolicies(
+              subjectType,
+              preRows,
+              context,
+              ast.pos.line,
+              ast.pos.column,
+              policyExprEvaluator(db, schema, context, subjectType),
+            ),
           (sourceIds) => {
-            applyUpdateMultiScalarProps(db, schema, subjectType, ir, ast as UpdateStatement, sourceIds, ast.pos);
+            applyUpdateMultiScalarProps(
+              db,
+              schema,
+              subjectType,
+              ir,
+              ast as UpdateStatement,
+              sourceIds,
+              ast.pos,
+            );
             applyUpdateLinkAssignments(db, schema, ir, ast as UpdateStatement, sourceIds, context);
           },
           (updatedRows) =>
-            enforceUpdateWritePolicies(subjectType, updatedRows, context, ast.pos.line, ast.pos.column, policyExprEvaluator(db, schema, context, subjectType)),
+            enforceUpdateWritePolicies(
+              subjectType,
+              updatedRows,
+              context,
+              ast.pos.line,
+              ast.pos.column,
+              policyExprEvaluator(db, schema, context, subjectType),
+            ),
         ),
         syncDbExec(db),
       );
@@ -9502,14 +11183,19 @@ const executeMutationBinding = (
   const compilerService = getCompilerService();
   const runtimeTarget = resolvedRuntimeTarget(context, db);
 
-  const expanded: Statement[] = (statement.kind === "update" || statement.kind === "delete")
-    ? (expandPolymorphicMutation(schema, statement) ?? [statement])
-    : [statement];
+  const expanded: Statement[] =
+    statement.kind === "update" || statement.kind === "delete"
+      ? (expandPolymorphicMutation(schema, statement) ?? [statement])
+      : [statement];
 
   const collected: Record<string, unknown>[] = [];
 
   for (const ast of expanded) {
-    const compiled = compilerService.compile(schema, ast, { globals: context.globals, params: context.params, target: runtimeTarget });
+    const compiled = compilerService.compile(schema, ast, {
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+    });
     const ir = compiled.ir;
     if (!ir || (ir.kind !== "update" && ir.kind !== "insert" && ir.kind !== "delete")) {
       continue;
@@ -9535,7 +11221,15 @@ const executeMutationBinding = (
 
     if (ir.kind === "delete") {
       const preRows = readTargetRowsForFilter(db, ir.table, ir.filter);
-      const writeResult = runWriteWithAccessPolicies(db, schema, ast, ir, sqlArtifact, subjectType, context);
+      const writeResult = runWriteWithAccessPolicies(
+        db,
+        schema,
+        ast,
+        ir,
+        sqlArtifact,
+        subjectType,
+        context,
+      );
       const deletedRows = writeResult.rows ?? preRows;
       for (const row of deletedRows) {
         collected.push({ ...row, __source_type: concreteName });
@@ -9577,7 +11271,10 @@ const executeNestedInsert = (
   };
 
   const compiler = getCompilerService();
-  const compiled = compiler.compile(schema, ast, { globals: context.globals, params: context.params });
+  const compiled = compiler.compile(schema, ast, {
+    globals: context.globals,
+    params: context.params,
+  });
   assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
   if (!compiled.ir || compiled.ir.kind !== "insert") {
     return [];
@@ -9592,7 +11289,15 @@ const executeNestedInsert = (
   // conflict-aware write path so a clash is suppressed / resolved via ELSE
   // rather than tripping the constraint.
   if (ast.conflict) {
-    const writeResult = runWriteWithAccessPolicies(db, schema, ast, compiled.ir, compiled.sql, typeDef, context);
+    const writeResult = runWriteWithAccessPolicies(
+      db,
+      schema,
+      ast,
+      compiled.ir,
+      compiled.sql,
+      typeDef,
+      context,
+    );
     return (writeResult.rows ?? [])
       .map((row) => (row as { id?: unknown }).id)
       .filter((id): id is string => typeof id === "string");
@@ -9605,7 +11310,9 @@ const executeNestedInsert = (
   enforceInsertPolicies(typeDef, compiled.ir.values, context, 1, 1);
   db.prepare(compiled.sql.sql).run(...compiled.sql.params);
   const inserted = db
-    .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(compiled.ir.table)} ORDER BY rowid DESC LIMIT 1`)
+    .prepare(
+      `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(compiled.ir.table)} ORDER BY rowid DESC LIMIT 1`,
+    )
     .all()[0] as { id?: unknown } | undefined;
   if (typeof inserted?.id !== "string") {
     return [];
@@ -9656,13 +11363,21 @@ const resolveLinkValueViaSelectSQL = (
     withModuleAliases: ast.withModuleAliases,
     pos: ast.pos,
   } as unknown as Statement;
-  const attempt = tryResult(() => {
-    const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-    if (!lowersToSingleSql(compiled.sql)) return undefined;
-    if (compiled.ir !== undefined) return undefined;
-    return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
-      .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
-  }, { captureAll: true });
+  const attempt = tryResult(
+    () => {
+      const compiled = getCompilerService().compile(schema, stmtAst, {
+        globals: context.globals,
+        params: context.params,
+        target: resolvedRuntimeTarget(context, db),
+      });
+      if (!lowersToSingleSql(compiled.sql)) return undefined;
+      if (compiled.ir !== undefined) return undefined;
+      return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, {
+        keepInternalId: true,
+      }).filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+    },
+    { captureAll: true },
+  );
   if (!attempt.ok || attempt.value === undefined) return undefined;
   return attempt.value
     .map((row) => {
@@ -9698,7 +11413,10 @@ const resolveInsertTargets = (
     const n = node as { kind?: string; call?: { name?: string; args?: unknown[] } };
     if (n.kind !== "function_call") return undefined;
     const fnName = (n.call?.name ?? "").split("::").pop();
-    if (!fnName || !["assert_distinct", "assert_single", "assert_exists", "distinct"].includes(fnName)) {
+    if (
+      !fnName ||
+      !["assert_distinct", "assert_single", "assert_exists", "distinct"].includes(fnName)
+    ) {
       return undefined;
     }
     const arg = n.call?.args?.[0];
@@ -9710,24 +11428,38 @@ const resolveInsertTargets = (
   if (directIdentityTargets !== undefined) return directIdentityTargets;
 
   if (valueAsRecord.kind === "set_expr") {
-    return ((valueAsRecord.values as InsertValue[] | undefined) ?? [])
-      .flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
+    return ((valueAsRecord.values as InsertValue[] | undefined) ?? []).flatMap((item) =>
+      resolveInsertTargets(db, schema, item, context, ast),
+    );
   }
 
   if (valueAsRecord.kind === "select_expr_subquery") {
-    const unwrapped = valueAsRecord.expr as (FreeObjectExpr | undefined);
+    const unwrapped = valueAsRecord.expr as FreeObjectExpr | undefined;
     if (unwrapped && typeof unwrapped === "object") {
       const identityTargets = resolveIdentityFunctionTargets(unwrapped);
       if (identityTargets !== undefined) return identityTargets;
       if ((unwrapped as { kind?: string }).kind === "set_expr") {
-        return (((unwrapped as { values?: InsertValue[] }).values) ?? [])
-          .flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
+        return ((unwrapped as { values?: InsertValue[] }).values ?? []).flatMap((item) =>
+          resolveInsertTargets(db, schema, item, context, ast),
+        );
       }
       if (unwrapped.kind === "shape_projection") {
-        return resolveInsertTargets(db, schema, { kind: "expr", expr: unwrapped } as InsertValue, context, ast);
+        return resolveInsertTargets(
+          db,
+          schema,
+          { kind: "expr", expr: unwrapped } as InsertValue,
+          context,
+          ast,
+        );
       }
       if (unwrapped.kind === "select") {
-        return resolveInsertTargets(db, schema, unwrapped as unknown as Extract<InsertValue, { kind: "select" }>, context, ast);
+        return resolveInsertTargets(
+          db,
+          schema,
+          unwrapped as unknown as Extract<InsertValue, { kind: "select" }>,
+          context,
+          ast,
+        );
       }
     }
   }
@@ -9745,22 +11477,36 @@ const resolveInsertTargets = (
       } as unknown as Statement;
       // captureAll: bindings that don't evaluate to object rows just yield no
       // link targets.
-      const attempt = tryResult(() => {
-        const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-        if (!lowersToSingleSql(compiled.sql)) return undefined;
-        return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
-      }, { captureAll: true });
+      const attempt = tryResult(
+        () => {
+          const compiled = getCompilerService().compile(schema, stmtAst, {
+            globals: context.globals,
+            params: context.params,
+            target: resolvedRuntimeTarget(context, db),
+          });
+          if (!lowersToSingleSql(compiled.sql)) return undefined;
+          return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
+        },
+        { captureAll: true },
+      );
       if (attempt.ok && attempt.value !== undefined) {
         return attempt.value
-          .map((row) => (row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string"
-            ? { id: (row as { id: string }).id, properties: {} }
-            : undefined))
+          .map((row) =>
+            row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string"
+              ? { id: (row as { id: string }).id, properties: {} }
+              : undefined,
+          )
           .filter((entry): entry is LinkTargetAssignment => !!entry);
       }
       return [];
     }
     if (withValue && withValue.kind === "subquery") {
-      const rows = executeSelectExprRows(db, schema, withValue.query as Extract<InsertValue, { kind: "select" }>, context);
+      const rows = executeSelectExprRows(
+        db,
+        schema,
+        withValue.query as Extract<InsertValue, { kind: "select" }>,
+        context,
+      );
       return rows
         .map((row) => {
           if (typeof row.id !== "string") {
@@ -9791,13 +11537,16 @@ const resolveInsertTargets = (
     const typeDefByName = schema.getType(qualifiedName);
     if (typeDefByName) {
       const concretes = schema.listConcreteTypesAssignableTo(qualifiedName);
-      const tables = concretes.length > 0
-        ? concretes.map((concrete) => qualifiedTypeName(concrete))
-        : [qualifiedName];
+      const tables =
+        concretes.length > 0
+          ? concretes.map((concrete) => qualifiedTypeName(concrete))
+          : [qualifiedName];
       const collected: LinkTargetAssignment[] = [];
       for (const typeName of tables) {
         const table = typeName.replaceAll("::", "__").toLowerCase();
-        const rows = db.prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(table)}`).all() as { id?: unknown }[];
+        const rows = db
+          .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(table)}`)
+          .all() as { id?: unknown }[];
         for (const row of rows) {
           if (typeof row.id === "string") {
             collected.push({ id: row.id, properties: {} });
@@ -9847,7 +11596,10 @@ const resolveInsertTargets = (
   }
 
   if (value.kind === "insert") {
-    return executeNestedInsert(db, schema, value, context, ast).map((id) => ({ id, properties: {} }));
+    return executeNestedInsert(db, schema, value, context, ast).map((id) => ({
+      id,
+      properties: {},
+    }));
   }
 
   // `(insert T { … }){ @a := 2 }` and bare expression wrappers around an
@@ -9860,8 +11612,9 @@ const resolveInsertTargets = (
     const identityTargets = resolveIdentityFunctionTargets(inner);
     if (identityTargets !== undefined) return identityTargets;
     if ((inner as { kind?: string }).kind === "set_expr") {
-      return (((inner as { values?: InsertValue[] }).values) ?? [])
-        .flatMap((item) => resolveInsertTargets(db, schema, item, context, ast));
+      return ((inner as { values?: InsertValue[] }).values ?? []).flatMap((item) =>
+        resolveInsertTargets(db, schema, item, context, ast),
+      );
     }
     // `link := (INSERT T {…} UNLESS CONFLICT …)` — a bare nested mutation
     // (no shape projection). Run it and link the resulting (inserted or
@@ -9869,22 +11622,42 @@ const resolveInsertTargets = (
     if (inner.kind === "mutation_expr") {
       const stmt = (inner as { kind: "mutation_expr"; statement: Statement }).statement;
       if (stmt.kind === "insert") {
-        return executeNestedInsert(db, schema, stmt as Extract<InsertValue, { kind: "insert" }>, context, ast)
-          .map((id) => ({ id, properties: {} }));
+        return executeNestedInsert(
+          db,
+          schema,
+          stmt as Extract<InsertValue, { kind: "insert" }>,
+          context,
+          ast,
+        ).map((id) => ({ id, properties: {} }));
       }
     }
     if (inner.kind === "shape_projection") {
-      const projection = inner as { kind: "shape_projection"; expr: FreeObjectExpr; shape: ShapeElement[] };
+      const projection = inner as {
+        kind: "shape_projection";
+        expr: FreeObjectExpr;
+        shape: ShapeElement[];
+      };
       const innerExpr = projection.expr;
       let targets: LinkTargetAssignment[] = [];
       if (innerExpr.kind === "mutation_expr") {
         const stmt = (innerExpr as { kind: "mutation_expr"; statement: Statement }).statement;
         if (stmt.kind === "insert") {
-          targets = executeNestedInsert(db, schema, stmt as Extract<InsertValue, { kind: "insert" }>, context, ast)
-            .map((id) => ({ id, properties: {} }));
+          targets = executeNestedInsert(
+            db,
+            schema,
+            stmt as Extract<InsertValue, { kind: "insert" }>,
+            context,
+            ast,
+          ).map((id) => ({ id, properties: {} }));
         }
       } else if (innerExpr.kind === "select") {
-        targets = resolveInsertTargets(db, schema, innerExpr as Extract<InsertValue, { kind: "select" }>, context, ast);
+        targets = resolveInsertTargets(
+          db,
+          schema,
+          innerExpr as Extract<InsertValue, { kind: "select" }>,
+          context,
+          ast,
+        );
       }
       // Apply the shape's `@`-prefixed assignments as link-property values
       // on every resolved target.
@@ -9892,9 +11665,10 @@ const resolveInsertTargets = (
       for (const el of projection.shape) {
         if (el.kind !== "computed") continue;
         if (!el.name.startsWith("@")) continue;
-        const exprBody = (el.expr as { kind: string }).kind === "select_expr"
-          ? (el.expr as { kind: "select_expr"; expr: FreeObjectExpr }).expr
-          : el.expr;
+        const exprBody =
+          (el.expr as { kind: string }).kind === "select_expr"
+            ? (el.expr as { kind: "select_expr"; expr: FreeObjectExpr }).expr
+            : el.expr;
         if ((exprBody as { kind: string }).kind === "literal") {
           const litVal = (exprBody as { kind: "literal"; value: ScalarValue }).value;
           properties[el.name] = litVal;
@@ -9920,10 +11694,22 @@ const resolveInsertTargets = (
     if (inner.kind === "select_expr_subquery") {
       const unwrapped = (inner as { expr: FreeObjectExpr }).expr;
       if (unwrapped.kind === "shape_projection") {
-        return resolveInsertTargets(db, schema, { kind: "expr", expr: unwrapped } as InsertValue, context, ast);
+        return resolveInsertTargets(
+          db,
+          schema,
+          { kind: "expr", expr: unwrapped } as InsertValue,
+          context,
+          ast,
+        );
       }
       if (unwrapped.kind === "select") {
-        return resolveInsertTargets(db, schema, unwrapped as unknown as Extract<InsertValue, { kind: "select" }>, context, ast);
+        return resolveInsertTargets(
+          db,
+          schema,
+          unwrapped as unknown as Extract<InsertValue, { kind: "select" }>,
+          context,
+          ast,
+        );
       }
     }
   }
@@ -9938,16 +11724,22 @@ const resolveInsertTargets = (
 
     for (const iterValue of iteratorValues) {
       if (value.body.kind === "select") {
-        const selectAst = ensureSelectAstHasId(bindSelectAstVariable(value.body, value.variable, iterValue));
+        const selectAst = ensureSelectAstHasId(
+          bindSelectAstVariable(value.body, value.variable, iterValue),
+        );
         const compiler = getCompilerService();
-        const compiled = compiler.compile(schema, selectAst, { globals: context.globals, params: context.params });
+        const compiled = compiler.compile(schema, selectAst, {
+          globals: context.globals,
+          params: context.params,
+        });
         assertTargetSqlCompatibility(compiled.sql.sql, resolvedRuntimeTarget(context, db));
         if (compiled.ir !== undefined) {
           continue;
         }
 
-        const selectedRows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
-          .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+        const selectedRows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, {
+          keepInternalId: true,
+        }).filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
         for (const row of selectedRows) {
           if (typeof row.id !== "string") {
             continue;
@@ -9969,7 +11761,13 @@ const resolveInsertTargets = (
       } else if (value.body.kind === "insert") {
         const replacedValues: Record<string, InsertValue> = {};
         for (const [field, insertValue] of Object.entries(value.body.values)) {
-          if (typeof insertValue === "object" && insertValue !== null && "kind" in insertValue && insertValue.kind === "binding_ref" && insertValue.name === value.variable) {
+          if (
+            typeof insertValue === "object" &&
+            insertValue !== null &&
+            "kind" in insertValue &&
+            insertValue.kind === "binding_ref" &&
+            insertValue.name === value.variable
+          ) {
             const scalar = coerceUnknownToScalar(iterValue);
             replacedValues[field] = scalar ?? insertValue;
           } else {
@@ -9977,7 +11775,13 @@ const resolveInsertTargets = (
           }
         }
 
-        const nestedIds = executeNestedInsert(db, schema, { kind: "insert", typeName: value.body.typeName, values: replacedValues }, context, ast);
+        const nestedIds = executeNestedInsert(
+          db,
+          schema,
+          { kind: "insert", typeName: value.body.typeName, values: replacedValues },
+          context,
+          ast,
+        );
         rows.push(...nestedIds.map((id) => ({ id, properties: {} })));
       }
     }
@@ -9999,9 +11803,13 @@ const resolveInsertTargets = (
   // `select_expr_subquery`/`expr` wrapper. Compile it as a standalone SELECT
   // (threading the outer WITH bindings) and read the resulting object ids.
   if (value.kind === "function_call" || value.kind === "expr") {
-    const innerExpr = value.kind === "expr"
-      ? (value as { expr: FreeObjectExpr }).expr
-      : ({ kind: "function_call", call: (value as { call: FunctionCallExpr }).call } as unknown as FreeObjectExpr);
+    const innerExpr =
+      value.kind === "expr"
+        ? (value as { expr: FreeObjectExpr }).expr
+        : ({
+            kind: "function_call",
+            call: (value as { call: FunctionCallExpr }).call,
+          } as unknown as FreeObjectExpr);
     const stmtAst = {
       kind: "select_expr",
       expr: innerExpr,
@@ -10010,17 +11818,27 @@ const resolveInsertTargets = (
       withModuleAliases: ast.withModuleAliases,
       pos: ast.pos,
     } as unknown as Statement;
-    const attempt = tryResult(() => {
-      const compiled = getCompilerService().compile(schema, stmtAst, { globals: context.globals, params: context.params, target: resolvedRuntimeTarget(context, db) });
-      if (!lowersToSingleSql(compiled.sql)) return undefined;
-      return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, { keepInternalId: true })
-        .filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
-    }, { captureAll: true });
+    const attempt = tryResult(
+      () => {
+        const compiled = getCompilerService().compile(schema, stmtAst, {
+          globals: context.globals,
+          params: context.params,
+          target: resolvedRuntimeTarget(context, db),
+        });
+        if (!lowersToSingleSql(compiled.sql)) return undefined;
+        return runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql, {
+          keepInternalId: true,
+        }).filter((row): row is Record<string, unknown> => row !== null && typeof row === "object");
+      },
+      { captureAll: true },
+    );
     if (attempt.ok && attempt.value !== undefined) {
       return attempt.value
-        .map((row) => (typeof (row as { id?: unknown }).id === "string"
-          ? { id: (row as { id: string }).id, properties: {} }
-          : undefined))
+        .map((row) =>
+          typeof (row as { id?: unknown }).id === "string"
+            ? { id: (row as { id: string }).id, properties: {} }
+            : undefined,
+        )
         .filter((entry): entry is LinkTargetAssignment => !!entry);
     }
   }
@@ -10059,7 +11877,11 @@ const resolveTupleForUnionSelectLinkValue = (
   } else if (n?.kind === "for_expr") {
     // `for_expr` carries a SELECT body (unlike forExprChainToForStatement,
     // which only accepts INSERT bodies) — read its parts directly.
-    const fe = node as unknown as { variable: string; iterator: ForStatement["iteratorExpr"]; body: unknown };
+    const fe = node as unknown as {
+      variable: string;
+      iterator: ForStatement["iteratorExpr"];
+      body: unknown;
+    };
     forVariable = fe.variable;
     forIterator = fe.iterator;
     forBody = fe.body;
@@ -10077,7 +11899,10 @@ const resolveTupleForUnionSelectLinkValue = (
   const out: LinkTargetAssignment[] = [];
   const seen = new globalThis.Set<string>();
   for (const tuple of tupleRows) {
-    const substituted = substituteTupleIndexRefs(body, forStmt.variable, tuple) as Extract<InsertValue, { kind: "select" }>;
+    const substituted = substituteTupleIndexRefs(body, forStmt.variable, tuple) as Extract<
+      InsertValue,
+      { kind: "select" }
+    >;
     const scoped = {
       ...substituted,
       clauses: {
@@ -10121,10 +11946,17 @@ const defaultLinkPropertyValueIR = (
     try {
       const result = executeQuery(db, schema, `SELECT ${property.defaultExprText}`, context);
       const value = result.rows?.[0];
-      if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      if (
+        value === null ||
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      ) {
         return value as ScalarValue;
       }
-    } catch { /* fall through to null */ }
+    } catch {
+      /* fall through to null */
+    }
   }
   return null;
 };
@@ -10142,7 +11974,9 @@ const validateLinkTargetIds = (
   if (targetIds.length === 0) return;
   const placeholders = targetIds.map(() => "?").join(", ");
   const rows = db
-    .prepare(`SELECT "id" AS "id", "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" IN (${placeholders})`)
+    .prepare(
+      `SELECT "id" AS "id", "type_name" AS "type_name" FROM "__gel_global_ids" WHERE "id" IN (${placeholders})`,
+    )
     .all(...targetIds) as Array<{ id?: unknown; type_name?: unknown }>;
   const typeById = new Map<string, string>();
   for (const row of rows) {
@@ -10154,11 +11988,21 @@ const validateLinkTargetIds = (
   for (const targetId of targetIds) {
     const typeName = typeById.get(targetId);
     if (typeName === undefined) {
-      throw new AppError("E_SEMANTIC", `Invalid id for link '${linkName}': '${targetId}' does not reference an existing object`, pos.line, pos.column);
+      throw new AppError(
+        "E_SEMANTIC",
+        `Invalid id for link '${linkName}': '${targetId}' does not reference an existing object`,
+        pos.line,
+        pos.column,
+      );
     }
     if (!allowed.has(typeName)) {
       const expected = [...allowed].sort().join(" or ");
-      throw new AppError("E_SEMANTIC", `Invalid id for link '${linkName}': expected '${expected}', got '${typeName}'`, pos.line, pos.column);
+      throw new AppError(
+        "E_SEMANTIC",
+        `Invalid id for link '${linkName}': expected '${expected}', got '${typeName}'`,
+        pos.line,
+        pos.column,
+      );
     }
   }
 };
@@ -10214,7 +12058,12 @@ const resolveDefaultLinkTargets = (
       else break;
     }
     if (node && (node as { kind?: string }).kind === "insert") {
-      const ids = executeNestedInsert(db, schema, node as Extract<InsertValue, { kind: "insert" }>, context);
+      const ids = executeNestedInsert(
+        db,
+        schema,
+        node as Extract<InsertValue, { kind: "insert" }>,
+        context,
+      );
       return ids.map((id) => ({ id, properties: {} }));
     }
     return [];
@@ -10223,7 +12072,9 @@ const resolveDefaultLinkTargets = (
     const results: Array<{ id: string; properties: Record<string, ScalarValue> }> = [];
     for (const targetValue of spec.defaultTargetValues) {
       const row = db
-        .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(spec.targetTable)} WHERE ${quoteIdent(spec.lookupColumn)} = ? LIMIT 1`)
+        .prepare(
+          `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(spec.targetTable)} WHERE ${quoteIdent(spec.lookupColumn)} = ? LIMIT 1`,
+        )
         .all(targetValue)[0] as { id?: unknown } | undefined;
       if (typeof row?.id === "string") {
         results.push({ id: row.id, properties: {} });
@@ -10232,7 +12083,9 @@ const resolveDefaultLinkTargets = (
     return results;
   }
   const first = db
-    .prepare(`SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(spec.targetTable)} ORDER BY rowid ASC LIMIT 1`)
+    .prepare(
+      `SELECT ${quoteIdent("id")} AS ${quoteIdent("id")} FROM ${quoteIdent(spec.targetTable)} ORDER BY rowid ASC LIMIT 1`,
+    )
     .all()[0] as { id?: unknown } | undefined;
   return typeof first?.id === "string" ? [{ id: first.id, properties: {} }] : [];
 };
@@ -10248,10 +12101,17 @@ const applyInsertLinkAssignments = (
   for (const assignment of ir.linkAssignments ?? []) {
     const targetAssignments = resolveInsertTargets(db, schema, assignment.target, context, ast);
     const targetIds = targetAssignments.map((entry) => entry.id);
-    validateLinkTargetIds(db, assignment.linkName, targetIds, assignment.expectedTargetTables, ast.pos);
+    validateLinkTargetIds(
+      db,
+      assignment.linkName,
+      targetIds,
+      assignment.expectedTargetTables,
+      ast.pos,
+    );
 
     if (assignment.storage === "table") {
-      if (!assignment.linkTable) throw new Error("invariant: table-storage link assignment missing linkTable");
+      if (!assignment.linkTable)
+        throw new Error("invariant: table-storage link assignment missing linkTable");
       writeLinkTableRows(
         db,
         assignment.linkTable,
@@ -10265,10 +12125,12 @@ const applyInsertLinkAssignments = (
       continue;
     }
 
-    if (!assignment.inlineColumn) throw new Error("invariant: inline-storage link assignment missing inlineColumn");
+    if (!assignment.inlineColumn)
+      throw new Error("invariant: inline-storage link assignment missing inlineColumn");
     const inlineTarget = targetIds[0] ?? null;
-    db.prepare(`UPDATE ${quoteIdent(assignment.ownerTable)} SET ${quoteIdent(assignment.inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
-      .run(inlineTarget, sourceId);
+    db.prepare(
+      `UPDATE ${quoteIdent(assignment.ownerTable)} SET ${quoteIdent(assignment.inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`,
+    ).run(inlineTarget, sourceId);
   }
 
   for (const spec of ir.linkDefaults ?? []) {
@@ -10276,7 +12138,8 @@ const applyInsertLinkAssignments = (
     if (targets.length === 0) continue;
 
     if (spec.storage === "table") {
-      if (!spec.linkTable) throw new Error("invariant: table-storage link default missing linkTable");
+      if (!spec.linkTable)
+        throw new Error("invariant: table-storage link default missing linkTable");
       writeLinkTableRows(
         db,
         spec.linkTable,
@@ -10290,9 +12153,11 @@ const applyInsertLinkAssignments = (
       continue;
     }
 
-    if (!spec.inlineColumn) throw new Error("invariant: inline-storage link default missing inlineColumn");
-    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`)
-      .run(targets[0]?.id ?? null, sourceId);
+    if (!spec.inlineColumn)
+      throw new Error("invariant: inline-storage link default missing inlineColumn");
+    db.prepare(
+      `UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(spec.inlineColumn)} = ? WHERE ${quoteIdent("id")} = ?`,
+    ).run(targets[0]?.id ?? null, sourceId);
   }
 };
 
@@ -10303,7 +12168,8 @@ const writeUpdateLinkTableRows = (
   targets: ReadonlyArray<{ id: string; properties: Record<string, ScalarValue> }>,
 ): void => {
   if (targets.length === 0) return;
-  if (!spec.linkTable) throw new Error("invariant: table-storage update link assignment missing linkTable");
+  if (!spec.linkTable)
+    throw new Error("invariant: table-storage update link assignment missing linkTable");
   const propertyColumns = spec.propertyColumns ?? [];
   const columns = ["source", "target", ...propertyColumns];
   const propertyByName = new Map((spec.properties ?? []).map((p) => [p.name, p] as const));
@@ -10374,7 +12240,9 @@ const applyUpdateMultiScalarProps = (
         next = assigned;
       } else {
         const currentRaw = db
-          .prepare(`SELECT ${quoteIdent(field.name)} AS ${quoteIdent("v")} FROM ${quoteIdent(ir.table)} WHERE ${quoteIdent("id")} = ?`)
+          .prepare(
+            `SELECT ${quoteIdent(field.name)} AS ${quoteIdent("v")} FROM ${quoteIdent(ir.table)} WHERE ${quoteIdent("id")} = ?`,
+          )
           .all(sourceId)[0] as { v?: unknown } | undefined;
         let current: unknown[] = [];
         if (typeof currentRaw?.v === "string" && currentRaw.v.length > 0) {
@@ -10405,8 +12273,9 @@ const applyUpdateMultiScalarProps = (
         }
       }
       try {
-        db.prepare(`UPDATE ${quoteIdent(ir.table)} SET ${quoteIdent(field.name)} = ? WHERE ${quoteIdent("id")} = ?`)
-          .run(JSON.stringify(next), sourceId);
+        db.prepare(
+          `UPDATE ${quoteIdent(ir.table)} SET ${quoteIdent(field.name)} = ? WHERE ${quoteIdent("id")} = ?`,
+        ).run(JSON.stringify(next), sourceId);
       } catch (writeErr) {
         throw translateExclusivityWriteError(writeErr, pos.line, pos.column);
       }
@@ -10444,16 +12313,20 @@ const applyUpdateLinkAssignments = (
 
     if (spec.storage === "table") {
       const linkTable = spec.linkTable;
-      if (!linkTable) throw new Error("invariant: table-storage update link assignment missing linkTable");
+      if (!linkTable)
+        throw new Error("invariant: table-storage update link assignment missing linkTable");
       for (const sourceId of sourceIds) {
         if (spec.operation === "assign") {
-          db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).run(sourceId);
+          db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ?`).run(
+            sourceId,
+          );
         }
         if (spec.operation === "subtract") {
           if (targetIds.length > 0) {
             const placeholders = targetIds.map(() => "?").join(", ");
-            db.prepare(`DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ? AND ${quoteIdent("target")} IN (${placeholders})`)
-              .run(sourceId, ...targetIds);
+            db.prepare(
+              `DELETE FROM ${quoteIdent(linkTable)} WHERE ${quoteIdent("source")} = ? AND ${quoteIdent("target")} IN (${placeholders})`,
+            ).run(sourceId, ...targetIds);
           }
           continue;
         }
@@ -10463,18 +12336,21 @@ const applyUpdateLinkAssignments = (
     }
 
     const inlineColumn = spec.inlineColumn;
-    if (!inlineColumn) throw new Error("invariant: inline-storage update link assignment missing inlineColumn");
+    if (!inlineColumn)
+      throw new Error("invariant: inline-storage update link assignment missing inlineColumn");
     const inlineTarget = targetIds[0] ?? null;
     if (spec.operation === "subtract") {
       const placeholders = sourceIds.map(() => "?").join(", ");
-      db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(inlineColumn)} = NULL WHERE ${quoteIdent("id")} IN (${placeholders}) AND ${quoteIdent(inlineColumn)} = ?`)
-        .run(...sourceIds, inlineTarget);
+      db.prepare(
+        `UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(inlineColumn)} = NULL WHERE ${quoteIdent("id")} IN (${placeholders}) AND ${quoteIdent(inlineColumn)} = ?`,
+      ).run(...sourceIds, inlineTarget);
       continue;
     }
 
     const placeholders = sourceIds.map(() => "?").join(", ");
-    db.prepare(`UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} IN (${placeholders})`)
-      .run(inlineTarget, ...sourceIds);
+    db.prepare(
+      `UPDATE ${quoteIdent(spec.ownerTable)} SET ${quoteIdent(inlineColumn)} = ? WHERE ${quoteIdent("id")} IN (${placeholders})`,
+    ).run(inlineTarget, ...sourceIds);
   }
 };
 
@@ -10543,7 +12419,7 @@ const readTargetRowsForFilter = (
   return db.prepare(sql).all(...params);
 };
 
-const readTargetRowsForAssignableTypes = (
+const _readTargetRowsForAssignableTypes = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
   typeDef: TypeDef,
@@ -10565,7 +12441,11 @@ const readTargetRowsForAssignableTypes = (
   return rows;
 };
 
-const readRowsByIds = (db: SQLiteDatabase, table: string, ids: string[]): Record<string, unknown>[] => {
+const readRowsByIds = (
+  db: SQLiteDatabase,
+  table: string,
+  ids: string[],
+): Record<string, unknown>[] => {
   if (ids.length === 0) {
     return [];
   }
@@ -10575,7 +12455,11 @@ const readRowsByIds = (db: SQLiteDatabase, table: string, ids: string[]): Record
   return db.prepare(sql).all(...ids);
 };
 
-const readRowById = (db: SQLiteDatabase, table: string, id: string): Record<string, unknown> | null => {
+const readRowById = (
+  db: SQLiteDatabase,
+  table: string,
+  id: string,
+): Record<string, unknown> | null => {
   const row = db
     .prepare(`SELECT * FROM ${quoteIdent(table)} WHERE ${quoteIdent("id")} = ?`)
     .all(id)[0];
@@ -10596,7 +12480,11 @@ const astValidationDeps: AstValidationDeps = {
   runtimeExprAliasMap: getRuntimeExprAliasMap,
 };
 
-function preValidateStatementAst(schema: SchemaSnapshot, statement: Statement, allowUserSpecifiedId = false): void {
+function preValidateStatementAst(
+  schema: SchemaSnapshot,
+  statement: Statement,
+  allowUserSpecifiedId = false,
+): void {
   validateStatementAst(schema, statement, astValidationDeps, allowUserSpecifiedId);
 }
 
@@ -10652,7 +12540,7 @@ function constSubscriptBase(expr: unknown): ConstSubscriptBase | undefined {
 }
 
 function constSubscriptIndexValue(node: Record<string, unknown>): number | undefined {
-  const indexExpr = node.indexExpr as Record<string, unknown> & { kind?: string } | undefined;
+  const indexExpr = node.indexExpr as (Record<string, unknown> & { kind?: string }) | undefined;
   if (indexExpr) {
     if (indexExpr.kind === "set_literal") {
       const values = (indexExpr.values as unknown[]) ?? [];
@@ -10661,12 +12549,18 @@ function constSubscriptIndexValue(node: Record<string, unknown>): number | undef
       }
       return undefined;
     }
-    if (indexExpr.kind === "literal" && typeof indexExpr.value === "number" && Number.isInteger(indexExpr.value)) {
+    if (
+      indexExpr.kind === "literal" &&
+      typeof indexExpr.value === "number" &&
+      Number.isInteger(indexExpr.value)
+    ) {
       return indexExpr.value as number;
     }
     return undefined;
   }
-  return typeof node.index === "number" && Number.isInteger(node.index) ? (node.index as number) : undefined;
+  return typeof node.index === "number" && Number.isInteger(node.index)
+    ? (node.index as number)
+    : undefined;
 }
 
 // Returns the rows for a constant subscript statement, or undefined when the
@@ -10674,7 +12568,9 @@ function constSubscriptIndexValue(node: Record<string, unknown>): number | undef
 function tryEvalConstantSubscriptStatement(statement: Statement): unknown[] | undefined {
   if (statement.kind !== "select_expr") return undefined;
   if ((statement as { with?: unknown[] }).with?.length) return undefined;
-  const expr = (statement as { expr?: unknown }).expr as Record<string, unknown> & { kind?: string };
+  const expr = (statement as { expr?: unknown }).expr as Record<string, unknown> & {
+    kind?: string;
+  };
   if (!expr || (expr.kind !== "index_access" && expr.kind !== "slice_access")) return undefined;
   const base = constSubscriptBase(expr.expr);
   if (!base) return undefined;
@@ -10712,7 +12608,9 @@ function tryEvalConstantSubscriptStatement(statement: Statement): unknown[] | un
 // the SQL lowering of a pointer step over these calls silently drops empty /
 // out-of-bounds results, so evaluate the inner set's cardinality up front.
 
-function unwrapRootPointerSteps(expr: unknown): { node: Record<string, unknown> & { kind: string }; crossedPointer: boolean } | undefined {
+function unwrapRootPointerSteps(
+  expr: unknown,
+): { node: Record<string, unknown> & { kind: string }; crossedPointer: boolean } | undefined {
   let current = expr as Record<string, unknown> & { kind?: string };
   let crossedPointer = false;
   let guard = 0;
@@ -10756,7 +12654,11 @@ function countFunctionArgRows(
     pos: (statement as { pos?: { line: number; column: number } }).pos ?? { line: 1, column: 1 },
   } as unknown as Statement;
   try {
-    const compiled = getCompilerService().compile(schema, innerStatement, { globals: context.globals, params: context.params, target: runtimeTarget });
+    const compiled = getCompilerService().compile(schema, innerStatement, {
+      globals: context.globals,
+      params: context.params,
+      target: runtimeTarget,
+    });
     if (!lowersToSingleSql(compiled.sql)) return undefined;
     const rows = runGelSelectSQL(db, schema, compiled.gelIr, context, compiled.sql);
     return rows.length;
@@ -10784,7 +12686,14 @@ function enforceRootSetAssertions(
   if (node.kind === "function_call") {
     const call = node.call as FunctionCallExpr | undefined;
     if (call && functionCallLeafName(call) === "assert_exists" && call.args.length >= 1) {
-      const count = countFunctionArgRows(db, schema, statement, call.args[0], context, runtimeTarget);
+      const count = countFunctionArgRows(
+        db,
+        schema,
+        statement,
+        call.args[0],
+        context,
+        runtimeTarget,
+      );
       if (count === 0) {
         throw new AppError("E_SEMANTIC", "assert_exists violation", 1, 1);
       }
@@ -10808,7 +12717,6 @@ function enforceRootSetAssertions(
   }
 }
 
-
 // The capability seam the Runtime evaluator (runtime/evaluator.ts) reaches back
 // into. A function (not a const literal) so it is hoisted for the wrapper above
 // and only reads the closed-over module functions when called  after load, so
@@ -10824,7 +12732,16 @@ function selectExprEvaluatorDeps() {
       qualifiedName: string,
       args: RuntimeFunctionArg[],
       staticArgTypes?: (string | undefined)[],
-    ) => executeFunctionCall(schema, db, context, qualifiedName, args, fnDispatchDeps(), staticArgTypes),
+    ) =>
+      executeFunctionCall(
+        schema,
+        db,
+        context,
+        qualifiedName,
+        args,
+        fnDispatchDeps(),
+        staticArgTypes,
+      ),
     executeMutationBinding,
     findFieldDef,
     findRuntimeLinkDef,

@@ -4,7 +4,7 @@ import {
   assertQueryResult,
   queryRows,
   unorderedBag,
-  unorderedSet
+  unorderedSet,
 } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLScope", () => {
@@ -29,31 +29,31 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY _.1 THEN _.0.name DESC;
             `,
       [
-            [
-              {
-                "name": "Bob",
-              },
-              1,
-            ],
-            [
-              {
-                "name": "Alice",
-              },
-              1,
-            ],
-            [
-              {
-                "name": "Bob",
-              },
-              2,
-            ],
-            [
-              {
-                "name": "Alice",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            name: "Bob",
+          },
+          1,
+        ],
+        [
+          {
+            name: "Alice",
+          },
+          1,
+        ],
+        [
+          {
+            name: "Bob",
+          },
+          2,
+        ],
+        [
+          {
+            name: "Alice",
+          },
+          2,
+        ],
+      ],
     );
   });
 
@@ -71,31 +71,31 @@ describe("TestEdgeQLScope", () => {
             ));
             `,
       [
-            [
-              {
-                "name": "Bob",
-              },
-              1,
-            ],
-            [
-              {
-                "name": "Alice",
-              },
-              1,
-            ],
-            [
-              {
-                "name": "Bob",
-              },
-              2,
-            ],
-            [
-              {
-                "name": "Alice",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            name: "Bob",
+          },
+          1,
+        ],
+        [
+          {
+            name: "Alice",
+          },
+          1,
+        ],
+        [
+          {
+            name: "Bob",
+          },
+          2,
+        ],
+        [
+          {
+            name: "Alice",
+          },
+          2,
+        ],
+      ],
     );
   });
 
@@ -113,33 +113,33 @@ describe("TestEdgeQLScope", () => {
             )));
             `,
       [
-            [
-              [
-                {
-                  "name": "Bob",
-                },
-                1,
-              ],
-              [
-                {
-                  "name": "Alice",
-                },
-                1,
-              ],
-              [
-                {
-                  "name": "Bob",
-                },
-                2,
-              ],
-              [
-                {
-                  "name": "Alice",
-                },
-                2,
-              ],
-            ],
-          ]
+        [
+          [
+            {
+              name: "Bob",
+            },
+            1,
+          ],
+          [
+            {
+              name: "Alice",
+            },
+            1,
+          ],
+          [
+            {
+              name: "Bob",
+            },
+            2,
+          ],
+          [
+            {
+              name: "Alice",
+            },
+            2,
+          ],
+        ],
+      ],
     );
   });
 
@@ -158,31 +158,31 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY User.name;
             `,
       [
-            {
-              "name": "Alice",
-              "foo": {
-                "name": "Alice",
-              },
-            },
-            {
-              "name": "Bob",
-              "foo": {
-                "name": "Bob",
-              },
-            },
-            {
-              "name": "Carol",
-              "foo": {
-                "name": "Carol",
-              },
-            },
-            {
-              "name": "Dave",
-              "foo": {
-                "name": "Dave",
-              },
-            },
-          ]
+        {
+          name: "Alice",
+          foo: {
+            name: "Alice",
+          },
+        },
+        {
+          name: "Bob",
+          foo: {
+            name: "Bob",
+          },
+        },
+        {
+          name: "Carol",
+          foo: {
+            name: "Carol",
+          },
+        },
+        {
+          name: "Dave",
+          foo: {
+            name: "Dave",
+          },
+        },
+      ],
     );
   });
 
@@ -198,11 +198,11 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY .0;
             `,
       [
-            ["Alice", 11, 4, 2.75],
-            ["Bob", 9, 4, 2.25],
-            ["Carol", 16, 7, 2.28571428571429],
-            ["Dave", 20, 7, 2.85714285714286],
-          ]
+        ["Alice", 11, 4, 2.75],
+        ["Bob", 9, 4, 2.25],
+        ["Carol", 16, 7, 2.28571428571429],
+        ["Dave", 20, 7, 2.85714285714286],
+      ],
     );
     assertQueryResult(
       h,
@@ -212,7 +212,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT (uf, uf.deck_cost / count(uf.deck))
                 ) ORDER BY .0.name).1
             `,
-      [2.25, 2.28571428571429, 2.85714285714286]
+      [2.25, 2.28571428571429, 2.85714285714286],
     );
     assertQueryResult(
       h,
@@ -221,7 +221,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT uf.deck_cost / count(uf.deck)
                 FILTER uf.name = 'Bob';
             `,
-      [2.25]
+      [2.25],
     );
   });
 
@@ -232,11 +232,11 @@ describe("TestEdgeQLScope", () => {
             with z := User, select ({z}.name, count(z));
             `,
       unorderedBag([
-            ["Alice", 4],
-            ["Bob", 4],
-            ["Carol", 4],
-            ["Dave", 4],
-          ])
+        ["Alice", 4],
+        ["Bob", 4],
+        ["Carol", 4],
+        ["Dave", 4],
+      ]),
     );
   });
 
@@ -253,11 +253,11 @@ describe("TestEdgeQLScope", () => {
             ORDER BY _;
             `,
       [
-            ["Alice", "Alice"],
-            ["Alice", "Bob"],
-            ["Bob", "Alice"],
-            ["Bob", "Bob"],
-          ]
+        ["Alice", "Alice"],
+        ["Alice", "Bob"],
+        ["Bob", "Alice"],
+        ["Bob", "Bob"],
+      ],
     );
   });
 
@@ -275,23 +275,23 @@ describe("TestEdgeQLScope", () => {
             ORDER BY _;
             `,
       [
-            ["Alice", "Alice"],
-            ["Alice", "Alice"],
-            ["Alice", "Alice"],
-            ["Alice", "Alice"],
-            ["Alice", "Bob"],
-            ["Alice", "Bob"],
-            ["Alice", "Bob"],
-            ["Alice", "Bob"],
-            ["Bob", "Alice"],
-            ["Bob", "Alice"],
-            ["Bob", "Alice"],
-            ["Bob", "Alice"],
-            ["Bob", "Bob"],
-            ["Bob", "Bob"],
-            ["Bob", "Bob"],
-            ["Bob", "Bob"],
-          ]
+        ["Alice", "Alice"],
+        ["Alice", "Alice"],
+        ["Alice", "Alice"],
+        ["Alice", "Alice"],
+        ["Alice", "Bob"],
+        ["Alice", "Bob"],
+        ["Alice", "Bob"],
+        ["Alice", "Bob"],
+        ["Bob", "Alice"],
+        ["Bob", "Alice"],
+        ["Bob", "Alice"],
+        ["Bob", "Alice"],
+        ["Bob", "Bob"],
+        ["Bob", "Bob"],
+        ["Bob", "Bob"],
+        ["Bob", "Bob"],
+      ],
     );
   });
 
@@ -309,23 +309,23 @@ describe("TestEdgeQLScope", () => {
             ORDER BY _;
             `,
       [
-            ["Alice", "Alice"],
-            ["Alice", "Alice"],
-            ["Alice", "Alice"],
-            ["Alice", "Alice"],
-            ["Alice", "Bob"],
-            ["Alice", "Bob"],
-            ["Alice", "Bob"],
-            ["Alice", "Bob"],
-            ["Bob", "Alice"],
-            ["Bob", "Alice"],
-            ["Bob", "Alice"],
-            ["Bob", "Alice"],
-            ["Bob", "Bob"],
-            ["Bob", "Bob"],
-            ["Bob", "Bob"],
-            ["Bob", "Bob"],
-          ]
+        ["Alice", "Alice"],
+        ["Alice", "Alice"],
+        ["Alice", "Alice"],
+        ["Alice", "Alice"],
+        ["Alice", "Bob"],
+        ["Alice", "Bob"],
+        ["Alice", "Bob"],
+        ["Alice", "Bob"],
+        ["Bob", "Alice"],
+        ["Bob", "Alice"],
+        ["Bob", "Alice"],
+        ["Bob", "Alice"],
+        ["Bob", "Bob"],
+        ["Bob", "Bob"],
+        ["Bob", "Bob"],
+        ["Bob", "Bob"],
+      ],
     );
   });
 
@@ -338,11 +338,11 @@ describe("TestEdgeQLScope", () => {
             ORDER BY _;
             `,
       [
-            [2, 2],
-            [2, 3],
-            [3, 2],
-            [3, 3],
-          ]
+        [2, 2],
+        [2, 3],
+        [3, 2],
+        [3, 3],
+      ],
     );
   });
 
@@ -356,23 +356,23 @@ describe("TestEdgeQLScope", () => {
             ORDER BY _;
             `,
       [
-            [2, 2],
-            [2, 2],
-            [2, 2],
-            [2, 2],
-            [2, 3],
-            [2, 3],
-            [2, 3],
-            [2, 3],
-            [3, 2],
-            [3, 2],
-            [3, 2],
-            [3, 2],
-            [3, 3],
-            [3, 3],
-            [3, 3],
-            [3, 3],
-          ]
+        [2, 2],
+        [2, 2],
+        [2, 2],
+        [2, 2],
+        [2, 3],
+        [2, 3],
+        [2, 3],
+        [2, 3],
+        [3, 2],
+        [3, 2],
+        [3, 2],
+        [3, 2],
+        [3, 3],
+        [3, 3],
+        [3, 3],
+        [3, 3],
+      ],
     );
   });
 
@@ -392,15 +392,15 @@ describe("TestEdgeQLScope", () => {
             };
             `,
       [
-            {
-              "lol": [
-                ["Alice", "Alice"],
-                ["Alice", "Bob"],
-                ["Bob", "Alice"],
-                ["Bob", "Bob"],
-              ],
-            },
-          ]
+        {
+          lol: [
+            ["Alice", "Alice"],
+            ["Alice", "Bob"],
+            ["Bob", "Alice"],
+            ["Bob", "Bob"],
+          ],
+        },
+      ],
     );
   });
 
@@ -417,15 +417,15 @@ describe("TestEdgeQLScope", () => {
             };
             `,
       [
-            {
-              "lol": [
-                [2, 2],
-                [2, 3],
-                [3, 2],
-                [3, 3],
-              ],
-            },
-          ]
+        {
+          lol: [
+            [2, 2],
+            [2, 3],
+            [3, 2],
+            [3, 3],
+          ],
+        },
+      ],
     );
   });
 
@@ -438,7 +438,7 @@ describe("TestEdgeQLScope", () => {
                     (WITH X := (SELECT Card) SELECT X.name),
                 ));
             `,
-      [81]
+      [81],
     );
   });
 
@@ -458,75 +458,75 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY User.name;
             `,
       [
+        {
+          name: "Alice",
+          foo: [
             {
-              "name": "Alice",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Alice",
             },
             {
-              "name": "Bob",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Bob",
             },
             {
-              "name": "Carol",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Carol",
             },
             {
-              "name": "Dave",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
             },
-          ]
+          ],
+        },
+        {
+          name: "Bob",
+          foo: [
+            {
+              name: "Alice",
+            },
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+        {
+          name: "Carol",
+          foo: [
+            {
+              name: "Alice",
+            },
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+        {
+          name: "Dave",
+          foo: [
+            {
+              name: "Alice",
+            },
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -539,16 +539,16 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY User.friends.name;
             `,
       [
-            {
-              "name": "Bob",
-            },
-            {
-              "name": "Carol",
-            },
-            {
-              "name": "Dave",
-            },
-          ]
+        {
+          name: "Bob",
+        },
+        {
+          name: "Carol",
+        },
+        {
+          name: "Dave",
+        },
+      ],
     );
   });
 
@@ -574,41 +574,41 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY User.name;
             `,
       [
+        {
+          name: "Alice",
+          friends_of_others: [],
+        },
+        {
+          name: "Bob",
+          friends_of_others: [
             {
-              "name": "Alice",
-              "friends_of_others": [],
+              name: "Carol",
             },
             {
-              "name": "Bob",
-              "friends_of_others": [
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
+            },
+          ],
+        },
+        {
+          name: "Carol",
+          friends_of_others: [
+            {
+              name: "Bob",
             },
             {
-              "name": "Carol",
-              "friends_of_others": [
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
             },
+          ],
+        },
+        {
+          name: "Dave",
+          friends_of_others: [
             {
-              "name": "Dave",
-              "friends_of_others": [
-                {
-                  "name": "Carol",
-                },
-              ],
+              name: "Carol",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -625,21 +625,21 @@ describe("TestEdgeQLScope", () => {
                 FILTER User.friends.name = 'Carol';
             `,
       [
+        {
+          name: "Alice",
+          friends: [
             {
-              "name": "Alice",
-              "friends": [
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Bob",
             },
-          ]
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -652,7 +652,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT (SELECT User.name)
                 FILTER User.name = 'Alice';
             `,
-      unorderedSet(["Alice", "Bob", "Carol", "Dave"])
+      unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
     );
   });
 
@@ -665,7 +665,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT (SELECT User).name
                 FILTER User.name = 'Alice';
             `,
-      unorderedSet(["Alice", "Bob", "Carol", "Dave"])
+      unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
     );
   });
 
@@ -678,7 +678,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT (<str>{} ?? User.name)
                 FILTER User.name = 'Alice';
             `,
-      unorderedSet(["Alice", "Bob", "Carol", "Dave"])
+      unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
     );
   });
 
@@ -691,7 +691,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT (<User>{} ?? User).name
                 FILTER User.name = 'Alice';
             `,
-      unorderedSet(["Alice", "Bob", "Carol", "Dave"])
+      unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
     );
   });
 
@@ -713,37 +713,37 @@ describe("TestEdgeQLScope", () => {
                 THEN User.name;
             `,
       [
+        {
+          name: "Bob",
+          friends: [],
+        },
+        {
+          name: "Carol",
+          friends: [],
+        },
+        {
+          name: "Dave",
+          friends: [
             {
-              "name": "Bob",
-              "friends": [],
+              name: "Bob",
+            },
+          ],
+        },
+        {
+          name: "Alice",
+          friends: [
+            {
+              name: "Bob",
             },
             {
-              "name": "Carol",
-              "friends": [],
+              name: "Carol",
             },
             {
-              "name": "Dave",
-              "friends": [
-                {
-                  "name": "Bob",
-                },
-              ],
+              name: "Dave",
             },
-            {
-              "name": "Alice",
-              "friends": [
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
-            },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -784,19 +784,19 @@ describe("TestEdgeQLScope", () => {
                     );
             `,
       [
+        {
+          name: "Carol",
+          friends: [],
+        },
+        {
+          name: "Dave",
+          friends: [
             {
-              "name": "Carol",
-              "friends": [],
+              name: "Bob",
             },
-            {
-              "name": "Dave",
-              "friends": [
-                {
-                  "name": "Bob",
-                },
-              ],
-            },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -818,31 +818,31 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY User.name;
             `,
       [
+        {
+          name: "Alice",
+          friends: [
             {
-              "name": "Alice",
-              "friends": [
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
             },
+          ],
+        },
+        {
+          name: "Bob",
+          friends: [],
+        },
+        {
+          name: "Carol",
+          friends: [],
+        },
+        {
+          name: "Dave",
+          friends: [
             {
-              "name": "Bob",
-              "friends": [],
+              name: "Bob",
             },
-            {
-              "name": "Carol",
-              "friends": [],
-            },
-            {
-              "name": "Dave",
-              "friends": [
-                {
-                  "name": "Bob",
-                },
-              ],
-            },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -883,25 +883,25 @@ describe("TestEdgeQLScope", () => {
                     );
             `,
       [
+        {
+          name: "Alice",
+          friends: [
             {
-              "name": "Alice",
-              "friends": [
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Bob",
             },
             {
-              "name": "Bob",
-              "friends": [],
+              name: "Carol",
             },
-          ]
+            {
+              name: "Dave",
+            },
+          ],
+        },
+        {
+          name: "Bob",
+          friends: [],
+        },
+      ],
     );
   });
 
@@ -924,32 +924,32 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY User.name;
             `,
       [
+        {
+          name: "Alice",
+          friends: [
             {
-              "name": "Alice",
-              "friends": [
-                {
-                  "name": "Bob",
-                  "name_upper": "BOB",
-                },
-                {
-                  "name": "Carol",
-                  "name_upper": "CAROL",
-                },
-              ],
+              name: "Bob",
+              name_upper: "BOB",
             },
             {
-              "name": "Bob",
-              "friends": [],
+              name: "Carol",
+              name_upper: "CAROL",
             },
-            {
-              "name": "Carol",
-              "friends": [],
-            },
-            {
-              "name": "Dave",
-              "friends": [],
-            },
-          ]
+          ],
+        },
+        {
+          name: "Bob",
+          friends: [],
+        },
+        {
+          name: "Carol",
+          friends: [],
+        },
+        {
+          name: "Dave",
+          friends: [],
+        },
+      ],
     );
   });
 
@@ -964,7 +964,7 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY Card.name
                 ).slug
             `,
-      ["Air Djinn", "Air Giant eagle", "Earth Golem", "Fire Imp", "Air Sprite"]
+      ["Air Djinn", "Air Giant eagle", "Earth Golem", "Fire Imp", "Air Sprite"],
     );
   });
 
@@ -982,22 +982,22 @@ describe("TestEdgeQLScope", () => {
                     Card.name;
             `,
       [
-            {
-              "foo": "Air1",
-            },
-            {
-              "foo": "Air1",
-            },
-            {
-              "foo": "Earth1",
-            },
-            {
-              "foo": "Fire1",
-            },
-            {
-              "foo": "Air1",
-            },
-          ]
+        {
+          foo: "Air1",
+        },
+        {
+          foo: "Air1",
+        },
+        {
+          foo: "Earth1",
+        },
+        {
+          foo: "Fire1",
+        },
+        {
+          foo: "Air1",
+        },
+      ],
     );
   });
 
@@ -1019,7 +1019,7 @@ describe("TestEdgeQLScope", () => {
                     count(Card.owners.friends) > 2
                 ) ORDER BY .1.name).0;
             `,
-      ["Bog monster4", "Dragon2", "Giant turtle4"]
+      ["Bog monster4", "Dragon2", "Giant turtle4"],
     );
   });
 
@@ -1032,16 +1032,16 @@ describe("TestEdgeQLScope", () => {
                 SELECT Card.name ++ <str>count(Card.owners);
             `,
       unorderedSet([
-            "Bog monster4",
-            "Djinn2",
-            "Dragon2",
-            "Dwarf2",
-            "Giant eagle2",
-            "Giant turtle4",
-            "Golem3",
-            "Imp1",
-            "Sprite2",
-          ])
+        "Bog monster4",
+        "Djinn2",
+        "Dragon2",
+        "Dwarf2",
+        "Giant eagle2",
+        "Giant turtle4",
+        "Golem3",
+        "Imp1",
+        "Sprite2",
+      ]),
     );
   });
 
@@ -1056,16 +1056,16 @@ describe("TestEdgeQLScope", () => {
                        <str>count((WITH A := Card SELECT A).owners);
             `,
       unorderedSet([
-            "Bog monster4",
-            "Djinn2",
-            "Dragon2",
-            "Dwarf2",
-            "Giant eagle2",
-            "Giant turtle4",
-            "Golem3",
-            "Imp1",
-            "Sprite2",
-          ])
+        "Bog monster4",
+        "Djinn2",
+        "Dragon2",
+        "Dwarf2",
+        "Giant eagle2",
+        "Giant turtle4",
+        "Golem3",
+        "Imp1",
+        "Sprite2",
+      ]),
     );
     assertQueryResult(
       h,
@@ -1075,16 +1075,16 @@ describe("TestEdgeQLScope", () => {
                        <str>count((WITH A := Card SELECT A.owners));
             `,
       unorderedSet([
-            "Bog monster4",
-            "Djinn2",
-            "Dragon2",
-            "Dwarf2",
-            "Giant eagle2",
-            "Giant turtle4",
-            "Golem3",
-            "Imp1",
-            "Sprite2",
-          ])
+        "Bog monster4",
+        "Djinn2",
+        "Dragon2",
+        "Dwarf2",
+        "Giant eagle2",
+        "Giant turtle4",
+        "Golem3",
+        "Imp1",
+        "Sprite2",
+      ]),
     );
     assertQueryResult(
       h,
@@ -1094,16 +1094,16 @@ describe("TestEdgeQLScope", () => {
                        Card.name;
             `,
       unorderedSet([
-            "1Imp",
-            "2Djinn",
-            "2Dragon",
-            "2Dwarf",
-            "2Giant eagle",
-            "2Sprite",
-            "3Golem",
-            "4Bog monster",
-            "4Giant turtle",
-          ])
+        "1Imp",
+        "2Djinn",
+        "2Dragon",
+        "2Dwarf",
+        "2Giant eagle",
+        "2Sprite",
+        "3Golem",
+        "4Bog monster",
+        "4Giant turtle",
+      ]),
     );
     assertQueryResult(
       h,
@@ -1115,16 +1115,16 @@ describe("TestEdgeQLScope", () => {
                         count((WITH A := Card SELECT A).owners));
             `,
       unorderedBag([
-            ["Bog monster", 4],
-            ["Djinn", 2],
-            ["Dragon", 2],
-            ["Dwarf", 2],
-            ["Giant eagle", 2],
-            ["Giant turtle", 4],
-            ["Golem", 3],
-            ["Imp", 1],
-            ["Sprite", 2],
-          ])
+        ["Bog monster", 4],
+        ["Djinn", 2],
+        ["Dragon", 2],
+        ["Dwarf", 2],
+        ["Giant eagle", 2],
+        ["Giant turtle", 4],
+        ["Golem", 3],
+        ["Imp", 1],
+        ["Sprite", 2],
+      ]),
     );
   });
 
@@ -1146,11 +1146,11 @@ describe("TestEdgeQLScope", () => {
                 FILTER Card.name = 'Dragon';
             `,
       [
-            {
-              "name": "Dragon",
-              "owner": [],
-            },
-          ]
+        {
+          name: "Dragon",
+          owner: [],
+        },
+      ],
     );
   });
 
@@ -1164,263 +1164,263 @@ describe("TestEdgeQLScope", () => {
                 SELECT U2 ++ U2;
             `,
       unorderedSet([
-            "AliceAliceAliceAlice",
-            "AliceAliceAliceBob",
-            "AliceAliceAliceCarol",
-            "AliceAliceAliceDave",
-            "AliceAliceBobAlice",
-            "AliceAliceBobBob",
-            "AliceAliceBobCarol",
-            "AliceAliceBobDave",
-            "AliceAliceCarolAlice",
-            "AliceAliceCarolBob",
-            "AliceAliceCarolCarol",
-            "AliceAliceCarolDave",
-            "AliceAliceDaveAlice",
-            "AliceAliceDaveBob",
-            "AliceAliceDaveCarol",
-            "AliceAliceDaveDave",
-            "AliceBobAliceAlice",
-            "AliceBobAliceBob",
-            "AliceBobAliceCarol",
-            "AliceBobAliceDave",
-            "AliceBobBobAlice",
-            "AliceBobBobBob",
-            "AliceBobBobCarol",
-            "AliceBobBobDave",
-            "AliceBobCarolAlice",
-            "AliceBobCarolBob",
-            "AliceBobCarolCarol",
-            "AliceBobCarolDave",
-            "AliceBobDaveAlice",
-            "AliceBobDaveBob",
-            "AliceBobDaveCarol",
-            "AliceBobDaveDave",
-            "AliceCarolAliceAlice",
-            "AliceCarolAliceBob",
-            "AliceCarolAliceCarol",
-            "AliceCarolAliceDave",
-            "AliceCarolBobAlice",
-            "AliceCarolBobBob",
-            "AliceCarolBobCarol",
-            "AliceCarolBobDave",
-            "AliceCarolCarolAlice",
-            "AliceCarolCarolBob",
-            "AliceCarolCarolCarol",
-            "AliceCarolCarolDave",
-            "AliceCarolDaveAlice",
-            "AliceCarolDaveBob",
-            "AliceCarolDaveCarol",
-            "AliceCarolDaveDave",
-            "AliceDaveAliceAlice",
-            "AliceDaveAliceBob",
-            "AliceDaveAliceCarol",
-            "AliceDaveAliceDave",
-            "AliceDaveBobAlice",
-            "AliceDaveBobBob",
-            "AliceDaveBobCarol",
-            "AliceDaveBobDave",
-            "AliceDaveCarolAlice",
-            "AliceDaveCarolBob",
-            "AliceDaveCarolCarol",
-            "AliceDaveCarolDave",
-            "AliceDaveDaveAlice",
-            "AliceDaveDaveBob",
-            "AliceDaveDaveCarol",
-            "AliceDaveDaveDave",
-            "BobAliceAliceAlice",
-            "BobAliceAliceBob",
-            "BobAliceAliceCarol",
-            "BobAliceAliceDave",
-            "BobAliceBobAlice",
-            "BobAliceBobBob",
-            "BobAliceBobCarol",
-            "BobAliceBobDave",
-            "BobAliceCarolAlice",
-            "BobAliceCarolBob",
-            "BobAliceCarolCarol",
-            "BobAliceCarolDave",
-            "BobAliceDaveAlice",
-            "BobAliceDaveBob",
-            "BobAliceDaveCarol",
-            "BobAliceDaveDave",
-            "BobBobAliceAlice",
-            "BobBobAliceBob",
-            "BobBobAliceCarol",
-            "BobBobAliceDave",
-            "BobBobBobAlice",
-            "BobBobBobBob",
-            "BobBobBobCarol",
-            "BobBobBobDave",
-            "BobBobCarolAlice",
-            "BobBobCarolBob",
-            "BobBobCarolCarol",
-            "BobBobCarolDave",
-            "BobBobDaveAlice",
-            "BobBobDaveBob",
-            "BobBobDaveCarol",
-            "BobBobDaveDave",
-            "BobCarolAliceAlice",
-            "BobCarolAliceBob",
-            "BobCarolAliceCarol",
-            "BobCarolAliceDave",
-            "BobCarolBobAlice",
-            "BobCarolBobBob",
-            "BobCarolBobCarol",
-            "BobCarolBobDave",
-            "BobCarolCarolAlice",
-            "BobCarolCarolBob",
-            "BobCarolCarolCarol",
-            "BobCarolCarolDave",
-            "BobCarolDaveAlice",
-            "BobCarolDaveBob",
-            "BobCarolDaveCarol",
-            "BobCarolDaveDave",
-            "BobDaveAliceAlice",
-            "BobDaveAliceBob",
-            "BobDaveAliceCarol",
-            "BobDaveAliceDave",
-            "BobDaveBobAlice",
-            "BobDaveBobBob",
-            "BobDaveBobCarol",
-            "BobDaveBobDave",
-            "BobDaveCarolAlice",
-            "BobDaveCarolBob",
-            "BobDaveCarolCarol",
-            "BobDaveCarolDave",
-            "BobDaveDaveAlice",
-            "BobDaveDaveBob",
-            "BobDaveDaveCarol",
-            "BobDaveDaveDave",
-            "CarolAliceAliceAlice",
-            "CarolAliceAliceBob",
-            "CarolAliceAliceCarol",
-            "CarolAliceAliceDave",
-            "CarolAliceBobAlice",
-            "CarolAliceBobBob",
-            "CarolAliceBobCarol",
-            "CarolAliceBobDave",
-            "CarolAliceCarolAlice",
-            "CarolAliceCarolBob",
-            "CarolAliceCarolCarol",
-            "CarolAliceCarolDave",
-            "CarolAliceDaveAlice",
-            "CarolAliceDaveBob",
-            "CarolAliceDaveCarol",
-            "CarolAliceDaveDave",
-            "CarolBobAliceAlice",
-            "CarolBobAliceBob",
-            "CarolBobAliceCarol",
-            "CarolBobAliceDave",
-            "CarolBobBobAlice",
-            "CarolBobBobBob",
-            "CarolBobBobCarol",
-            "CarolBobBobDave",
-            "CarolBobCarolAlice",
-            "CarolBobCarolBob",
-            "CarolBobCarolCarol",
-            "CarolBobCarolDave",
-            "CarolBobDaveAlice",
-            "CarolBobDaveBob",
-            "CarolBobDaveCarol",
-            "CarolBobDaveDave",
-            "CarolCarolAliceAlice",
-            "CarolCarolAliceBob",
-            "CarolCarolAliceCarol",
-            "CarolCarolAliceDave",
-            "CarolCarolBobAlice",
-            "CarolCarolBobBob",
-            "CarolCarolBobCarol",
-            "CarolCarolBobDave",
-            "CarolCarolCarolAlice",
-            "CarolCarolCarolBob",
-            "CarolCarolCarolCarol",
-            "CarolCarolCarolDave",
-            "CarolCarolDaveAlice",
-            "CarolCarolDaveBob",
-            "CarolCarolDaveCarol",
-            "CarolCarolDaveDave",
-            "CarolDaveAliceAlice",
-            "CarolDaveAliceBob",
-            "CarolDaveAliceCarol",
-            "CarolDaveAliceDave",
-            "CarolDaveBobAlice",
-            "CarolDaveBobBob",
-            "CarolDaveBobCarol",
-            "CarolDaveBobDave",
-            "CarolDaveCarolAlice",
-            "CarolDaveCarolBob",
-            "CarolDaveCarolCarol",
-            "CarolDaveCarolDave",
-            "CarolDaveDaveAlice",
-            "CarolDaveDaveBob",
-            "CarolDaveDaveCarol",
-            "CarolDaveDaveDave",
-            "DaveAliceAliceAlice",
-            "DaveAliceAliceBob",
-            "DaveAliceAliceCarol",
-            "DaveAliceAliceDave",
-            "DaveAliceBobAlice",
-            "DaveAliceBobBob",
-            "DaveAliceBobCarol",
-            "DaveAliceBobDave",
-            "DaveAliceCarolAlice",
-            "DaveAliceCarolBob",
-            "DaveAliceCarolCarol",
-            "DaveAliceCarolDave",
-            "DaveAliceDaveAlice",
-            "DaveAliceDaveBob",
-            "DaveAliceDaveCarol",
-            "DaveAliceDaveDave",
-            "DaveBobAliceAlice",
-            "DaveBobAliceBob",
-            "DaveBobAliceCarol",
-            "DaveBobAliceDave",
-            "DaveBobBobAlice",
-            "DaveBobBobBob",
-            "DaveBobBobCarol",
-            "DaveBobBobDave",
-            "DaveBobCarolAlice",
-            "DaveBobCarolBob",
-            "DaveBobCarolCarol",
-            "DaveBobCarolDave",
-            "DaveBobDaveAlice",
-            "DaveBobDaveBob",
-            "DaveBobDaveCarol",
-            "DaveBobDaveDave",
-            "DaveCarolAliceAlice",
-            "DaveCarolAliceBob",
-            "DaveCarolAliceCarol",
-            "DaveCarolAliceDave",
-            "DaveCarolBobAlice",
-            "DaveCarolBobBob",
-            "DaveCarolBobCarol",
-            "DaveCarolBobDave",
-            "DaveCarolCarolAlice",
-            "DaveCarolCarolBob",
-            "DaveCarolCarolCarol",
-            "DaveCarolCarolDave",
-            "DaveCarolDaveAlice",
-            "DaveCarolDaveBob",
-            "DaveCarolDaveCarol",
-            "DaveCarolDaveDave",
-            "DaveDaveAliceAlice",
-            "DaveDaveAliceBob",
-            "DaveDaveAliceCarol",
-            "DaveDaveAliceDave",
-            "DaveDaveBobAlice",
-            "DaveDaveBobBob",
-            "DaveDaveBobCarol",
-            "DaveDaveBobDave",
-            "DaveDaveCarolAlice",
-            "DaveDaveCarolBob",
-            "DaveDaveCarolCarol",
-            "DaveDaveCarolDave",
-            "DaveDaveDaveAlice",
-            "DaveDaveDaveBob",
-            "DaveDaveDaveCarol",
-            "DaveDaveDaveDave",
-          ])
+        "AliceAliceAliceAlice",
+        "AliceAliceAliceBob",
+        "AliceAliceAliceCarol",
+        "AliceAliceAliceDave",
+        "AliceAliceBobAlice",
+        "AliceAliceBobBob",
+        "AliceAliceBobCarol",
+        "AliceAliceBobDave",
+        "AliceAliceCarolAlice",
+        "AliceAliceCarolBob",
+        "AliceAliceCarolCarol",
+        "AliceAliceCarolDave",
+        "AliceAliceDaveAlice",
+        "AliceAliceDaveBob",
+        "AliceAliceDaveCarol",
+        "AliceAliceDaveDave",
+        "AliceBobAliceAlice",
+        "AliceBobAliceBob",
+        "AliceBobAliceCarol",
+        "AliceBobAliceDave",
+        "AliceBobBobAlice",
+        "AliceBobBobBob",
+        "AliceBobBobCarol",
+        "AliceBobBobDave",
+        "AliceBobCarolAlice",
+        "AliceBobCarolBob",
+        "AliceBobCarolCarol",
+        "AliceBobCarolDave",
+        "AliceBobDaveAlice",
+        "AliceBobDaveBob",
+        "AliceBobDaveCarol",
+        "AliceBobDaveDave",
+        "AliceCarolAliceAlice",
+        "AliceCarolAliceBob",
+        "AliceCarolAliceCarol",
+        "AliceCarolAliceDave",
+        "AliceCarolBobAlice",
+        "AliceCarolBobBob",
+        "AliceCarolBobCarol",
+        "AliceCarolBobDave",
+        "AliceCarolCarolAlice",
+        "AliceCarolCarolBob",
+        "AliceCarolCarolCarol",
+        "AliceCarolCarolDave",
+        "AliceCarolDaveAlice",
+        "AliceCarolDaveBob",
+        "AliceCarolDaveCarol",
+        "AliceCarolDaveDave",
+        "AliceDaveAliceAlice",
+        "AliceDaveAliceBob",
+        "AliceDaveAliceCarol",
+        "AliceDaveAliceDave",
+        "AliceDaveBobAlice",
+        "AliceDaveBobBob",
+        "AliceDaveBobCarol",
+        "AliceDaveBobDave",
+        "AliceDaveCarolAlice",
+        "AliceDaveCarolBob",
+        "AliceDaveCarolCarol",
+        "AliceDaveCarolDave",
+        "AliceDaveDaveAlice",
+        "AliceDaveDaveBob",
+        "AliceDaveDaveCarol",
+        "AliceDaveDaveDave",
+        "BobAliceAliceAlice",
+        "BobAliceAliceBob",
+        "BobAliceAliceCarol",
+        "BobAliceAliceDave",
+        "BobAliceBobAlice",
+        "BobAliceBobBob",
+        "BobAliceBobCarol",
+        "BobAliceBobDave",
+        "BobAliceCarolAlice",
+        "BobAliceCarolBob",
+        "BobAliceCarolCarol",
+        "BobAliceCarolDave",
+        "BobAliceDaveAlice",
+        "BobAliceDaveBob",
+        "BobAliceDaveCarol",
+        "BobAliceDaveDave",
+        "BobBobAliceAlice",
+        "BobBobAliceBob",
+        "BobBobAliceCarol",
+        "BobBobAliceDave",
+        "BobBobBobAlice",
+        "BobBobBobBob",
+        "BobBobBobCarol",
+        "BobBobBobDave",
+        "BobBobCarolAlice",
+        "BobBobCarolBob",
+        "BobBobCarolCarol",
+        "BobBobCarolDave",
+        "BobBobDaveAlice",
+        "BobBobDaveBob",
+        "BobBobDaveCarol",
+        "BobBobDaveDave",
+        "BobCarolAliceAlice",
+        "BobCarolAliceBob",
+        "BobCarolAliceCarol",
+        "BobCarolAliceDave",
+        "BobCarolBobAlice",
+        "BobCarolBobBob",
+        "BobCarolBobCarol",
+        "BobCarolBobDave",
+        "BobCarolCarolAlice",
+        "BobCarolCarolBob",
+        "BobCarolCarolCarol",
+        "BobCarolCarolDave",
+        "BobCarolDaveAlice",
+        "BobCarolDaveBob",
+        "BobCarolDaveCarol",
+        "BobCarolDaveDave",
+        "BobDaveAliceAlice",
+        "BobDaveAliceBob",
+        "BobDaveAliceCarol",
+        "BobDaveAliceDave",
+        "BobDaveBobAlice",
+        "BobDaveBobBob",
+        "BobDaveBobCarol",
+        "BobDaveBobDave",
+        "BobDaveCarolAlice",
+        "BobDaveCarolBob",
+        "BobDaveCarolCarol",
+        "BobDaveCarolDave",
+        "BobDaveDaveAlice",
+        "BobDaveDaveBob",
+        "BobDaveDaveCarol",
+        "BobDaveDaveDave",
+        "CarolAliceAliceAlice",
+        "CarolAliceAliceBob",
+        "CarolAliceAliceCarol",
+        "CarolAliceAliceDave",
+        "CarolAliceBobAlice",
+        "CarolAliceBobBob",
+        "CarolAliceBobCarol",
+        "CarolAliceBobDave",
+        "CarolAliceCarolAlice",
+        "CarolAliceCarolBob",
+        "CarolAliceCarolCarol",
+        "CarolAliceCarolDave",
+        "CarolAliceDaveAlice",
+        "CarolAliceDaveBob",
+        "CarolAliceDaveCarol",
+        "CarolAliceDaveDave",
+        "CarolBobAliceAlice",
+        "CarolBobAliceBob",
+        "CarolBobAliceCarol",
+        "CarolBobAliceDave",
+        "CarolBobBobAlice",
+        "CarolBobBobBob",
+        "CarolBobBobCarol",
+        "CarolBobBobDave",
+        "CarolBobCarolAlice",
+        "CarolBobCarolBob",
+        "CarolBobCarolCarol",
+        "CarolBobCarolDave",
+        "CarolBobDaveAlice",
+        "CarolBobDaveBob",
+        "CarolBobDaveCarol",
+        "CarolBobDaveDave",
+        "CarolCarolAliceAlice",
+        "CarolCarolAliceBob",
+        "CarolCarolAliceCarol",
+        "CarolCarolAliceDave",
+        "CarolCarolBobAlice",
+        "CarolCarolBobBob",
+        "CarolCarolBobCarol",
+        "CarolCarolBobDave",
+        "CarolCarolCarolAlice",
+        "CarolCarolCarolBob",
+        "CarolCarolCarolCarol",
+        "CarolCarolCarolDave",
+        "CarolCarolDaveAlice",
+        "CarolCarolDaveBob",
+        "CarolCarolDaveCarol",
+        "CarolCarolDaveDave",
+        "CarolDaveAliceAlice",
+        "CarolDaveAliceBob",
+        "CarolDaveAliceCarol",
+        "CarolDaveAliceDave",
+        "CarolDaveBobAlice",
+        "CarolDaveBobBob",
+        "CarolDaveBobCarol",
+        "CarolDaveBobDave",
+        "CarolDaveCarolAlice",
+        "CarolDaveCarolBob",
+        "CarolDaveCarolCarol",
+        "CarolDaveCarolDave",
+        "CarolDaveDaveAlice",
+        "CarolDaveDaveBob",
+        "CarolDaveDaveCarol",
+        "CarolDaveDaveDave",
+        "DaveAliceAliceAlice",
+        "DaveAliceAliceBob",
+        "DaveAliceAliceCarol",
+        "DaveAliceAliceDave",
+        "DaveAliceBobAlice",
+        "DaveAliceBobBob",
+        "DaveAliceBobCarol",
+        "DaveAliceBobDave",
+        "DaveAliceCarolAlice",
+        "DaveAliceCarolBob",
+        "DaveAliceCarolCarol",
+        "DaveAliceCarolDave",
+        "DaveAliceDaveAlice",
+        "DaveAliceDaveBob",
+        "DaveAliceDaveCarol",
+        "DaveAliceDaveDave",
+        "DaveBobAliceAlice",
+        "DaveBobAliceBob",
+        "DaveBobAliceCarol",
+        "DaveBobAliceDave",
+        "DaveBobBobAlice",
+        "DaveBobBobBob",
+        "DaveBobBobCarol",
+        "DaveBobBobDave",
+        "DaveBobCarolAlice",
+        "DaveBobCarolBob",
+        "DaveBobCarolCarol",
+        "DaveBobCarolDave",
+        "DaveBobDaveAlice",
+        "DaveBobDaveBob",
+        "DaveBobDaveCarol",
+        "DaveBobDaveDave",
+        "DaveCarolAliceAlice",
+        "DaveCarolAliceBob",
+        "DaveCarolAliceCarol",
+        "DaveCarolAliceDave",
+        "DaveCarolBobAlice",
+        "DaveCarolBobBob",
+        "DaveCarolBobCarol",
+        "DaveCarolBobDave",
+        "DaveCarolCarolAlice",
+        "DaveCarolCarolBob",
+        "DaveCarolCarolCarol",
+        "DaveCarolCarolDave",
+        "DaveCarolDaveAlice",
+        "DaveCarolDaveBob",
+        "DaveCarolDaveCarol",
+        "DaveCarolDaveDave",
+        "DaveDaveAliceAlice",
+        "DaveDaveAliceBob",
+        "DaveDaveAliceCarol",
+        "DaveDaveAliceDave",
+        "DaveDaveBobAlice",
+        "DaveDaveBobBob",
+        "DaveDaveBobCarol",
+        "DaveDaveBobDave",
+        "DaveDaveCarolAlice",
+        "DaveDaveCarolBob",
+        "DaveDaveCarolCarol",
+        "DaveDaveCarolDave",
+        "DaveDaveDaveAlice",
+        "DaveDaveDaveBob",
+        "DaveDaveDaveCarol",
+        "DaveDaveDaveDave",
+      ]),
     );
     assertQueryResult(
       h,
@@ -1430,270 +1430,273 @@ describe("TestEdgeQLScope", () => {
                        User.name ++ DETACHED User.name;
             `,
       unorderedSet([
-            "AliceAliceAliceAlice",
-            "AliceAliceAliceBob",
-            "AliceAliceAliceCarol",
-            "AliceAliceAliceDave",
-            "AliceAliceBobAlice",
-            "AliceAliceBobBob",
-            "AliceAliceBobCarol",
-            "AliceAliceBobDave",
-            "AliceAliceCarolAlice",
-            "AliceAliceCarolBob",
-            "AliceAliceCarolCarol",
-            "AliceAliceCarolDave",
-            "AliceAliceDaveAlice",
-            "AliceAliceDaveBob",
-            "AliceAliceDaveCarol",
-            "AliceAliceDaveDave",
-            "AliceBobAliceAlice",
-            "AliceBobAliceBob",
-            "AliceBobAliceCarol",
-            "AliceBobAliceDave",
-            "AliceBobBobAlice",
-            "AliceBobBobBob",
-            "AliceBobBobCarol",
-            "AliceBobBobDave",
-            "AliceBobCarolAlice",
-            "AliceBobCarolBob",
-            "AliceBobCarolCarol",
-            "AliceBobCarolDave",
-            "AliceBobDaveAlice",
-            "AliceBobDaveBob",
-            "AliceBobDaveCarol",
-            "AliceBobDaveDave",
-            "AliceCarolAliceAlice",
-            "AliceCarolAliceBob",
-            "AliceCarolAliceCarol",
-            "AliceCarolAliceDave",
-            "AliceCarolBobAlice",
-            "AliceCarolBobBob",
-            "AliceCarolBobCarol",
-            "AliceCarolBobDave",
-            "AliceCarolCarolAlice",
-            "AliceCarolCarolBob",
-            "AliceCarolCarolCarol",
-            "AliceCarolCarolDave",
-            "AliceCarolDaveAlice",
-            "AliceCarolDaveBob",
-            "AliceCarolDaveCarol",
-            "AliceCarolDaveDave",
-            "AliceDaveAliceAlice",
-            "AliceDaveAliceBob",
-            "AliceDaveAliceCarol",
-            "AliceDaveAliceDave",
-            "AliceDaveBobAlice",
-            "AliceDaveBobBob",
-            "AliceDaveBobCarol",
-            "AliceDaveBobDave",
-            "AliceDaveCarolAlice",
-            "AliceDaveCarolBob",
-            "AliceDaveCarolCarol",
-            "AliceDaveCarolDave",
-            "AliceDaveDaveAlice",
-            "AliceDaveDaveBob",
-            "AliceDaveDaveCarol",
-            "AliceDaveDaveDave",
-            "BobAliceAliceAlice",
-            "BobAliceAliceBob",
-            "BobAliceAliceCarol",
-            "BobAliceAliceDave",
-            "BobAliceBobAlice",
-            "BobAliceBobBob",
-            "BobAliceBobCarol",
-            "BobAliceBobDave",
-            "BobAliceCarolAlice",
-            "BobAliceCarolBob",
-            "BobAliceCarolCarol",
-            "BobAliceCarolDave",
-            "BobAliceDaveAlice",
-            "BobAliceDaveBob",
-            "BobAliceDaveCarol",
-            "BobAliceDaveDave",
-            "BobBobAliceAlice",
-            "BobBobAliceBob",
-            "BobBobAliceCarol",
-            "BobBobAliceDave",
-            "BobBobBobAlice",
-            "BobBobBobBob",
-            "BobBobBobCarol",
-            "BobBobBobDave",
-            "BobBobCarolAlice",
-            "BobBobCarolBob",
-            "BobBobCarolCarol",
-            "BobBobCarolDave",
-            "BobBobDaveAlice",
-            "BobBobDaveBob",
-            "BobBobDaveCarol",
-            "BobBobDaveDave",
-            "BobCarolAliceAlice",
-            "BobCarolAliceBob",
-            "BobCarolAliceCarol",
-            "BobCarolAliceDave",
-            "BobCarolBobAlice",
-            "BobCarolBobBob",
-            "BobCarolBobCarol",
-            "BobCarolBobDave",
-            "BobCarolCarolAlice",
-            "BobCarolCarolBob",
-            "BobCarolCarolCarol",
-            "BobCarolCarolDave",
-            "BobCarolDaveAlice",
-            "BobCarolDaveBob",
-            "BobCarolDaveCarol",
-            "BobCarolDaveDave",
-            "BobDaveAliceAlice",
-            "BobDaveAliceBob",
-            "BobDaveAliceCarol",
-            "BobDaveAliceDave",
-            "BobDaveBobAlice",
-            "BobDaveBobBob",
-            "BobDaveBobCarol",
-            "BobDaveBobDave",
-            "BobDaveCarolAlice",
-            "BobDaveCarolBob",
-            "BobDaveCarolCarol",
-            "BobDaveCarolDave",
-            "BobDaveDaveAlice",
-            "BobDaveDaveBob",
-            "BobDaveDaveCarol",
-            "BobDaveDaveDave",
-            "CarolAliceAliceAlice",
-            "CarolAliceAliceBob",
-            "CarolAliceAliceCarol",
-            "CarolAliceAliceDave",
-            "CarolAliceBobAlice",
-            "CarolAliceBobBob",
-            "CarolAliceBobCarol",
-            "CarolAliceBobDave",
-            "CarolAliceCarolAlice",
-            "CarolAliceCarolBob",
-            "CarolAliceCarolCarol",
-            "CarolAliceCarolDave",
-            "CarolAliceDaveAlice",
-            "CarolAliceDaveBob",
-            "CarolAliceDaveCarol",
-            "CarolAliceDaveDave",
-            "CarolBobAliceAlice",
-            "CarolBobAliceBob",
-            "CarolBobAliceCarol",
-            "CarolBobAliceDave",
-            "CarolBobBobAlice",
-            "CarolBobBobBob",
-            "CarolBobBobCarol",
-            "CarolBobBobDave",
-            "CarolBobCarolAlice",
-            "CarolBobCarolBob",
-            "CarolBobCarolCarol",
-            "CarolBobCarolDave",
-            "CarolBobDaveAlice",
-            "CarolBobDaveBob",
-            "CarolBobDaveCarol",
-            "CarolBobDaveDave",
-            "CarolCarolAliceAlice",
-            "CarolCarolAliceBob",
-            "CarolCarolAliceCarol",
-            "CarolCarolAliceDave",
-            "CarolCarolBobAlice",
-            "CarolCarolBobBob",
-            "CarolCarolBobCarol",
-            "CarolCarolBobDave",
-            "CarolCarolCarolAlice",
-            "CarolCarolCarolBob",
-            "CarolCarolCarolCarol",
-            "CarolCarolCarolDave",
-            "CarolCarolDaveAlice",
-            "CarolCarolDaveBob",
-            "CarolCarolDaveCarol",
-            "CarolCarolDaveDave",
-            "CarolDaveAliceAlice",
-            "CarolDaveAliceBob",
-            "CarolDaveAliceCarol",
-            "CarolDaveAliceDave",
-            "CarolDaveBobAlice",
-            "CarolDaveBobBob",
-            "CarolDaveBobCarol",
-            "CarolDaveBobDave",
-            "CarolDaveCarolAlice",
-            "CarolDaveCarolBob",
-            "CarolDaveCarolCarol",
-            "CarolDaveCarolDave",
-            "CarolDaveDaveAlice",
-            "CarolDaveDaveBob",
-            "CarolDaveDaveCarol",
-            "CarolDaveDaveDave",
-            "DaveAliceAliceAlice",
-            "DaveAliceAliceBob",
-            "DaveAliceAliceCarol",
-            "DaveAliceAliceDave",
-            "DaveAliceBobAlice",
-            "DaveAliceBobBob",
-            "DaveAliceBobCarol",
-            "DaveAliceBobDave",
-            "DaveAliceCarolAlice",
-            "DaveAliceCarolBob",
-            "DaveAliceCarolCarol",
-            "DaveAliceCarolDave",
-            "DaveAliceDaveAlice",
-            "DaveAliceDaveBob",
-            "DaveAliceDaveCarol",
-            "DaveAliceDaveDave",
-            "DaveBobAliceAlice",
-            "DaveBobAliceBob",
-            "DaveBobAliceCarol",
-            "DaveBobAliceDave",
-            "DaveBobBobAlice",
-            "DaveBobBobBob",
-            "DaveBobBobCarol",
-            "DaveBobBobDave",
-            "DaveBobCarolAlice",
-            "DaveBobCarolBob",
-            "DaveBobCarolCarol",
-            "DaveBobCarolDave",
-            "DaveBobDaveAlice",
-            "DaveBobDaveBob",
-            "DaveBobDaveCarol",
-            "DaveBobDaveDave",
-            "DaveCarolAliceAlice",
-            "DaveCarolAliceBob",
-            "DaveCarolAliceCarol",
-            "DaveCarolAliceDave",
-            "DaveCarolBobAlice",
-            "DaveCarolBobBob",
-            "DaveCarolBobCarol",
-            "DaveCarolBobDave",
-            "DaveCarolCarolAlice",
-            "DaveCarolCarolBob",
-            "DaveCarolCarolCarol",
-            "DaveCarolCarolDave",
-            "DaveCarolDaveAlice",
-            "DaveCarolDaveBob",
-            "DaveCarolDaveCarol",
-            "DaveCarolDaveDave",
-            "DaveDaveAliceAlice",
-            "DaveDaveAliceBob",
-            "DaveDaveAliceCarol",
-            "DaveDaveAliceDave",
-            "DaveDaveBobAlice",
-            "DaveDaveBobBob",
-            "DaveDaveBobCarol",
-            "DaveDaveBobDave",
-            "DaveDaveCarolAlice",
-            "DaveDaveCarolBob",
-            "DaveDaveCarolCarol",
-            "DaveDaveCarolDave",
-            "DaveDaveDaveAlice",
-            "DaveDaveDaveBob",
-            "DaveDaveDaveCarol",
-            "DaveDaveDaveDave",
-          ])
+        "AliceAliceAliceAlice",
+        "AliceAliceAliceBob",
+        "AliceAliceAliceCarol",
+        "AliceAliceAliceDave",
+        "AliceAliceBobAlice",
+        "AliceAliceBobBob",
+        "AliceAliceBobCarol",
+        "AliceAliceBobDave",
+        "AliceAliceCarolAlice",
+        "AliceAliceCarolBob",
+        "AliceAliceCarolCarol",
+        "AliceAliceCarolDave",
+        "AliceAliceDaveAlice",
+        "AliceAliceDaveBob",
+        "AliceAliceDaveCarol",
+        "AliceAliceDaveDave",
+        "AliceBobAliceAlice",
+        "AliceBobAliceBob",
+        "AliceBobAliceCarol",
+        "AliceBobAliceDave",
+        "AliceBobBobAlice",
+        "AliceBobBobBob",
+        "AliceBobBobCarol",
+        "AliceBobBobDave",
+        "AliceBobCarolAlice",
+        "AliceBobCarolBob",
+        "AliceBobCarolCarol",
+        "AliceBobCarolDave",
+        "AliceBobDaveAlice",
+        "AliceBobDaveBob",
+        "AliceBobDaveCarol",
+        "AliceBobDaveDave",
+        "AliceCarolAliceAlice",
+        "AliceCarolAliceBob",
+        "AliceCarolAliceCarol",
+        "AliceCarolAliceDave",
+        "AliceCarolBobAlice",
+        "AliceCarolBobBob",
+        "AliceCarolBobCarol",
+        "AliceCarolBobDave",
+        "AliceCarolCarolAlice",
+        "AliceCarolCarolBob",
+        "AliceCarolCarolCarol",
+        "AliceCarolCarolDave",
+        "AliceCarolDaveAlice",
+        "AliceCarolDaveBob",
+        "AliceCarolDaveCarol",
+        "AliceCarolDaveDave",
+        "AliceDaveAliceAlice",
+        "AliceDaveAliceBob",
+        "AliceDaveAliceCarol",
+        "AliceDaveAliceDave",
+        "AliceDaveBobAlice",
+        "AliceDaveBobBob",
+        "AliceDaveBobCarol",
+        "AliceDaveBobDave",
+        "AliceDaveCarolAlice",
+        "AliceDaveCarolBob",
+        "AliceDaveCarolCarol",
+        "AliceDaveCarolDave",
+        "AliceDaveDaveAlice",
+        "AliceDaveDaveBob",
+        "AliceDaveDaveCarol",
+        "AliceDaveDaveDave",
+        "BobAliceAliceAlice",
+        "BobAliceAliceBob",
+        "BobAliceAliceCarol",
+        "BobAliceAliceDave",
+        "BobAliceBobAlice",
+        "BobAliceBobBob",
+        "BobAliceBobCarol",
+        "BobAliceBobDave",
+        "BobAliceCarolAlice",
+        "BobAliceCarolBob",
+        "BobAliceCarolCarol",
+        "BobAliceCarolDave",
+        "BobAliceDaveAlice",
+        "BobAliceDaveBob",
+        "BobAliceDaveCarol",
+        "BobAliceDaveDave",
+        "BobBobAliceAlice",
+        "BobBobAliceBob",
+        "BobBobAliceCarol",
+        "BobBobAliceDave",
+        "BobBobBobAlice",
+        "BobBobBobBob",
+        "BobBobBobCarol",
+        "BobBobBobDave",
+        "BobBobCarolAlice",
+        "BobBobCarolBob",
+        "BobBobCarolCarol",
+        "BobBobCarolDave",
+        "BobBobDaveAlice",
+        "BobBobDaveBob",
+        "BobBobDaveCarol",
+        "BobBobDaveDave",
+        "BobCarolAliceAlice",
+        "BobCarolAliceBob",
+        "BobCarolAliceCarol",
+        "BobCarolAliceDave",
+        "BobCarolBobAlice",
+        "BobCarolBobBob",
+        "BobCarolBobCarol",
+        "BobCarolBobDave",
+        "BobCarolCarolAlice",
+        "BobCarolCarolBob",
+        "BobCarolCarolCarol",
+        "BobCarolCarolDave",
+        "BobCarolDaveAlice",
+        "BobCarolDaveBob",
+        "BobCarolDaveCarol",
+        "BobCarolDaveDave",
+        "BobDaveAliceAlice",
+        "BobDaveAliceBob",
+        "BobDaveAliceCarol",
+        "BobDaveAliceDave",
+        "BobDaveBobAlice",
+        "BobDaveBobBob",
+        "BobDaveBobCarol",
+        "BobDaveBobDave",
+        "BobDaveCarolAlice",
+        "BobDaveCarolBob",
+        "BobDaveCarolCarol",
+        "BobDaveCarolDave",
+        "BobDaveDaveAlice",
+        "BobDaveDaveBob",
+        "BobDaveDaveCarol",
+        "BobDaveDaveDave",
+        "CarolAliceAliceAlice",
+        "CarolAliceAliceBob",
+        "CarolAliceAliceCarol",
+        "CarolAliceAliceDave",
+        "CarolAliceBobAlice",
+        "CarolAliceBobBob",
+        "CarolAliceBobCarol",
+        "CarolAliceBobDave",
+        "CarolAliceCarolAlice",
+        "CarolAliceCarolBob",
+        "CarolAliceCarolCarol",
+        "CarolAliceCarolDave",
+        "CarolAliceDaveAlice",
+        "CarolAliceDaveBob",
+        "CarolAliceDaveCarol",
+        "CarolAliceDaveDave",
+        "CarolBobAliceAlice",
+        "CarolBobAliceBob",
+        "CarolBobAliceCarol",
+        "CarolBobAliceDave",
+        "CarolBobBobAlice",
+        "CarolBobBobBob",
+        "CarolBobBobCarol",
+        "CarolBobBobDave",
+        "CarolBobCarolAlice",
+        "CarolBobCarolBob",
+        "CarolBobCarolCarol",
+        "CarolBobCarolDave",
+        "CarolBobDaveAlice",
+        "CarolBobDaveBob",
+        "CarolBobDaveCarol",
+        "CarolBobDaveDave",
+        "CarolCarolAliceAlice",
+        "CarolCarolAliceBob",
+        "CarolCarolAliceCarol",
+        "CarolCarolAliceDave",
+        "CarolCarolBobAlice",
+        "CarolCarolBobBob",
+        "CarolCarolBobCarol",
+        "CarolCarolBobDave",
+        "CarolCarolCarolAlice",
+        "CarolCarolCarolBob",
+        "CarolCarolCarolCarol",
+        "CarolCarolCarolDave",
+        "CarolCarolDaveAlice",
+        "CarolCarolDaveBob",
+        "CarolCarolDaveCarol",
+        "CarolCarolDaveDave",
+        "CarolDaveAliceAlice",
+        "CarolDaveAliceBob",
+        "CarolDaveAliceCarol",
+        "CarolDaveAliceDave",
+        "CarolDaveBobAlice",
+        "CarolDaveBobBob",
+        "CarolDaveBobCarol",
+        "CarolDaveBobDave",
+        "CarolDaveCarolAlice",
+        "CarolDaveCarolBob",
+        "CarolDaveCarolCarol",
+        "CarolDaveCarolDave",
+        "CarolDaveDaveAlice",
+        "CarolDaveDaveBob",
+        "CarolDaveDaveCarol",
+        "CarolDaveDaveDave",
+        "DaveAliceAliceAlice",
+        "DaveAliceAliceBob",
+        "DaveAliceAliceCarol",
+        "DaveAliceAliceDave",
+        "DaveAliceBobAlice",
+        "DaveAliceBobBob",
+        "DaveAliceBobCarol",
+        "DaveAliceBobDave",
+        "DaveAliceCarolAlice",
+        "DaveAliceCarolBob",
+        "DaveAliceCarolCarol",
+        "DaveAliceCarolDave",
+        "DaveAliceDaveAlice",
+        "DaveAliceDaveBob",
+        "DaveAliceDaveCarol",
+        "DaveAliceDaveDave",
+        "DaveBobAliceAlice",
+        "DaveBobAliceBob",
+        "DaveBobAliceCarol",
+        "DaveBobAliceDave",
+        "DaveBobBobAlice",
+        "DaveBobBobBob",
+        "DaveBobBobCarol",
+        "DaveBobBobDave",
+        "DaveBobCarolAlice",
+        "DaveBobCarolBob",
+        "DaveBobCarolCarol",
+        "DaveBobCarolDave",
+        "DaveBobDaveAlice",
+        "DaveBobDaveBob",
+        "DaveBobDaveCarol",
+        "DaveBobDaveDave",
+        "DaveCarolAliceAlice",
+        "DaveCarolAliceBob",
+        "DaveCarolAliceCarol",
+        "DaveCarolAliceDave",
+        "DaveCarolBobAlice",
+        "DaveCarolBobBob",
+        "DaveCarolBobCarol",
+        "DaveCarolBobDave",
+        "DaveCarolCarolAlice",
+        "DaveCarolCarolBob",
+        "DaveCarolCarolCarol",
+        "DaveCarolCarolDave",
+        "DaveCarolDaveAlice",
+        "DaveCarolDaveBob",
+        "DaveCarolDaveCarol",
+        "DaveCarolDaveDave",
+        "DaveDaveAliceAlice",
+        "DaveDaveAliceBob",
+        "DaveDaveAliceCarol",
+        "DaveDaveAliceDave",
+        "DaveDaveBobAlice",
+        "DaveDaveBobBob",
+        "DaveDaveBobCarol",
+        "DaveDaveBobDave",
+        "DaveDaveCarolAlice",
+        "DaveDaveCarolBob",
+        "DaveDaveCarolCarol",
+        "DaveDaveCarolDave",
+        "DaveDaveDaveAlice",
+        "DaveDaveDaveBob",
+        "DaveDaveDaveCarol",
+        "DaveDaveDaveDave",
+      ]),
     );
   });
 
   it("test_edgeql_scope_detached_02", () => {
-    let names = queryRows<string>(h, `
+    let names = queryRows<string>(
+      h,
+      `
             SELECT User.name ++ <str>count(User.deck);
-        `);
+        `,
+    );
     assertQueryResult(
       h,
       `
@@ -1707,7 +1710,7 @@ describe("TestEdgeQLScope", () => {
                 # get rid of players matching themselves
                 FILTER U0 != U1;
             `,
-      unorderedSet(names.flatMap((a) => names.filter((b) => a !== b).map((b) => `${a} vs ${b}`)))
+      unorderedSet(names.flatMap((a) => names.filter((b) => a !== b).map((b) => `${a} vs ${b}`))),
     );
   });
 
@@ -1723,263 +1726,263 @@ describe("TestEdgeQLScope", () => {
                 SELECT User.name ++ U0 ++ U1 ++ U2;
             `,
       unorderedSet([
-            "AliceAliceAliceAlice",
-            "AliceAliceAliceBob",
-            "AliceAliceAliceCarol",
-            "AliceAliceAliceDave",
-            "AliceAliceBobAlice",
-            "AliceAliceBobBob",
-            "AliceAliceBobCarol",
-            "AliceAliceBobDave",
-            "AliceAliceCarolAlice",
-            "AliceAliceCarolBob",
-            "AliceAliceCarolCarol",
-            "AliceAliceCarolDave",
-            "AliceAliceDaveAlice",
-            "AliceAliceDaveBob",
-            "AliceAliceDaveCarol",
-            "AliceAliceDaveDave",
-            "AliceBobAliceAlice",
-            "AliceBobAliceBob",
-            "AliceBobAliceCarol",
-            "AliceBobAliceDave",
-            "AliceBobBobAlice",
-            "AliceBobBobBob",
-            "AliceBobBobCarol",
-            "AliceBobBobDave",
-            "AliceBobCarolAlice",
-            "AliceBobCarolBob",
-            "AliceBobCarolCarol",
-            "AliceBobCarolDave",
-            "AliceBobDaveAlice",
-            "AliceBobDaveBob",
-            "AliceBobDaveCarol",
-            "AliceBobDaveDave",
-            "AliceCarolAliceAlice",
-            "AliceCarolAliceBob",
-            "AliceCarolAliceCarol",
-            "AliceCarolAliceDave",
-            "AliceCarolBobAlice",
-            "AliceCarolBobBob",
-            "AliceCarolBobCarol",
-            "AliceCarolBobDave",
-            "AliceCarolCarolAlice",
-            "AliceCarolCarolBob",
-            "AliceCarolCarolCarol",
-            "AliceCarolCarolDave",
-            "AliceCarolDaveAlice",
-            "AliceCarolDaveBob",
-            "AliceCarolDaveCarol",
-            "AliceCarolDaveDave",
-            "AliceDaveAliceAlice",
-            "AliceDaveAliceBob",
-            "AliceDaveAliceCarol",
-            "AliceDaveAliceDave",
-            "AliceDaveBobAlice",
-            "AliceDaveBobBob",
-            "AliceDaveBobCarol",
-            "AliceDaveBobDave",
-            "AliceDaveCarolAlice",
-            "AliceDaveCarolBob",
-            "AliceDaveCarolCarol",
-            "AliceDaveCarolDave",
-            "AliceDaveDaveAlice",
-            "AliceDaveDaveBob",
-            "AliceDaveDaveCarol",
-            "AliceDaveDaveDave",
-            "BobAliceAliceAlice",
-            "BobAliceAliceBob",
-            "BobAliceAliceCarol",
-            "BobAliceAliceDave",
-            "BobAliceBobAlice",
-            "BobAliceBobBob",
-            "BobAliceBobCarol",
-            "BobAliceBobDave",
-            "BobAliceCarolAlice",
-            "BobAliceCarolBob",
-            "BobAliceCarolCarol",
-            "BobAliceCarolDave",
-            "BobAliceDaveAlice",
-            "BobAliceDaveBob",
-            "BobAliceDaveCarol",
-            "BobAliceDaveDave",
-            "BobBobAliceAlice",
-            "BobBobAliceBob",
-            "BobBobAliceCarol",
-            "BobBobAliceDave",
-            "BobBobBobAlice",
-            "BobBobBobBob",
-            "BobBobBobCarol",
-            "BobBobBobDave",
-            "BobBobCarolAlice",
-            "BobBobCarolBob",
-            "BobBobCarolCarol",
-            "BobBobCarolDave",
-            "BobBobDaveAlice",
-            "BobBobDaveBob",
-            "BobBobDaveCarol",
-            "BobBobDaveDave",
-            "BobCarolAliceAlice",
-            "BobCarolAliceBob",
-            "BobCarolAliceCarol",
-            "BobCarolAliceDave",
-            "BobCarolBobAlice",
-            "BobCarolBobBob",
-            "BobCarolBobCarol",
-            "BobCarolBobDave",
-            "BobCarolCarolAlice",
-            "BobCarolCarolBob",
-            "BobCarolCarolCarol",
-            "BobCarolCarolDave",
-            "BobCarolDaveAlice",
-            "BobCarolDaveBob",
-            "BobCarolDaveCarol",
-            "BobCarolDaveDave",
-            "BobDaveAliceAlice",
-            "BobDaveAliceBob",
-            "BobDaveAliceCarol",
-            "BobDaveAliceDave",
-            "BobDaveBobAlice",
-            "BobDaveBobBob",
-            "BobDaveBobCarol",
-            "BobDaveBobDave",
-            "BobDaveCarolAlice",
-            "BobDaveCarolBob",
-            "BobDaveCarolCarol",
-            "BobDaveCarolDave",
-            "BobDaveDaveAlice",
-            "BobDaveDaveBob",
-            "BobDaveDaveCarol",
-            "BobDaveDaveDave",
-            "CarolAliceAliceAlice",
-            "CarolAliceAliceBob",
-            "CarolAliceAliceCarol",
-            "CarolAliceAliceDave",
-            "CarolAliceBobAlice",
-            "CarolAliceBobBob",
-            "CarolAliceBobCarol",
-            "CarolAliceBobDave",
-            "CarolAliceCarolAlice",
-            "CarolAliceCarolBob",
-            "CarolAliceCarolCarol",
-            "CarolAliceCarolDave",
-            "CarolAliceDaveAlice",
-            "CarolAliceDaveBob",
-            "CarolAliceDaveCarol",
-            "CarolAliceDaveDave",
-            "CarolBobAliceAlice",
-            "CarolBobAliceBob",
-            "CarolBobAliceCarol",
-            "CarolBobAliceDave",
-            "CarolBobBobAlice",
-            "CarolBobBobBob",
-            "CarolBobBobCarol",
-            "CarolBobBobDave",
-            "CarolBobCarolAlice",
-            "CarolBobCarolBob",
-            "CarolBobCarolCarol",
-            "CarolBobCarolDave",
-            "CarolBobDaveAlice",
-            "CarolBobDaveBob",
-            "CarolBobDaveCarol",
-            "CarolBobDaveDave",
-            "CarolCarolAliceAlice",
-            "CarolCarolAliceBob",
-            "CarolCarolAliceCarol",
-            "CarolCarolAliceDave",
-            "CarolCarolBobAlice",
-            "CarolCarolBobBob",
-            "CarolCarolBobCarol",
-            "CarolCarolBobDave",
-            "CarolCarolCarolAlice",
-            "CarolCarolCarolBob",
-            "CarolCarolCarolCarol",
-            "CarolCarolCarolDave",
-            "CarolCarolDaveAlice",
-            "CarolCarolDaveBob",
-            "CarolCarolDaveCarol",
-            "CarolCarolDaveDave",
-            "CarolDaveAliceAlice",
-            "CarolDaveAliceBob",
-            "CarolDaveAliceCarol",
-            "CarolDaveAliceDave",
-            "CarolDaveBobAlice",
-            "CarolDaveBobBob",
-            "CarolDaveBobCarol",
-            "CarolDaveBobDave",
-            "CarolDaveCarolAlice",
-            "CarolDaveCarolBob",
-            "CarolDaveCarolCarol",
-            "CarolDaveCarolDave",
-            "CarolDaveDaveAlice",
-            "CarolDaveDaveBob",
-            "CarolDaveDaveCarol",
-            "CarolDaveDaveDave",
-            "DaveAliceAliceAlice",
-            "DaveAliceAliceBob",
-            "DaveAliceAliceCarol",
-            "DaveAliceAliceDave",
-            "DaveAliceBobAlice",
-            "DaveAliceBobBob",
-            "DaveAliceBobCarol",
-            "DaveAliceBobDave",
-            "DaveAliceCarolAlice",
-            "DaveAliceCarolBob",
-            "DaveAliceCarolCarol",
-            "DaveAliceCarolDave",
-            "DaveAliceDaveAlice",
-            "DaveAliceDaveBob",
-            "DaveAliceDaveCarol",
-            "DaveAliceDaveDave",
-            "DaveBobAliceAlice",
-            "DaveBobAliceBob",
-            "DaveBobAliceCarol",
-            "DaveBobAliceDave",
-            "DaveBobBobAlice",
-            "DaveBobBobBob",
-            "DaveBobBobCarol",
-            "DaveBobBobDave",
-            "DaveBobCarolAlice",
-            "DaveBobCarolBob",
-            "DaveBobCarolCarol",
-            "DaveBobCarolDave",
-            "DaveBobDaveAlice",
-            "DaveBobDaveBob",
-            "DaveBobDaveCarol",
-            "DaveBobDaveDave",
-            "DaveCarolAliceAlice",
-            "DaveCarolAliceBob",
-            "DaveCarolAliceCarol",
-            "DaveCarolAliceDave",
-            "DaveCarolBobAlice",
-            "DaveCarolBobBob",
-            "DaveCarolBobCarol",
-            "DaveCarolBobDave",
-            "DaveCarolCarolAlice",
-            "DaveCarolCarolBob",
-            "DaveCarolCarolCarol",
-            "DaveCarolCarolDave",
-            "DaveCarolDaveAlice",
-            "DaveCarolDaveBob",
-            "DaveCarolDaveCarol",
-            "DaveCarolDaveDave",
-            "DaveDaveAliceAlice",
-            "DaveDaveAliceBob",
-            "DaveDaveAliceCarol",
-            "DaveDaveAliceDave",
-            "DaveDaveBobAlice",
-            "DaveDaveBobBob",
-            "DaveDaveBobCarol",
-            "DaveDaveBobDave",
-            "DaveDaveCarolAlice",
-            "DaveDaveCarolBob",
-            "DaveDaveCarolCarol",
-            "DaveDaveCarolDave",
-            "DaveDaveDaveAlice",
-            "DaveDaveDaveBob",
-            "DaveDaveDaveCarol",
-            "DaveDaveDaveDave",
-          ])
+        "AliceAliceAliceAlice",
+        "AliceAliceAliceBob",
+        "AliceAliceAliceCarol",
+        "AliceAliceAliceDave",
+        "AliceAliceBobAlice",
+        "AliceAliceBobBob",
+        "AliceAliceBobCarol",
+        "AliceAliceBobDave",
+        "AliceAliceCarolAlice",
+        "AliceAliceCarolBob",
+        "AliceAliceCarolCarol",
+        "AliceAliceCarolDave",
+        "AliceAliceDaveAlice",
+        "AliceAliceDaveBob",
+        "AliceAliceDaveCarol",
+        "AliceAliceDaveDave",
+        "AliceBobAliceAlice",
+        "AliceBobAliceBob",
+        "AliceBobAliceCarol",
+        "AliceBobAliceDave",
+        "AliceBobBobAlice",
+        "AliceBobBobBob",
+        "AliceBobBobCarol",
+        "AliceBobBobDave",
+        "AliceBobCarolAlice",
+        "AliceBobCarolBob",
+        "AliceBobCarolCarol",
+        "AliceBobCarolDave",
+        "AliceBobDaveAlice",
+        "AliceBobDaveBob",
+        "AliceBobDaveCarol",
+        "AliceBobDaveDave",
+        "AliceCarolAliceAlice",
+        "AliceCarolAliceBob",
+        "AliceCarolAliceCarol",
+        "AliceCarolAliceDave",
+        "AliceCarolBobAlice",
+        "AliceCarolBobBob",
+        "AliceCarolBobCarol",
+        "AliceCarolBobDave",
+        "AliceCarolCarolAlice",
+        "AliceCarolCarolBob",
+        "AliceCarolCarolCarol",
+        "AliceCarolCarolDave",
+        "AliceCarolDaveAlice",
+        "AliceCarolDaveBob",
+        "AliceCarolDaveCarol",
+        "AliceCarolDaveDave",
+        "AliceDaveAliceAlice",
+        "AliceDaveAliceBob",
+        "AliceDaveAliceCarol",
+        "AliceDaveAliceDave",
+        "AliceDaveBobAlice",
+        "AliceDaveBobBob",
+        "AliceDaveBobCarol",
+        "AliceDaveBobDave",
+        "AliceDaveCarolAlice",
+        "AliceDaveCarolBob",
+        "AliceDaveCarolCarol",
+        "AliceDaveCarolDave",
+        "AliceDaveDaveAlice",
+        "AliceDaveDaveBob",
+        "AliceDaveDaveCarol",
+        "AliceDaveDaveDave",
+        "BobAliceAliceAlice",
+        "BobAliceAliceBob",
+        "BobAliceAliceCarol",
+        "BobAliceAliceDave",
+        "BobAliceBobAlice",
+        "BobAliceBobBob",
+        "BobAliceBobCarol",
+        "BobAliceBobDave",
+        "BobAliceCarolAlice",
+        "BobAliceCarolBob",
+        "BobAliceCarolCarol",
+        "BobAliceCarolDave",
+        "BobAliceDaveAlice",
+        "BobAliceDaveBob",
+        "BobAliceDaveCarol",
+        "BobAliceDaveDave",
+        "BobBobAliceAlice",
+        "BobBobAliceBob",
+        "BobBobAliceCarol",
+        "BobBobAliceDave",
+        "BobBobBobAlice",
+        "BobBobBobBob",
+        "BobBobBobCarol",
+        "BobBobBobDave",
+        "BobBobCarolAlice",
+        "BobBobCarolBob",
+        "BobBobCarolCarol",
+        "BobBobCarolDave",
+        "BobBobDaveAlice",
+        "BobBobDaveBob",
+        "BobBobDaveCarol",
+        "BobBobDaveDave",
+        "BobCarolAliceAlice",
+        "BobCarolAliceBob",
+        "BobCarolAliceCarol",
+        "BobCarolAliceDave",
+        "BobCarolBobAlice",
+        "BobCarolBobBob",
+        "BobCarolBobCarol",
+        "BobCarolBobDave",
+        "BobCarolCarolAlice",
+        "BobCarolCarolBob",
+        "BobCarolCarolCarol",
+        "BobCarolCarolDave",
+        "BobCarolDaveAlice",
+        "BobCarolDaveBob",
+        "BobCarolDaveCarol",
+        "BobCarolDaveDave",
+        "BobDaveAliceAlice",
+        "BobDaveAliceBob",
+        "BobDaveAliceCarol",
+        "BobDaveAliceDave",
+        "BobDaveBobAlice",
+        "BobDaveBobBob",
+        "BobDaveBobCarol",
+        "BobDaveBobDave",
+        "BobDaveCarolAlice",
+        "BobDaveCarolBob",
+        "BobDaveCarolCarol",
+        "BobDaveCarolDave",
+        "BobDaveDaveAlice",
+        "BobDaveDaveBob",
+        "BobDaveDaveCarol",
+        "BobDaveDaveDave",
+        "CarolAliceAliceAlice",
+        "CarolAliceAliceBob",
+        "CarolAliceAliceCarol",
+        "CarolAliceAliceDave",
+        "CarolAliceBobAlice",
+        "CarolAliceBobBob",
+        "CarolAliceBobCarol",
+        "CarolAliceBobDave",
+        "CarolAliceCarolAlice",
+        "CarolAliceCarolBob",
+        "CarolAliceCarolCarol",
+        "CarolAliceCarolDave",
+        "CarolAliceDaveAlice",
+        "CarolAliceDaveBob",
+        "CarolAliceDaveCarol",
+        "CarolAliceDaveDave",
+        "CarolBobAliceAlice",
+        "CarolBobAliceBob",
+        "CarolBobAliceCarol",
+        "CarolBobAliceDave",
+        "CarolBobBobAlice",
+        "CarolBobBobBob",
+        "CarolBobBobCarol",
+        "CarolBobBobDave",
+        "CarolBobCarolAlice",
+        "CarolBobCarolBob",
+        "CarolBobCarolCarol",
+        "CarolBobCarolDave",
+        "CarolBobDaveAlice",
+        "CarolBobDaveBob",
+        "CarolBobDaveCarol",
+        "CarolBobDaveDave",
+        "CarolCarolAliceAlice",
+        "CarolCarolAliceBob",
+        "CarolCarolAliceCarol",
+        "CarolCarolAliceDave",
+        "CarolCarolBobAlice",
+        "CarolCarolBobBob",
+        "CarolCarolBobCarol",
+        "CarolCarolBobDave",
+        "CarolCarolCarolAlice",
+        "CarolCarolCarolBob",
+        "CarolCarolCarolCarol",
+        "CarolCarolCarolDave",
+        "CarolCarolDaveAlice",
+        "CarolCarolDaveBob",
+        "CarolCarolDaveCarol",
+        "CarolCarolDaveDave",
+        "CarolDaveAliceAlice",
+        "CarolDaveAliceBob",
+        "CarolDaveAliceCarol",
+        "CarolDaveAliceDave",
+        "CarolDaveBobAlice",
+        "CarolDaveBobBob",
+        "CarolDaveBobCarol",
+        "CarolDaveBobDave",
+        "CarolDaveCarolAlice",
+        "CarolDaveCarolBob",
+        "CarolDaveCarolCarol",
+        "CarolDaveCarolDave",
+        "CarolDaveDaveAlice",
+        "CarolDaveDaveBob",
+        "CarolDaveDaveCarol",
+        "CarolDaveDaveDave",
+        "DaveAliceAliceAlice",
+        "DaveAliceAliceBob",
+        "DaveAliceAliceCarol",
+        "DaveAliceAliceDave",
+        "DaveAliceBobAlice",
+        "DaveAliceBobBob",
+        "DaveAliceBobCarol",
+        "DaveAliceBobDave",
+        "DaveAliceCarolAlice",
+        "DaveAliceCarolBob",
+        "DaveAliceCarolCarol",
+        "DaveAliceCarolDave",
+        "DaveAliceDaveAlice",
+        "DaveAliceDaveBob",
+        "DaveAliceDaveCarol",
+        "DaveAliceDaveDave",
+        "DaveBobAliceAlice",
+        "DaveBobAliceBob",
+        "DaveBobAliceCarol",
+        "DaveBobAliceDave",
+        "DaveBobBobAlice",
+        "DaveBobBobBob",
+        "DaveBobBobCarol",
+        "DaveBobBobDave",
+        "DaveBobCarolAlice",
+        "DaveBobCarolBob",
+        "DaveBobCarolCarol",
+        "DaveBobCarolDave",
+        "DaveBobDaveAlice",
+        "DaveBobDaveBob",
+        "DaveBobDaveCarol",
+        "DaveBobDaveDave",
+        "DaveCarolAliceAlice",
+        "DaveCarolAliceBob",
+        "DaveCarolAliceCarol",
+        "DaveCarolAliceDave",
+        "DaveCarolBobAlice",
+        "DaveCarolBobBob",
+        "DaveCarolBobCarol",
+        "DaveCarolBobDave",
+        "DaveCarolCarolAlice",
+        "DaveCarolCarolBob",
+        "DaveCarolCarolCarol",
+        "DaveCarolCarolDave",
+        "DaveCarolDaveAlice",
+        "DaveCarolDaveBob",
+        "DaveCarolDaveCarol",
+        "DaveCarolDaveDave",
+        "DaveDaveAliceAlice",
+        "DaveDaveAliceBob",
+        "DaveDaveAliceCarol",
+        "DaveDaveAliceDave",
+        "DaveDaveBobAlice",
+        "DaveDaveBobBob",
+        "DaveDaveBobCarol",
+        "DaveDaveBobDave",
+        "DaveDaveCarolAlice",
+        "DaveDaveCarolBob",
+        "DaveDaveCarolCarol",
+        "DaveDaveCarolDave",
+        "DaveDaveDaveAlice",
+        "DaveDaveDaveBob",
+        "DaveDaveDaveCarol",
+        "DaveDaveDaveDave",
+      ]),
     );
     assertQueryResult(
       h,
@@ -2000,263 +2003,263 @@ describe("TestEdgeQLScope", () => {
                 SELECT U2 ++ U3;
             `,
       unorderedSet([
-            "AliceAliceAliceAlice",
-            "AliceAliceAliceBob",
-            "AliceAliceAliceCarol",
-            "AliceAliceAliceDave",
-            "AliceAliceBobAlice",
-            "AliceAliceBobBob",
-            "AliceAliceBobCarol",
-            "AliceAliceBobDave",
-            "AliceAliceCarolAlice",
-            "AliceAliceCarolBob",
-            "AliceAliceCarolCarol",
-            "AliceAliceCarolDave",
-            "AliceAliceDaveAlice",
-            "AliceAliceDaveBob",
-            "AliceAliceDaveCarol",
-            "AliceAliceDaveDave",
-            "AliceBobAliceAlice",
-            "AliceBobAliceBob",
-            "AliceBobAliceCarol",
-            "AliceBobAliceDave",
-            "AliceBobBobAlice",
-            "AliceBobBobBob",
-            "AliceBobBobCarol",
-            "AliceBobBobDave",
-            "AliceBobCarolAlice",
-            "AliceBobCarolBob",
-            "AliceBobCarolCarol",
-            "AliceBobCarolDave",
-            "AliceBobDaveAlice",
-            "AliceBobDaveBob",
-            "AliceBobDaveCarol",
-            "AliceBobDaveDave",
-            "AliceCarolAliceAlice",
-            "AliceCarolAliceBob",
-            "AliceCarolAliceCarol",
-            "AliceCarolAliceDave",
-            "AliceCarolBobAlice",
-            "AliceCarolBobBob",
-            "AliceCarolBobCarol",
-            "AliceCarolBobDave",
-            "AliceCarolCarolAlice",
-            "AliceCarolCarolBob",
-            "AliceCarolCarolCarol",
-            "AliceCarolCarolDave",
-            "AliceCarolDaveAlice",
-            "AliceCarolDaveBob",
-            "AliceCarolDaveCarol",
-            "AliceCarolDaveDave",
-            "AliceDaveAliceAlice",
-            "AliceDaveAliceBob",
-            "AliceDaveAliceCarol",
-            "AliceDaveAliceDave",
-            "AliceDaveBobAlice",
-            "AliceDaveBobBob",
-            "AliceDaveBobCarol",
-            "AliceDaveBobDave",
-            "AliceDaveCarolAlice",
-            "AliceDaveCarolBob",
-            "AliceDaveCarolCarol",
-            "AliceDaveCarolDave",
-            "AliceDaveDaveAlice",
-            "AliceDaveDaveBob",
-            "AliceDaveDaveCarol",
-            "AliceDaveDaveDave",
-            "BobAliceAliceAlice",
-            "BobAliceAliceBob",
-            "BobAliceAliceCarol",
-            "BobAliceAliceDave",
-            "BobAliceBobAlice",
-            "BobAliceBobBob",
-            "BobAliceBobCarol",
-            "BobAliceBobDave",
-            "BobAliceCarolAlice",
-            "BobAliceCarolBob",
-            "BobAliceCarolCarol",
-            "BobAliceCarolDave",
-            "BobAliceDaveAlice",
-            "BobAliceDaveBob",
-            "BobAliceDaveCarol",
-            "BobAliceDaveDave",
-            "BobBobAliceAlice",
-            "BobBobAliceBob",
-            "BobBobAliceCarol",
-            "BobBobAliceDave",
-            "BobBobBobAlice",
-            "BobBobBobBob",
-            "BobBobBobCarol",
-            "BobBobBobDave",
-            "BobBobCarolAlice",
-            "BobBobCarolBob",
-            "BobBobCarolCarol",
-            "BobBobCarolDave",
-            "BobBobDaveAlice",
-            "BobBobDaveBob",
-            "BobBobDaveCarol",
-            "BobBobDaveDave",
-            "BobCarolAliceAlice",
-            "BobCarolAliceBob",
-            "BobCarolAliceCarol",
-            "BobCarolAliceDave",
-            "BobCarolBobAlice",
-            "BobCarolBobBob",
-            "BobCarolBobCarol",
-            "BobCarolBobDave",
-            "BobCarolCarolAlice",
-            "BobCarolCarolBob",
-            "BobCarolCarolCarol",
-            "BobCarolCarolDave",
-            "BobCarolDaveAlice",
-            "BobCarolDaveBob",
-            "BobCarolDaveCarol",
-            "BobCarolDaveDave",
-            "BobDaveAliceAlice",
-            "BobDaveAliceBob",
-            "BobDaveAliceCarol",
-            "BobDaveAliceDave",
-            "BobDaveBobAlice",
-            "BobDaveBobBob",
-            "BobDaveBobCarol",
-            "BobDaveBobDave",
-            "BobDaveCarolAlice",
-            "BobDaveCarolBob",
-            "BobDaveCarolCarol",
-            "BobDaveCarolDave",
-            "BobDaveDaveAlice",
-            "BobDaveDaveBob",
-            "BobDaveDaveCarol",
-            "BobDaveDaveDave",
-            "CarolAliceAliceAlice",
-            "CarolAliceAliceBob",
-            "CarolAliceAliceCarol",
-            "CarolAliceAliceDave",
-            "CarolAliceBobAlice",
-            "CarolAliceBobBob",
-            "CarolAliceBobCarol",
-            "CarolAliceBobDave",
-            "CarolAliceCarolAlice",
-            "CarolAliceCarolBob",
-            "CarolAliceCarolCarol",
-            "CarolAliceCarolDave",
-            "CarolAliceDaveAlice",
-            "CarolAliceDaveBob",
-            "CarolAliceDaveCarol",
-            "CarolAliceDaveDave",
-            "CarolBobAliceAlice",
-            "CarolBobAliceBob",
-            "CarolBobAliceCarol",
-            "CarolBobAliceDave",
-            "CarolBobBobAlice",
-            "CarolBobBobBob",
-            "CarolBobBobCarol",
-            "CarolBobBobDave",
-            "CarolBobCarolAlice",
-            "CarolBobCarolBob",
-            "CarolBobCarolCarol",
-            "CarolBobCarolDave",
-            "CarolBobDaveAlice",
-            "CarolBobDaveBob",
-            "CarolBobDaveCarol",
-            "CarolBobDaveDave",
-            "CarolCarolAliceAlice",
-            "CarolCarolAliceBob",
-            "CarolCarolAliceCarol",
-            "CarolCarolAliceDave",
-            "CarolCarolBobAlice",
-            "CarolCarolBobBob",
-            "CarolCarolBobCarol",
-            "CarolCarolBobDave",
-            "CarolCarolCarolAlice",
-            "CarolCarolCarolBob",
-            "CarolCarolCarolCarol",
-            "CarolCarolCarolDave",
-            "CarolCarolDaveAlice",
-            "CarolCarolDaveBob",
-            "CarolCarolDaveCarol",
-            "CarolCarolDaveDave",
-            "CarolDaveAliceAlice",
-            "CarolDaveAliceBob",
-            "CarolDaveAliceCarol",
-            "CarolDaveAliceDave",
-            "CarolDaveBobAlice",
-            "CarolDaveBobBob",
-            "CarolDaveBobCarol",
-            "CarolDaveBobDave",
-            "CarolDaveCarolAlice",
-            "CarolDaveCarolBob",
-            "CarolDaveCarolCarol",
-            "CarolDaveCarolDave",
-            "CarolDaveDaveAlice",
-            "CarolDaveDaveBob",
-            "CarolDaveDaveCarol",
-            "CarolDaveDaveDave",
-            "DaveAliceAliceAlice",
-            "DaveAliceAliceBob",
-            "DaveAliceAliceCarol",
-            "DaveAliceAliceDave",
-            "DaveAliceBobAlice",
-            "DaveAliceBobBob",
-            "DaveAliceBobCarol",
-            "DaveAliceBobDave",
-            "DaveAliceCarolAlice",
-            "DaveAliceCarolBob",
-            "DaveAliceCarolCarol",
-            "DaveAliceCarolDave",
-            "DaveAliceDaveAlice",
-            "DaveAliceDaveBob",
-            "DaveAliceDaveCarol",
-            "DaveAliceDaveDave",
-            "DaveBobAliceAlice",
-            "DaveBobAliceBob",
-            "DaveBobAliceCarol",
-            "DaveBobAliceDave",
-            "DaveBobBobAlice",
-            "DaveBobBobBob",
-            "DaveBobBobCarol",
-            "DaveBobBobDave",
-            "DaveBobCarolAlice",
-            "DaveBobCarolBob",
-            "DaveBobCarolCarol",
-            "DaveBobCarolDave",
-            "DaveBobDaveAlice",
-            "DaveBobDaveBob",
-            "DaveBobDaveCarol",
-            "DaveBobDaveDave",
-            "DaveCarolAliceAlice",
-            "DaveCarolAliceBob",
-            "DaveCarolAliceCarol",
-            "DaveCarolAliceDave",
-            "DaveCarolBobAlice",
-            "DaveCarolBobBob",
-            "DaveCarolBobCarol",
-            "DaveCarolBobDave",
-            "DaveCarolCarolAlice",
-            "DaveCarolCarolBob",
-            "DaveCarolCarolCarol",
-            "DaveCarolCarolDave",
-            "DaveCarolDaveAlice",
-            "DaveCarolDaveBob",
-            "DaveCarolDaveCarol",
-            "DaveCarolDaveDave",
-            "DaveDaveAliceAlice",
-            "DaveDaveAliceBob",
-            "DaveDaveAliceCarol",
-            "DaveDaveAliceDave",
-            "DaveDaveBobAlice",
-            "DaveDaveBobBob",
-            "DaveDaveBobCarol",
-            "DaveDaveBobDave",
-            "DaveDaveCarolAlice",
-            "DaveDaveCarolBob",
-            "DaveDaveCarolCarol",
-            "DaveDaveCarolDave",
-            "DaveDaveDaveAlice",
-            "DaveDaveDaveBob",
-            "DaveDaveDaveCarol",
-            "DaveDaveDaveDave",
-          ])
+        "AliceAliceAliceAlice",
+        "AliceAliceAliceBob",
+        "AliceAliceAliceCarol",
+        "AliceAliceAliceDave",
+        "AliceAliceBobAlice",
+        "AliceAliceBobBob",
+        "AliceAliceBobCarol",
+        "AliceAliceBobDave",
+        "AliceAliceCarolAlice",
+        "AliceAliceCarolBob",
+        "AliceAliceCarolCarol",
+        "AliceAliceCarolDave",
+        "AliceAliceDaveAlice",
+        "AliceAliceDaveBob",
+        "AliceAliceDaveCarol",
+        "AliceAliceDaveDave",
+        "AliceBobAliceAlice",
+        "AliceBobAliceBob",
+        "AliceBobAliceCarol",
+        "AliceBobAliceDave",
+        "AliceBobBobAlice",
+        "AliceBobBobBob",
+        "AliceBobBobCarol",
+        "AliceBobBobDave",
+        "AliceBobCarolAlice",
+        "AliceBobCarolBob",
+        "AliceBobCarolCarol",
+        "AliceBobCarolDave",
+        "AliceBobDaveAlice",
+        "AliceBobDaveBob",
+        "AliceBobDaveCarol",
+        "AliceBobDaveDave",
+        "AliceCarolAliceAlice",
+        "AliceCarolAliceBob",
+        "AliceCarolAliceCarol",
+        "AliceCarolAliceDave",
+        "AliceCarolBobAlice",
+        "AliceCarolBobBob",
+        "AliceCarolBobCarol",
+        "AliceCarolBobDave",
+        "AliceCarolCarolAlice",
+        "AliceCarolCarolBob",
+        "AliceCarolCarolCarol",
+        "AliceCarolCarolDave",
+        "AliceCarolDaveAlice",
+        "AliceCarolDaveBob",
+        "AliceCarolDaveCarol",
+        "AliceCarolDaveDave",
+        "AliceDaveAliceAlice",
+        "AliceDaveAliceBob",
+        "AliceDaveAliceCarol",
+        "AliceDaveAliceDave",
+        "AliceDaveBobAlice",
+        "AliceDaveBobBob",
+        "AliceDaveBobCarol",
+        "AliceDaveBobDave",
+        "AliceDaveCarolAlice",
+        "AliceDaveCarolBob",
+        "AliceDaveCarolCarol",
+        "AliceDaveCarolDave",
+        "AliceDaveDaveAlice",
+        "AliceDaveDaveBob",
+        "AliceDaveDaveCarol",
+        "AliceDaveDaveDave",
+        "BobAliceAliceAlice",
+        "BobAliceAliceBob",
+        "BobAliceAliceCarol",
+        "BobAliceAliceDave",
+        "BobAliceBobAlice",
+        "BobAliceBobBob",
+        "BobAliceBobCarol",
+        "BobAliceBobDave",
+        "BobAliceCarolAlice",
+        "BobAliceCarolBob",
+        "BobAliceCarolCarol",
+        "BobAliceCarolDave",
+        "BobAliceDaveAlice",
+        "BobAliceDaveBob",
+        "BobAliceDaveCarol",
+        "BobAliceDaveDave",
+        "BobBobAliceAlice",
+        "BobBobAliceBob",
+        "BobBobAliceCarol",
+        "BobBobAliceDave",
+        "BobBobBobAlice",
+        "BobBobBobBob",
+        "BobBobBobCarol",
+        "BobBobBobDave",
+        "BobBobCarolAlice",
+        "BobBobCarolBob",
+        "BobBobCarolCarol",
+        "BobBobCarolDave",
+        "BobBobDaveAlice",
+        "BobBobDaveBob",
+        "BobBobDaveCarol",
+        "BobBobDaveDave",
+        "BobCarolAliceAlice",
+        "BobCarolAliceBob",
+        "BobCarolAliceCarol",
+        "BobCarolAliceDave",
+        "BobCarolBobAlice",
+        "BobCarolBobBob",
+        "BobCarolBobCarol",
+        "BobCarolBobDave",
+        "BobCarolCarolAlice",
+        "BobCarolCarolBob",
+        "BobCarolCarolCarol",
+        "BobCarolCarolDave",
+        "BobCarolDaveAlice",
+        "BobCarolDaveBob",
+        "BobCarolDaveCarol",
+        "BobCarolDaveDave",
+        "BobDaveAliceAlice",
+        "BobDaveAliceBob",
+        "BobDaveAliceCarol",
+        "BobDaveAliceDave",
+        "BobDaveBobAlice",
+        "BobDaveBobBob",
+        "BobDaveBobCarol",
+        "BobDaveBobDave",
+        "BobDaveCarolAlice",
+        "BobDaveCarolBob",
+        "BobDaveCarolCarol",
+        "BobDaveCarolDave",
+        "BobDaveDaveAlice",
+        "BobDaveDaveBob",
+        "BobDaveDaveCarol",
+        "BobDaveDaveDave",
+        "CarolAliceAliceAlice",
+        "CarolAliceAliceBob",
+        "CarolAliceAliceCarol",
+        "CarolAliceAliceDave",
+        "CarolAliceBobAlice",
+        "CarolAliceBobBob",
+        "CarolAliceBobCarol",
+        "CarolAliceBobDave",
+        "CarolAliceCarolAlice",
+        "CarolAliceCarolBob",
+        "CarolAliceCarolCarol",
+        "CarolAliceCarolDave",
+        "CarolAliceDaveAlice",
+        "CarolAliceDaveBob",
+        "CarolAliceDaveCarol",
+        "CarolAliceDaveDave",
+        "CarolBobAliceAlice",
+        "CarolBobAliceBob",
+        "CarolBobAliceCarol",
+        "CarolBobAliceDave",
+        "CarolBobBobAlice",
+        "CarolBobBobBob",
+        "CarolBobBobCarol",
+        "CarolBobBobDave",
+        "CarolBobCarolAlice",
+        "CarolBobCarolBob",
+        "CarolBobCarolCarol",
+        "CarolBobCarolDave",
+        "CarolBobDaveAlice",
+        "CarolBobDaveBob",
+        "CarolBobDaveCarol",
+        "CarolBobDaveDave",
+        "CarolCarolAliceAlice",
+        "CarolCarolAliceBob",
+        "CarolCarolAliceCarol",
+        "CarolCarolAliceDave",
+        "CarolCarolBobAlice",
+        "CarolCarolBobBob",
+        "CarolCarolBobCarol",
+        "CarolCarolBobDave",
+        "CarolCarolCarolAlice",
+        "CarolCarolCarolBob",
+        "CarolCarolCarolCarol",
+        "CarolCarolCarolDave",
+        "CarolCarolDaveAlice",
+        "CarolCarolDaveBob",
+        "CarolCarolDaveCarol",
+        "CarolCarolDaveDave",
+        "CarolDaveAliceAlice",
+        "CarolDaveAliceBob",
+        "CarolDaveAliceCarol",
+        "CarolDaveAliceDave",
+        "CarolDaveBobAlice",
+        "CarolDaveBobBob",
+        "CarolDaveBobCarol",
+        "CarolDaveBobDave",
+        "CarolDaveCarolAlice",
+        "CarolDaveCarolBob",
+        "CarolDaveCarolCarol",
+        "CarolDaveCarolDave",
+        "CarolDaveDaveAlice",
+        "CarolDaveDaveBob",
+        "CarolDaveDaveCarol",
+        "CarolDaveDaveDave",
+        "DaveAliceAliceAlice",
+        "DaveAliceAliceBob",
+        "DaveAliceAliceCarol",
+        "DaveAliceAliceDave",
+        "DaveAliceBobAlice",
+        "DaveAliceBobBob",
+        "DaveAliceBobCarol",
+        "DaveAliceBobDave",
+        "DaveAliceCarolAlice",
+        "DaveAliceCarolBob",
+        "DaveAliceCarolCarol",
+        "DaveAliceCarolDave",
+        "DaveAliceDaveAlice",
+        "DaveAliceDaveBob",
+        "DaveAliceDaveCarol",
+        "DaveAliceDaveDave",
+        "DaveBobAliceAlice",
+        "DaveBobAliceBob",
+        "DaveBobAliceCarol",
+        "DaveBobAliceDave",
+        "DaveBobBobAlice",
+        "DaveBobBobBob",
+        "DaveBobBobCarol",
+        "DaveBobBobDave",
+        "DaveBobCarolAlice",
+        "DaveBobCarolBob",
+        "DaveBobCarolCarol",
+        "DaveBobCarolDave",
+        "DaveBobDaveAlice",
+        "DaveBobDaveBob",
+        "DaveBobDaveCarol",
+        "DaveBobDaveDave",
+        "DaveCarolAliceAlice",
+        "DaveCarolAliceBob",
+        "DaveCarolAliceCarol",
+        "DaveCarolAliceDave",
+        "DaveCarolBobAlice",
+        "DaveCarolBobBob",
+        "DaveCarolBobCarol",
+        "DaveCarolBobDave",
+        "DaveCarolCarolAlice",
+        "DaveCarolCarolBob",
+        "DaveCarolCarolCarol",
+        "DaveCarolCarolDave",
+        "DaveCarolDaveAlice",
+        "DaveCarolDaveBob",
+        "DaveCarolDaveCarol",
+        "DaveCarolDaveDave",
+        "DaveDaveAliceAlice",
+        "DaveDaveAliceBob",
+        "DaveDaveAliceCarol",
+        "DaveDaveAliceDave",
+        "DaveDaveBobAlice",
+        "DaveDaveBobBob",
+        "DaveDaveBobCarol",
+        "DaveDaveBobDave",
+        "DaveDaveCarolAlice",
+        "DaveDaveCarolBob",
+        "DaveDaveCarolCarol",
+        "DaveDaveCarolDave",
+        "DaveDaveDaveAlice",
+        "DaveDaveDaveBob",
+        "DaveDaveDaveCarol",
+        "DaveDaveDaveDave",
+      ]),
     );
   });
 
@@ -2266,7 +2269,7 @@ describe("TestEdgeQLScope", () => {
         `
                     SELECT User.friends
                     FILTER User.friends@nickname = 'Firefighter';
-                `
+                `,
       );
     }).toThrow(new RegExp("'User' changes the interpretation of 'User'"));
     expect(() => {
@@ -2280,7 +2283,7 @@ describe("TestEdgeQLScope", () => {
                     SELECT F
                     FILTER F.<friends = User
                 ).friends@nickname = 'Firefighter';
-                `
+                `,
       );
     }).toThrow(new RegExp("'User' changes the interpretation of 'User'"));
   });
@@ -2299,27 +2302,27 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY .name;
             `,
       [
+        {
+          name: "Alice",
+          friends: [
             {
-              "name": "Alice",
-              "friends": [
-                {
-                  "name": "Carol",
-                },
-              ],
+              name: "Carol",
             },
-            {
-              "name": "Bob",
-              "friends": [],
-            },
-            {
-              "name": "Carol",
-              "friends": [],
-            },
-            {
-              "name": "Dave",
-              "friends": [],
-            },
-          ]
+          ],
+        },
+        {
+          name: "Bob",
+          friends: [],
+        },
+        {
+          name: "Carol",
+          friends: [],
+        },
+        {
+          name: "Dave",
+          friends: [],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2338,27 +2341,27 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY .name;
             `,
       [
+        {
+          name: "Alice",
+          fr: [
             {
-              "name": "Alice",
-              "fr": [
-                {
-                  "name": "Carol",
-                },
-              ],
+              name: "Carol",
             },
-            {
-              "name": "Bob",
-              "fr": [],
-            },
-            {
-              "name": "Carol",
-              "fr": [],
-            },
-            {
-              "name": "Dave",
-              "fr": [],
-            },
-          ]
+          ],
+        },
+        {
+          name: "Bob",
+          fr: [],
+        },
+        {
+          name: "Carol",
+          fr: [],
+        },
+        {
+          name: "Dave",
+          fr: [],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2381,27 +2384,27 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY .name;
             `,
       [
+        {
+          name: "Alice",
+          fr: [
             {
-              "name": "Alice",
-              "fr": [
-                {
-                  "name": "Carol",
-                },
-              ],
+              name: "Carol",
             },
-            {
-              "name": "Bob",
-              "fr": [],
-            },
-            {
-              "name": "Carol",
-              "fr": [],
-            },
-            {
-              "name": "Dave",
-              "fr": [],
-            },
-          ]
+          ],
+        },
+        {
+          name: "Bob",
+          fr: [],
+        },
+        {
+          name: "Carol",
+          fr: [],
+        },
+        {
+          name: "Dave",
+          fr: [],
+        },
+      ],
     );
   });
 
@@ -2421,80 +2424,82 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY User.name;
             `,
       [
+        {
+          name: "Alice",
+          foo: [
             {
-              "name": "Alice",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Alice",
             },
             {
-              "name": "Bob",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Bob",
             },
             {
-              "name": "Carol",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Carol",
             },
             {
-              "name": "Dave",
-              "foo": [
-                {
-                  "name": "Alice",
-                },
-                {
-                  "name": "Bob",
-                },
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
             },
-          ]
+          ],
+        },
+        {
+          name: "Bob",
+          foo: [
+            {
+              name: "Alice",
+            },
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+        {
+          name: "Carol",
+          foo: [
+            {
+              name: "Alice",
+            },
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+        {
+          name: "Dave",
+          foo: [
+            {
+              name: "Alice",
+            },
+            {
+              name: "Bob",
+            },
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
   it("test_edgeql_scope_detached_07", () => {
-    let res = queryRows<unknown>(h, `
+    let res = queryRows<unknown>(
+      h,
+      `
             SELECT User {
                 name,
                 fire_deck := (
@@ -2503,7 +2508,8 @@ describe("TestEdgeQLScope", () => {
                     ORDER BY .name
                 )
             };
-        `);
+        `,
+    );
     assertQueryResult(
       h,
       `
@@ -2517,12 +2523,14 @@ describe("TestEdgeQLScope", () => {
                     )
                 };
             `,
-      unorderedBag(res)
+      unorderedBag(res),
     );
   });
 
   it("test_edgeql_scope_detached_08", () => {
-    let res = queryRows<unknown>(h, `
+    let res = queryRows<unknown>(
+      h,
+      `
             SELECT User {
                 name,
                 fire_deck := (
@@ -2531,21 +2539,7 @@ describe("TestEdgeQLScope", () => {
                     ORDER BY .name
                 ).name
             };
-        `);
-    assertQueryResult(
-      h,
-      `
-                # adding a top-level DETACHED should not change anything at all
-                SELECT DETACHED User {
-                    name,
-                    fire_deck := (
-                        SELECT .deck {name, element}
-                        FILTER .element = 'Fire'
-                        ORDER BY .name
-                    ).name
-                };
-            `,
-      unorderedBag(res)
+        `,
     );
     assertQueryResult(
       h,
@@ -2560,7 +2554,22 @@ describe("TestEdgeQLScope", () => {
                     ).name
                 };
             `,
-      unorderedBag(res)
+      unorderedBag(res),
+    );
+    assertQueryResult(
+      h,
+      `
+                # adding a top-level DETACHED should not change anything at all
+                SELECT DETACHED User {
+                    name,
+                    fire_deck := (
+                        SELECT .deck {name, element}
+                        FILTER .element = 'Fire'
+                        ORDER BY .name
+                    ).name
+                };
+            `,
+      unorderedBag(res),
     );
   });
 
@@ -2571,7 +2580,7 @@ describe("TestEdgeQLScope", () => {
                     SELECT DETACHED User {name}
                     # a subtle error
                     ORDER BY User.name;
-                `
+                `,
       );
     }).toThrow(new RegExp("only singletons are allowed"));
     assertQueryResult(
@@ -2582,19 +2591,19 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY .name;
             `,
       [
-            {
-              "name": "Alice",
-            },
-            {
-              "name": "Bob",
-            },
-            {
-              "name": "Carol",
-            },
-            {
-              "name": "Dave",
-            },
-          ]
+        {
+          name: "Alice",
+        },
+        {
+          name: "Bob",
+        },
+        {
+          name: "Carol",
+        },
+        {
+          name: "Dave",
+        },
+      ],
     );
   });
 
@@ -2626,115 +2635,115 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY _.name;
             `,
       [
+        {
+          name: "Alice",
+          fire_cards: [
             {
-              "name": "Alice",
-              "fire_cards": [
-                {
-                  "name": "Bog monster",
-                  "element": "Water",
-                },
-                {
-                  "name": "Dragon",
-                  "element": "Fire",
-                },
-                {
-                  "name": "Giant turtle",
-                  "element": "Water",
-                },
-                {
-                  "name": "Imp",
-                  "element": "Fire",
-                },
-              ],
+              name: "Bog monster",
+              element: "Water",
             },
             {
-              "name": "Bob",
-              "fire_cards": [
-                {
-                  "name": "Bog monster",
-                  "element": "Water",
-                },
-                {
-                  "name": "Dwarf",
-                  "element": "Earth",
-                },
-                {
-                  "name": "Giant turtle",
-                  "element": "Water",
-                },
-                {
-                  "name": "Golem",
-                  "element": "Earth",
-                },
-              ],
+              name: "Dragon",
+              element: "Fire",
             },
             {
-              "name": "Carol",
-              "fire_cards": [
-                {
-                  "name": "Bog monster",
-                  "element": "Water",
-                },
-                {
-                  "name": "Djinn",
-                  "element": "Air",
-                },
-                {
-                  "name": "Dwarf",
-                  "element": "Earth",
-                },
-                {
-                  "name": "Giant eagle",
-                  "element": "Air",
-                },
-                {
-                  "name": "Giant turtle",
-                  "element": "Water",
-                },
-                {
-                  "name": "Golem",
-                  "element": "Earth",
-                },
-                {
-                  "name": "Sprite",
-                  "element": "Air",
-                },
-              ],
+              name: "Giant turtle",
+              element: "Water",
             },
             {
-              "name": "Dave",
-              "fire_cards": [
-                {
-                  "name": "Bog monster",
-                  "element": "Water",
-                },
-                {
-                  "name": "Djinn",
-                  "element": "Air",
-                },
-                {
-                  "name": "Dragon",
-                  "element": "Fire",
-                },
-                {
-                  "name": "Giant eagle",
-                  "element": "Air",
-                },
-                {
-                  "name": "Giant turtle",
-                  "element": "Water",
-                },
-                {
-                  "name": "Golem",
-                  "element": "Earth",
-                },
-                {
-                  "name": "Sprite",
-                  "element": "Air",
-                },
-              ],
+              name: "Imp",
+              element: "Fire",
             },
-          ]
+          ],
+        },
+        {
+          name: "Bob",
+          fire_cards: [
+            {
+              name: "Bog monster",
+              element: "Water",
+            },
+            {
+              name: "Dwarf",
+              element: "Earth",
+            },
+            {
+              name: "Giant turtle",
+              element: "Water",
+            },
+            {
+              name: "Golem",
+              element: "Earth",
+            },
+          ],
+        },
+        {
+          name: "Carol",
+          fire_cards: [
+            {
+              name: "Bog monster",
+              element: "Water",
+            },
+            {
+              name: "Djinn",
+              element: "Air",
+            },
+            {
+              name: "Dwarf",
+              element: "Earth",
+            },
+            {
+              name: "Giant eagle",
+              element: "Air",
+            },
+            {
+              name: "Giant turtle",
+              element: "Water",
+            },
+            {
+              name: "Golem",
+              element: "Earth",
+            },
+            {
+              name: "Sprite",
+              element: "Air",
+            },
+          ],
+        },
+        {
+          name: "Dave",
+          fire_cards: [
+            {
+              name: "Bog monster",
+              element: "Water",
+            },
+            {
+              name: "Djinn",
+              element: "Air",
+            },
+            {
+              name: "Dragon",
+              element: "Fire",
+            },
+            {
+              name: "Giant eagle",
+              element: "Air",
+            },
+            {
+              name: "Giant turtle",
+              element: "Water",
+            },
+            {
+              name: "Golem",
+              element: "Earth",
+            },
+            {
+              name: "Sprite",
+              element: "Air",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -2745,31 +2754,31 @@ describe("TestEdgeQLScope", () => {
             SELECT _ := (User.name, { x := User.name }) ORDER BY _;
             `,
       [
-            [
-              "Alice",
-              {
-                "x": ["Alice", "Bob", "Carol", "Dave"],
-              },
-            ],
-            [
-              "Bob",
-              {
-                "x": ["Alice", "Bob", "Carol", "Dave"],
-              },
-            ],
-            [
-              "Carol",
-              {
-                "x": ["Alice", "Bob", "Carol", "Dave"],
-              },
-            ],
-            [
-              "Dave",
-              {
-                "x": ["Alice", "Bob", "Carol", "Dave"],
-              },
-            ],
-          ]
+        [
+          "Alice",
+          {
+            x: ["Alice", "Bob", "Carol", "Dave"],
+          },
+        ],
+        [
+          "Bob",
+          {
+            x: ["Alice", "Bob", "Carol", "Dave"],
+          },
+        ],
+        [
+          "Carol",
+          {
+            x: ["Alice", "Bob", "Carol", "Dave"],
+          },
+        ],
+        [
+          "Dave",
+          {
+            x: ["Alice", "Bob", "Carol", "Dave"],
+          },
+        ],
+      ],
     );
   });
 
@@ -2780,19 +2789,19 @@ describe("TestEdgeQLScope", () => {
             SELECT DETACHED (User { name2 := User.name }) ORDER BY .name;
             `,
       [
-            {
-              "name2": "Alice",
-            },
-            {
-              "name2": "Bob",
-            },
-            {
-              "name2": "Carol",
-            },
-            {
-              "name2": "Dave",
-            },
-          ]
+        {
+          name2: "Alice",
+        },
+        {
+          name2: "Bob",
+        },
+        {
+          name2: "Carol",
+        },
+        {
+          name2: "Dave",
+        },
+      ],
     );
   });
 
@@ -2803,19 +2812,19 @@ describe("TestEdgeQLScope", () => {
             SELECT (DETACHED User) { name2 := .name } ORDER BY .name;
             `,
       [
-            {
-              "name2": "Alice",
-            },
-            {
-              "name2": "Bob",
-            },
-            {
-              "name2": "Carol",
-            },
-            {
-              "name2": "Dave",
-            },
-          ]
+        {
+          name2: "Alice",
+        },
+        {
+          name2: "Bob",
+        },
+        {
+          name2: "Carol",
+        },
+        {
+          name2: "Dave",
+        },
+      ],
     );
   });
 
@@ -2826,19 +2835,19 @@ describe("TestEdgeQLScope", () => {
             SELECT (DETACHED User) { names := User.name }
             `,
       [
-            {
-              "names": unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
-            },
-            {
-              "names": unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
-            },
-            {
-              "names": unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
-            },
-            {
-              "names": unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
-            },
-          ]
+        {
+          names: unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
+        },
+        {
+          names: unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
+        },
+        {
+          names: unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
+        },
+        {
+          names: unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
+        },
+      ],
     );
   });
 
@@ -2850,14 +2859,14 @@ describe("TestEdgeQLScope", () => {
                 # therefore \`count\` should operate on the entire set
                 SELECT len(User.name) UNION count(User);
             `,
-      unorderedBag([3, 4, 4, 5, 5])
+      unorderedBag([3, 4, 4, 5, 5]),
     );
     assertQueryResult(
       h,
       `
                 SELECT {len(User.name), count(User)};
             `,
-      unorderedBag([3, 4, 4, 5, 5])
+      unorderedBag([3, 4, 4, 5, 5]),
     );
   });
 
@@ -2870,7 +2879,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT len(User.name)
                 FILTER User.name > 'C';
             `,
-      unorderedBag([3, 4, 5, 5])
+      unorderedBag([3, 4, 5, 5]),
     );
     assertQueryResult(
       h,
@@ -2878,7 +2887,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT {len(User.name)}
                 FILTER User.name > 'C';
             `,
-      unorderedBag([3, 4, 5, 5])
+      unorderedBag([3, 4, 5, 5]),
     );
     assertQueryResult(
       h,
@@ -2886,7 +2895,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT {len(User.name), count(User)}
                 FILTER User.name > 'C';
             `,
-      unorderedBag([3, 4, 4, 5, 5])
+      unorderedBag([3, 4, 4, 5, 5]),
     );
   });
 
@@ -2899,11 +2908,11 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY x.1;
             `,
       [
-            ["Alice", "Bog monster", 11],
-            ["Alice", "Dragon", 11],
-            ["Alice", "Giant turtle", 11],
-            ["Alice", "Imp", 11],
-          ]
+        ["Alice", "Bog monster", 11],
+        ["Alice", "Dragon", 11],
+        ["Alice", "Giant turtle", 11],
+        ["Alice", "Imp", 11],
+      ],
     );
     assertQueryResult(
       h,
@@ -2913,11 +2922,11 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY x.1;
             `,
       [
-            ["Alice", "Bog monster", 2],
-            ["Alice", "Dragon", 5],
-            ["Alice", "Giant turtle", 3],
-            ["Alice", "Imp", 1],
-          ]
+        ["Alice", "Bog monster", 2],
+        ["Alice", "Dragon", 5],
+        ["Alice", "Giant turtle", 3],
+        ["Alice", "Imp", 1],
+      ],
     );
   });
 
@@ -2931,10 +2940,10 @@ describe("TestEdgeQLScope", () => {
                 } FILTER Card.alice != User AND Card.name = 'Bog monster';
             `,
       [
-            {
-              "name": "Bog monster",
-            },
-          ]
+        {
+          name: "Bog monster",
+        },
+      ],
     );
   });
 
@@ -2952,28 +2961,28 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          name: "Alice",
+          deck: [
             {
-              "name": "Alice",
-              "deck": [
-                {
-                  "name": "Bog monster",
-                  "elemental_cost": "2 Water",
-                },
-                {
-                  "name": "Dragon",
-                  "elemental_cost": "5 Fire",
-                },
-                {
-                  "name": "Giant turtle",
-                  "elemental_cost": "3 Water",
-                },
-                {
-                  "name": "Imp",
-                  "elemental_cost": "1 Fire",
-                },
-              ],
+              name: "Bog monster",
+              elemental_cost: "2 Water",
             },
-          ]
+            {
+              name: "Dragon",
+              elemental_cost: "5 Fire",
+            },
+            {
+              name: "Giant turtle",
+              elemental_cost: "3 Water",
+            },
+            {
+              name: "Imp",
+              elemental_cost: "1 Fire",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -2993,65 +3002,65 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          name: "Alice",
+          deck: [
             {
-              "name": "Alice",
-              "deck": [
+              name: "Bog monster",
+              owners: [
                 {
-                  "name": "Bog monster",
-                  "owners": [
-                    {
-                      "name": "Alice",
-                    },
-                    {
-                      "name": "Bob",
-                    },
-                    {
-                      "name": "Carol",
-                    },
-                    {
-                      "name": "Dave",
-                    },
-                  ],
+                  name: "Alice",
                 },
                 {
-                  "name": "Dragon",
-                  "owners": [
-                    {
-                      "name": "Alice",
-                    },
-                    {
-                      "name": "Dave",
-                    },
-                  ],
+                  name: "Bob",
                 },
                 {
-                  "name": "Giant turtle",
-                  "owners": [
-                    {
-                      "name": "Alice",
-                    },
-                    {
-                      "name": "Bob",
-                    },
-                    {
-                      "name": "Carol",
-                    },
-                    {
-                      "name": "Dave",
-                    },
-                  ],
+                  name: "Carol",
                 },
                 {
-                  "name": "Imp",
-                  "owners": [
-                    {
-                      "name": "Alice",
-                    },
-                  ],
+                  name: "Dave",
                 },
               ],
             },
-          ]
+            {
+              name: "Dragon",
+              owners: [
+                {
+                  name: "Alice",
+                },
+                {
+                  name: "Dave",
+                },
+              ],
+            },
+            {
+              name: "Giant turtle",
+              owners: [
+                {
+                  name: "Alice",
+                },
+                {
+                  name: "Bob",
+                },
+                {
+                  name: "Carol",
+                },
+                {
+                  name: "Dave",
+                },
+              ],
+            },
+            {
+              name: "Imp",
+              owners: [
+                {
+                  name: "Alice",
+                },
+              ],
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -3070,28 +3079,28 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          name: "Alice",
+          deck: [
             {
-              "name": "Alice",
-              "deck": [
-                {
-                  "name": "Bog monster",
-                  "o_name": unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
-                },
-                {
-                  "name": "Dragon",
-                  "o_name": unorderedSet(["Alice", "Dave"]),
-                },
-                {
-                  "name": "Giant turtle",
-                  "o_name": unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
-                },
-                {
-                  "name": "Imp",
-                  "o_name": unorderedSet(["Alice"]),
-                },
-              ],
+              name: "Bog monster",
+              o_name: unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
             },
-          ]
+            {
+              name: "Dragon",
+              o_name: unorderedSet(["Alice", "Dave"]),
+            },
+            {
+              name: "Giant turtle",
+              o_name: unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
+            },
+            {
+              name: "Imp",
+              o_name: unorderedSet(["Alice"]),
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -3109,15 +3118,15 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice';
             `,
       [
+        {
+          name: "Alice",
+          x: [
             {
-              "name": "Alice",
-              "x": [
-                {
-                  "name": "Imp",
-                },
-              ],
+              name: "Imp",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -3128,7 +3137,7 @@ describe("TestEdgeQLScope", () => {
                 WITH U := User { cards := .deck },
                 SELECT count((U.cards.name, U.cards.cost));
             `,
-      [81]
+      [81],
     );
   });
 
@@ -3139,7 +3148,7 @@ describe("TestEdgeQLScope", () => {
                 WITH U := User { cards := Card },
                 SELECT count((U.cards.name, U.cards.cost));
             `,
-      [81]
+      [81],
     );
   });
 
@@ -3151,7 +3160,7 @@ describe("TestEdgeQLScope", () => {
                            FILTER .name = "Phil"),
                 SELECT count((U.cards.name, U.cards.cost));
             `,
-      [0]
+      [0],
     );
   });
 
@@ -3161,7 +3170,7 @@ describe("TestEdgeQLScope", () => {
       `
                 SELECT count((Card.owners.name, Card.owners.deck_cost));
             `,
-      [16]
+      [16],
     );
   });
 
@@ -3174,15 +3183,7 @@ describe("TestEdgeQLScope", () => {
                     },
                 SELECT _ := U.unowned.name ORDER BY _;
             `,
-      [
-            "Djinn",
-            "Dragon",
-            "Dwarf",
-            "Giant eagle",
-            "Golem",
-            "Imp",
-            "Sprite",
-          ]
+      ["Djinn", "Dragon", "Dwarf", "Giant eagle", "Golem", "Imp", "Sprite"],
     );
   });
 
@@ -3195,7 +3196,7 @@ describe("TestEdgeQLScope", () => {
                     } FILTER .name IN {'Carol', 'Dave'}),
                 SELECT _ := U.unowned.name ORDER BY _;
             `,
-      ["Dragon", "Dwarf", "Imp"]
+      ["Dragon", "Dwarf", "Imp"],
     );
   });
 
@@ -3208,7 +3209,7 @@ describe("TestEdgeQLScope", () => {
                     }),
                 SELECT count((U.deck.a.name, U.deck.a.id, U.deck.name));
             `,
-      [81]
+      [81],
     );
   });
 
@@ -3221,7 +3222,7 @@ describe("TestEdgeQLScope", () => {
                     }),
                 SELECT count((U.cards.a.name, U.cards.a.id, U.cards.name));
             `,
-      [81]
+      [81],
     );
   });
 
@@ -3235,14 +3236,14 @@ describe("TestEdgeQLScope", () => {
                 SELECT (U.cards.a.name, U.cards.a.id, U.cards) LIMIT 1;
             `,
       [
-            [
-              "str",
-              "str",
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          "str",
+          "str",
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -3256,19 +3257,19 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name IN {'1st', 'Alice', 'Dwarf'} ORDER BY .name;
             `,
       [
-            {
-              "name": "1st",
-              "owner_count": 0,
-            },
-            {
-              "name": "Alice",
-              "owner_count": 0,
-            },
-            {
-              "name": "Dwarf",
-              "owner_count": 2,
-            },
-          ]
+        {
+          name: "1st",
+          owner_count: 0,
+        },
+        {
+          name: "Alice",
+          owner_count: 0,
+        },
+        {
+          name: "Dwarf",
+          owner_count: 2,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3278,19 +3279,19 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name IN {'1st', 'Alice', 'Dwarf'} ORDER BY .name;
             `,
       [
-            {
-              "name": "1st",
-              "owner_count": 0,
-            },
-            {
-              "name": "Alice",
-              "owner_count": 0,
-            },
-            {
-              "name": "Dwarf",
-              "owner_count": 2,
-            },
-          ]
+        {
+          name: "1st",
+          owner_count: 0,
+        },
+        {
+          name: "Alice",
+          owner_count: 0,
+        },
+        {
+          name: "Dwarf",
+          owner_count: 2,
+        },
+      ],
     );
   });
 
@@ -3304,10 +3305,10 @@ describe("TestEdgeQLScope", () => {
                 FILTER .title = 'Alice';
             `,
       [
-            {
-              "title": "Alice",
-            },
-          ]
+        {
+          title: "Alice",
+        },
+      ],
     );
   });
 
@@ -3321,7 +3322,7 @@ describe("TestEdgeQLScope", () => {
                     User := User
                 SELECT User.name;
             `,
-      unorderedSet(["Alice", "Bob", "Carol", "Dave"])
+      unorderedSet(["Alice", "Bob", "Carol", "Dave"]),
     );
     assertQueryResult(
       h,
@@ -3333,16 +3334,16 @@ describe("TestEdgeQLScope", () => {
                 SELECT User.name;
             `,
       unorderedSet([
-            "Bog monster",
-            "Djinn",
-            "Dragon",
-            "Dwarf",
-            "Giant eagle",
-            "Giant turtle",
-            "Golem",
-            "Imp",
-            "Sprite",
-          ])
+        "Bog monster",
+        "Djinn",
+        "Dragon",
+        "Dwarf",
+        "Giant eagle",
+        "Giant turtle",
+        "Golem",
+        "Imp",
+        "Sprite",
+      ]),
     );
     assertQueryResult(
       h,
@@ -3355,7 +3356,7 @@ describe("TestEdgeQLScope", () => {
                 # this is a User.deck.element now
                 SELECT DISTINCT User;
             `,
-      unorderedSet(["Air", "Earth", "Fire", "Water"])
+      unorderedSet(["Air", "Earth", "Fire", "Water"]),
     );
   });
 
@@ -3369,11 +3370,11 @@ describe("TestEdgeQLScope", () => {
                 SELECT _ := (X, Y) ORDER BY _;
             `,
       [
-            [1, 2],
-            [1, 3],
-            [2, 2],
-            [2, 3],
-          ]
+        [1, 2],
+        [1, 3],
+        [2, 2],
+        [2, 3],
+      ],
     );
   });
 
@@ -3386,11 +3387,11 @@ describe("TestEdgeQLScope", () => {
                 SELECT Card {name, a := a} FILTER .name = 'Imp';
             `,
       [
-            {
-              "name": "Imp",
-              "a": 9,
-            },
-          ]
+        {
+          name: "Imp",
+          a: 9,
+        },
+      ],
     );
   });
 
@@ -3401,7 +3402,7 @@ describe("TestEdgeQLScope", () => {
                 WITH foo := 1
                 SELECT 1;
             `,
-      [1]
+      [1],
     );
   });
 
@@ -3420,16 +3421,16 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY .name;
             `,
       [
-            {
-              "name": "Alice",
-            },
-            {
-              "name": "Carol",
-            },
-            {
-              "name": "Dave",
-            },
-          ]
+        {
+          name: "Alice",
+        },
+        {
+          name: "Carol",
+        },
+        {
+          name: "Dave",
+        },
+      ],
     );
   });
 
@@ -3444,13 +3445,13 @@ describe("TestEdgeQLScope", () => {
                 ORDER BY .name;
             `,
       [
-            {
-              "name": "Alice",
-            },
-            {
-              "name": "Dave",
-            },
-          ]
+        {
+          name: "Alice",
+        },
+        {
+          name: "Dave",
+        },
+      ],
     );
   });
 
@@ -3464,23 +3465,23 @@ describe("TestEdgeQLScope", () => {
                 } ORDER BY .name;
             `,
       [
-            {
-              "name": "Alice",
-              "specials": [],
-            },
-            {
-              "name": "Bob",
-              "specials": [],
-            },
-            {
-              "name": "Carol",
-              "specials": ["Djinn"],
-            },
-            {
-              "name": "Dave",
-              "specials": ["Djinn"],
-            },
-          ]
+        {
+          name: "Alice",
+          specials: [],
+        },
+        {
+          name: "Bob",
+          specials: [],
+        },
+        {
+          name: "Carol",
+          specials: ["Djinn"],
+        },
+        {
+          name: "Dave",
+          specials: ["Djinn"],
+        },
+      ],
     );
   });
 
@@ -3493,14 +3494,14 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Sprite'
             `,
       [
+        {
+          owners: [
             {
-              "owners": [
-                {
-                  "name": "Dave",
-                },
-              ],
+              name: "Dave",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -3510,7 +3511,7 @@ describe("TestEdgeQLScope", () => {
       `
                 SELECT count(((SELECT User), ((User),).0));
             `,
-      [16]
+      [16],
     );
   });
 
@@ -3523,7 +3524,7 @@ describe("TestEdgeQLScope", () => {
                     ((SELECT User.name) ++ (User.name),).0,
                  ));
             `,
-      [64]
+      [64],
     );
   });
 
@@ -3536,7 +3537,7 @@ describe("TestEdgeQLScope", () => {
                     ((SELECT User.name) ++ (User.name)) ?? "uhoh",
                  ));
             `,
-      [64]
+      [64],
     );
   });
 
@@ -3556,7 +3557,7 @@ describe("TestEdgeQLScope", () => {
                 SELECT
                     count(((SELECT U.cards.foo), (SELECT U.cards.foo)));
             `,
-      [49]
+      [49],
     );
   });
 
@@ -3577,7 +3578,7 @@ describe("TestEdgeQLScope", () => {
                     count(((SELECT U.cards.foo),
                           ((SELECT U.cards.foo), (U.cards.foo))))
             `,
-      [343]
+      [343],
     );
   });
 
@@ -3598,7 +3599,7 @@ describe("TestEdgeQLScope", () => {
                     count(((SELECT U.cards.foo),
                           (((SELECT U.cards.foo), (U.cards.foo)),).0))
             `,
-      [343]
+      [343],
     );
   });
 
@@ -3619,21 +3620,21 @@ describe("TestEdgeQLScope", () => {
                 FILTER EXISTS User.avatar.awards AND User.name = 'Alice';
             `,
       [
-            {
-              "avatar": {
-                "awards": unorderedBag([
-                  {
-                    "name": "1st",
-                  },
-                  {
-                    "name": "3rd",
-                  },
-                ]),
-                "name": "Dragon",
+        {
+          avatar: {
+            awards: unorderedBag([
+              {
+                name: "1st",
               },
-              "name": "Alice",
-            },
-          ]
+              {
+                name: "3rd",
+              },
+            ]),
+            name: "Dragon",
+          },
+          name: "Alice",
+        },
+      ],
     );
   });
 
@@ -3654,16 +3655,16 @@ describe("TestEdgeQLScope", () => {
                 FILTER EXISTS User.avatar.awd AND User.name = 'Alice';
             `,
       [
-            {
-              "avatar": {
-                "awd": {
-                  "name": "1st",
-                },
-                "name": "Dragon",
-              },
-              "name": "Alice",
+        {
+          avatar: {
+            awd: {
+              name: "1st",
             },
-          ]
+            name: "Dragon",
+          },
+          name: "Alice",
+        },
+      ],
     );
   });
 
@@ -3676,7 +3677,7 @@ describe("TestEdgeQLScope", () => {
                 A := (SELECT U FILTER .name = 'Alice'),
                 SELECT A.tag;
             `,
-      ["Alice"]
+      ["Alice"],
     );
   });
 
@@ -3690,7 +3691,7 @@ describe("TestEdgeQLScope", () => {
                 A := (SELECT U FILTER .name = 'Alice'),
                 SELECT A.tag;
             `,
-      ["Alice"]
+      ["Alice"],
     );
   });
 
@@ -3704,7 +3705,7 @@ describe("TestEdgeQLScope", () => {
                 A := (SELECT U FILTER .name = 'Alice'),
                 SELECT (A,).0.tag;
             `,
-      ["Alice"]
+      ["Alice"],
     );
   });
 
@@ -3719,23 +3720,23 @@ describe("TestEdgeQLScope", () => {
                 SELECT A {cards: {name}};
             `,
       [
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
+              name: "Imp",
             },
-          ]
+            {
+              name: "Dragon",
+            },
+            {
+              name: "Bog monster",
+            },
+            {
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -3744,7 +3745,7 @@ describe("TestEdgeQLScope", () => {
       `
             alter type User create access policy test
             allow all using (true)
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -3756,23 +3757,23 @@ describe("TestEdgeQLScope", () => {
                 SELECT A {cards: {name}};
             `,
       [
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
-                {
-                  "name": "Imp",
-                },
-                {
-                  "name": "Dragon",
-                },
-                {
-                  "name": "Bog monster",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-              ]),
+              name: "Imp",
             },
-          ]
+            {
+              name: "Dragon",
+            },
+            {
+              name: "Bog monster",
+            },
+            {
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -3789,15 +3790,15 @@ describe("TestEdgeQLScope", () => {
                 SELECT A { name, tag };
             `,
       unorderedBag([
-            {
-              "name": "Alice",
-              "tag": "A",
-            },
-            {
-              "name": "Bob",
-              "tag": "B",
-            },
-          ])
+        {
+          name: "Alice",
+          tag: "A",
+        },
+        {
+          name: "Bob",
+          tag: "B",
+        },
+      ]),
     );
   });
 
@@ -3813,12 +3814,12 @@ describe("TestEdgeQLScope", () => {
                 SELECT A {cards: {name}};
             `,
       [
-            {
-              "cards": {
-                "name": "Bog monster",
-              },
-            },
-          ]
+        {
+          cards: {
+            name: "Bog monster",
+          },
+        },
+      ],
     );
   });
 
@@ -3834,23 +3835,23 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice'
             `,
       [
+        {
+          cards: [
             {
-              "cards": [
-                {
-                  "tag": "Bog monster - Alice",
-                },
-                {
-                  "tag": "Dragon - Alice",
-                },
-                {
-                  "tag": "Giant turtle - Alice",
-                },
-                {
-                  "tag": "Imp - Alice",
-                },
-              ],
+              tag: "Bog monster - Alice",
             },
-          ]
+            {
+              tag: "Dragon - Alice",
+            },
+            {
+              tag: "Giant turtle - Alice",
+            },
+            {
+              tag: "Imp - Alice",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -3865,23 +3866,23 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice' AND EXISTS .cards;
             `,
       [
+        {
+          cards: [
             {
-              "cards": [
-                {
-                  "tag": ["Alice"],
-                },
-                {
-                  "tag": ["Alice"],
-                },
-                {
-                  "tag": ["Alice"],
-                },
-                {
-                  "tag": ["Alice"],
-                },
-              ],
+              tag: ["Alice"],
             },
-          ]
+            {
+              tag: ["Alice"],
+            },
+            {
+              tag: ["Alice"],
+            },
+            {
+              tag: ["Alice"],
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -3896,23 +3897,23 @@ describe("TestEdgeQLScope", () => {
                 }) FILTER .name = 'Alice' AND EXISTS .cards;
             `,
       [
+        {
+          cards: [
             {
-              "cards": [
-                {
-                  "tag": ["Alice"],
-                },
-                {
-                  "tag": ["Alice"],
-                },
-                {
-                  "tag": ["Alice"],
-                },
-                {
-                  "tag": ["Alice"],
-                },
-              ],
+              tag: ["Alice"],
             },
-          ]
+            {
+              tag: ["Alice"],
+            },
+            {
+              tag: ["Alice"],
+            },
+            {
+              tag: ["Alice"],
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -3928,7 +3929,7 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice'),
                 SELECT _ := A.cards.tag ORDER BY _;
             `,
-      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]
+      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"],
     );
     assertQueryResult(
       h,
@@ -3941,7 +3942,7 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice'),
                 SELECT _ := A.cards.tag ORDER BY _;
             `,
-      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]
+      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"],
     );
     assertQueryResult(
       h,
@@ -3955,7 +3956,7 @@ describe("TestEdgeQLScope", () => {
                 } FILTER .name = 'Alice'),
                 SELECT _ := A.cards.tag ORDER BY _;
             `,
-      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]
+      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"],
     );
   });
 
@@ -3974,7 +3975,7 @@ describe("TestEdgeQLScope", () => {
                 A := (SELECT U FILTER .name = 'Alice'),
                 SELECT _ := A.cards.tag ORDER BY _;
             `,
-      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]
+      ["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"],
     );
   });
 
@@ -3995,11 +3996,21 @@ describe("TestEdgeQLScope", () => {
                 SELECT { a := A.cards.tag, b := B.cards.tag };
             `,
       [
-            {
-              "a": unorderedSet(["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]),
-              "b": unorderedSet(["Bob - Bog monster", "Bob - Dwarf", "Bob - Giant turtle", "Bob - Golem"]),
-            },
-          ]
+        {
+          a: unorderedSet([
+            "Alice - Bog monster",
+            "Alice - Dragon",
+            "Alice - Giant turtle",
+            "Alice - Imp",
+          ]),
+          b: unorderedSet([
+            "Bob - Bog monster",
+            "Bob - Dwarf",
+            "Bob - Giant turtle",
+            "Bob - Golem",
+          ]),
+        },
+      ],
     );
   });
 
@@ -4020,11 +4031,21 @@ describe("TestEdgeQLScope", () => {
                 SELECT { a := (A.cards,).0.tag, b := B.cards.tag };
             `,
       [
-            {
-              "a": unorderedSet(["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]),
-              "b": unorderedSet(["Bob - Bog monster", "Bob - Dwarf", "Bob - Giant turtle", "Bob - Golem"]),
-            },
-          ]
+        {
+          a: unorderedSet([
+            "Alice - Bog monster",
+            "Alice - Dragon",
+            "Alice - Giant turtle",
+            "Alice - Imp",
+          ]),
+          b: unorderedSet([
+            "Bob - Bog monster",
+            "Bob - Dwarf",
+            "Bob - Giant turtle",
+            "Bob - Golem",
+          ]),
+        },
+      ],
     );
   });
 
@@ -4046,11 +4067,21 @@ describe("TestEdgeQLScope", () => {
                 SELECT { a := A.cards.tag, b := Bc.tag };
             `,
       [
-            {
-              "a": unorderedSet(["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]),
-              "b": unorderedSet(["Bob - Bog monster", "Bob - Dwarf", "Bob - Giant turtle", "Bob - Golem"]),
-            },
-          ]
+        {
+          a: unorderedSet([
+            "Alice - Bog monster",
+            "Alice - Dragon",
+            "Alice - Giant turtle",
+            "Alice - Imp",
+          ]),
+          b: unorderedSet([
+            "Bob - Bog monster",
+            "Bob - Dwarf",
+            "Bob - Giant turtle",
+            "Bob - Golem",
+          ]),
+        },
+      ],
     );
   });
 
@@ -4072,16 +4103,28 @@ describe("TestEdgeQLScope", () => {
                 SELECT { a := A.cards.tag, b := Bc.tag2 };
             `,
       [
-            {
-              "a": unorderedSet(["Alice - Bog monster", "Alice - Dragon", "Alice - Giant turtle", "Alice - Imp"]),
-              "b": unorderedSet(["Bob - Bog monster", "Bob - Dwarf", "Bob - Giant turtle", "Bob - Golem"]),
-            },
-          ]
+        {
+          a: unorderedSet([
+            "Alice - Bog monster",
+            "Alice - Dragon",
+            "Alice - Giant turtle",
+            "Alice - Imp",
+          ]),
+          b: unorderedSet([
+            "Bob - Bog monster",
+            "Bob - Dwarf",
+            "Bob - Giant turtle",
+            "Bob - Golem",
+          ]),
+        },
+      ],
     );
   });
 
   it("test_edgeql_scope_ref_outer_07", () => {
-    let baseline = queryRows<string>(h, `
+    let baseline = queryRows<string>(
+      h,
+      `
             WITH A := (SELECT User {
                 cards := .deck {
                     name,
@@ -4089,9 +4132,12 @@ describe("TestEdgeQLScope", () => {
                 }
             }),
             FOR x IN A UNION (x.cards.tag);
-        `);
-    expect((baseline).length).toEqual(22);
-    let res = queryRows<string>(h, `
+        `,
+    );
+    expect(baseline.length).toEqual(22);
+    let res = queryRows<string>(
+      h,
+      `
             WITH A := (SELECT User {
                 cards := .deck {
                     name,
@@ -4099,8 +4145,9 @@ describe("TestEdgeQLScope", () => {
                 }
             }),
             SELECT A.cards.tag;
-        `);
-    expect((res).length).toEqual(9);
+        `,
+    );
+    expect(res.length).toEqual(9);
     expect(res.every((item) => baseline.includes(item))).toBeTruthy();
   });
 
@@ -4114,23 +4161,23 @@ describe("TestEdgeQLScope", () => {
             ORDER BY .avatar.tag
             `,
       [
-            {
-              "avatar": null,
-            },
-            {
-              "avatar": null,
-            },
-            {
-              "avatar": {
-                "tag": "Alice - Dragon",
-              },
-            },
-            {
-              "avatar": {
-                "tag": "Dave - Djinn",
-              },
-            },
-          ]
+        {
+          avatar: null,
+        },
+        {
+          avatar: null,
+        },
+        {
+          avatar: {
+            tag: "Alice - Dragon",
+          },
+        },
+        {
+          avatar: {
+            tag: "Dave - Djinn",
+          },
+        },
+      ],
     );
   });
 
@@ -4144,12 +4191,12 @@ describe("TestEdgeQLScope", () => {
             FILTER .avatar.tag != 'Dave - Djinn'
             `,
       [
-            {
-              "avatar": {
-                "tag": "Alice - Dragon",
-              },
-            },
-          ]
+        {
+          avatar: {
+            tag: "Alice - Dragon",
+          },
+        },
+      ],
     );
   });
 
@@ -4160,7 +4207,7 @@ describe("TestEdgeQLScope", () => {
                 WITH X := (User, User.friends)
                 SELECT count(X.0.friends.name ++ X.1.name);
             `,
-      [36]
+      [36],
     );
   });
 
@@ -4171,7 +4218,7 @@ describe("TestEdgeQLScope", () => {
                 WITH X := (User { friends }, User.friends)
                 SELECT count(X.0.friends.name ++ X.1.name);
             `,
-      [36]
+      [36],
     );
   });
 
@@ -4195,27 +4242,27 @@ describe("TestEdgeQLScope", () => {
             } filter .name = 'Alice';
             `,
       [
+        {
+          deck: [
             {
-              "deck": [
-                {
-                  "el2": "Water",
-                  "name": "Bog monster",
-                },
-                {
-                  "el2": "Fire",
-                  "name": "Dragon",
-                },
-                {
-                  "el2": "Water",
-                  "name": "Giant turtle",
-                },
-                {
-                  "el2": "Fire",
-                  "name": "Imp",
-                },
-              ],
+              el2: "Water",
+              name: "Bog monster",
             },
-          ]
+            {
+              el2: "Fire",
+              name: "Dragon",
+            },
+            {
+              el2: "Water",
+              name: "Giant turtle",
+            },
+            {
+              el2: "Fire",
+              name: "Imp",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -4239,18 +4286,18 @@ describe("TestEdgeQLScope", () => {
             } FILTER .name = 'Djinn';
             `,
       [
+        {
+          name: "Djinn",
+          owners: [
             {
-              "name": "Djinn",
-              "owners": [
-                {
-                  "n": "Carol",
-                },
-                {
-                  "n": "Dave",
-                },
-              ],
+              n: "Carol",
             },
-          ]
+            {
+              n: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -4274,18 +4321,18 @@ describe("TestEdgeQLScope", () => {
             } FILTER .name = 'Djinn';
             `,
       [
+        {
+          name: "Djinn",
+          foo: [
             {
-              "name": "Djinn",
-              "foo": [
-                {
-                  "n": "Carol",
-                },
-                {
-                  "n": "Dave",
-                },
-              ],
+              n: "Carol",
             },
-          ]
+            {
+              n: "Dave",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -4309,27 +4356,27 @@ describe("TestEdgeQLScope", () => {
             } filter .name = 'Alice';
             `,
       [
+        {
+          deck: [
             {
-              "deck": [
-                {
-                  "cnt2": 3,
-                  "name": "Bog monster",
-                },
-                {
-                  "cnt2": 2,
-                  "name": "Dragon",
-                },
-                {
-                  "cnt2": 3,
-                  "name": "Giant turtle",
-                },
-                {
-                  "cnt2": 2,
-                  "name": "Imp",
-                },
-              ],
+              cnt2: 3,
+              name: "Bog monster",
             },
-          ]
+            {
+              cnt2: 2,
+              name: "Dragon",
+            },
+            {
+              cnt2: 3,
+              name: "Giant turtle",
+            },
+            {
+              cnt2: 2,
+              name: "Imp",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -4355,27 +4402,27 @@ describe("TestEdgeQLScope", () => {
             } order by .name
             `,
       [
-            {
-              "avatar": {
-                "name": "Dragon",
-                "retag": "Dragon-Best",
-                "t2": "Best",
-              },
-            },
-            {
-              "avatar": null,
-            },
-            {
-              "avatar": null,
-            },
-            {
-              "avatar": {
-                "name": "Djinn",
-                "retag": "Djinn-Wow",
-                "t2": "Wow",
-              },
-            },
-          ]
+        {
+          avatar: {
+            name: "Dragon",
+            retag: "Dragon-Best",
+            t2: "Best",
+          },
+        },
+        {
+          avatar: null,
+        },
+        {
+          avatar: null,
+        },
+        {
+          avatar: {
+            name: "Djinn",
+            retag: "Djinn-Wow",
+            t2: "Wow",
+          },
+        },
+      ],
     );
   });
 
@@ -4405,15 +4452,15 @@ describe("TestEdgeQLScope", () => {
             FILTER .name = 'Alice';
             `,
       [
-            {
-              "avatar": {
-                "name": "Dragon",
-                "nameLen": 6,
-                "nameLen2": 6,
-              },
-              "name": "Alice",
-            },
-          ]
+        {
+          avatar: {
+            name: "Dragon",
+            nameLen: 6,
+            nameLen2: 6,
+          },
+          name: "Alice",
+        },
+      ],
     );
   });
 
@@ -4441,12 +4488,12 @@ describe("TestEdgeQLScope", () => {
             );
             `,
       [
-            {
-              "name": "Dragon",
-              "nameLen": 6,
-              "nameLen2": 6,
-            },
-          ]
+        {
+          name: "Dragon",
+          nameLen: 6,
+          nameLen2: 6,
+        },
+      ],
     );
   });
 
@@ -4468,34 +4515,34 @@ describe("TestEdgeQLScope", () => {
                 }) filter .name ILIKE 'Alice%');
             `,
       unorderedBag([
+        {
+          deck: unorderedBag([
             {
-              "deck": unorderedBag([
+              awards: [
                 {
-                  "awards": [
-                    {
-                      "name": "2nd",
-                    },
-                  ],
+                  name: "2nd",
+                },
+              ],
+            },
+            {
+              awards: unorderedBag([
+                {
+                  name: "1st",
                 },
                 {
-                  "awards": unorderedBag([
-                    {
-                      "name": "1st",
-                    },
-                    {
-                      "name": "3rd",
-                    },
-                  ]),
-                },
-                {
-                  "awards": [],
-                },
-                {
-                  "awards": [],
+                  name: "3rd",
                 },
               ]),
             },
-          ])
+            {
+              awards: [],
+            },
+            {
+              awards: [],
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4517,34 +4564,34 @@ describe("TestEdgeQLScope", () => {
                 }) filter .name ILIKE 'Alice%');
             `,
       unorderedBag([
+        {
+          deck: unorderedBag([
             {
-              "deck": unorderedBag([
+              awards: [
                 {
-                  "awards": [
-                    {
-                      "name": "2nd",
-                    },
-                  ],
+                  name: "2nd",
+                },
+              ],
+            },
+            {
+              awards: unorderedBag([
+                {
+                  name: "1st",
                 },
                 {
-                  "awards": unorderedBag([
-                    {
-                      "name": "1st",
-                    },
-                    {
-                      "name": "3rd",
-                    },
-                  ]),
-                },
-                {
-                  "awards": [],
-                },
-                {
-                  "awards": [],
+                  name: "3rd",
                 },
               ]),
             },
-          ])
+            {
+              awards: [],
+            },
+            {
+              awards: [],
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -4569,23 +4616,23 @@ describe("TestEdgeQLScope", () => {
             } filter .name = 'Alice'));
             `,
       [
+        {
+          deck: unorderedBag([
             {
-              "deck": unorderedBag([
-                {
-                  "@count": 2,
-                },
-                {
-                  "@count": 2,
-                },
-                {
-                  "@count": 3,
-                },
-                {
-                  "@count": 3,
-                },
-              ]),
+              "@count": 2,
             },
-          ]
+            {
+              "@count": 2,
+            },
+            {
+              "@count": 3,
+            },
+            {
+              "@count": 3,
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -4604,23 +4651,23 @@ describe("TestEdgeQLScope", () => {
             };
             `,
       unorderedBag([
-            {
-              "name": "Alice",
-              "namelen": 5,
-            },
-            {
-              "name": "Bob",
-              "namelen": 3,
-            },
-            {
-              "name": "Carol",
-              "namelen": 5,
-            },
-            {
-              "name": "Dave",
-              "namelen": 4,
-            },
-          ])
+        {
+          name: "Alice",
+          namelen: 5,
+        },
+        {
+          name: "Bob",
+          namelen: 3,
+        },
+        {
+          name: "Carol",
+          namelen: 5,
+        },
+        {
+          name: "Dave",
+          namelen: 4,
+        },
+      ]),
     );
   });
 
@@ -4639,23 +4686,23 @@ describe("TestEdgeQLScope", () => {
             };
             `,
       unorderedBag([
-            {
-              "name": "Alice",
-              "namelen": 5,
-            },
-            {
-              "name": "Bob",
-              "namelen": 3,
-            },
-            {
-              "name": "Carol",
-              "namelen": 5,
-            },
-            {
-              "name": "Dave",
-              "namelen": 4,
-            },
-          ])
+        {
+          name: "Alice",
+          namelen: 5,
+        },
+        {
+          name: "Bob",
+          namelen: 3,
+        },
+        {
+          name: "Carol",
+          namelen: 5,
+        },
+        {
+          name: "Dave",
+          namelen: 4,
+        },
+      ]),
     );
   });
 
@@ -4666,10 +4713,10 @@ describe("TestEdgeQLScope", () => {
                 select User { name } filter [is Bot].deck.name = 'Dragon'
             `,
       [
-            {
-              "name": "Dave",
-            },
-          ]
+        {
+          name: "Dave",
+        },
+      ],
     );
   });
 
@@ -4686,14 +4733,14 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Dragon';
             `,
       [
+        {
+          w: [
             {
-              "w": [
-                {
-                  "name": "1st",
-                },
-              ],
+              name: "1st",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -4703,7 +4750,7 @@ describe("TestEdgeQLScope", () => {
       `
                 select count(Named[IS User].deck);
             `,
-      [9]
+      [9],
     );
   });
 
@@ -4715,29 +4762,29 @@ describe("TestEdgeQLScope", () => {
                 filter .name = 'Djinn';
             `,
       [
+        {
+          name: "Djinn",
+          owners: unorderedBag([
             {
-              "name": "Djinn",
-              "owners": unorderedBag([
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Carol",
             },
             {
-              "name": "Djinn",
-              "owners": unorderedBag([
-                {
-                  "name": "Carol",
-                },
-                {
-                  "name": "Dave",
-                },
-              ]),
+              name: "Dave",
             },
-          ]
+          ]),
+        },
+        {
+          name: "Djinn",
+          owners: unorderedBag([
+            {
+              name: "Carol",
+            },
+            {
+              name: "Dave",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -4747,7 +4794,7 @@ describe("TestEdgeQLScope", () => {
             alter type User
             create link lcards := (
                 select Card filter Card.name[0] = User.name[0]);
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4756,13 +4803,13 @@ describe("TestEdgeQLScope", () => {
                 select U { name } filter exists .lcards;
             `,
       unorderedBag([
-            {
-              "name": "Bob",
-            },
-            {
-              "name": "Dave",
-            },
-          ])
+        {
+          name: "Bob",
+        },
+        {
+          name: "Dave",
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -4770,20 +4817,20 @@ describe("TestEdgeQLScope", () => {
                 select Bot { lcards: {name} }
             `,
       [
+        {
+          lcards: unorderedBag([
             {
-              "lcards": unorderedBag([
-                {
-                  "name": "Dragon",
-                },
-                {
-                  "name": "Dwarf",
-                },
-                {
-                  "name": "Djinn",
-                },
-              ]),
+              name: "Dragon",
             },
-          ]
+            {
+              name: "Dwarf",
+            },
+            {
+              name: "Djinn",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -4792,7 +4839,7 @@ describe("TestEdgeQLScope", () => {
       `
             alter type Named
             create property foo := count(User)
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4800,19 +4847,19 @@ describe("TestEdgeQLScope", () => {
                 select User { foo }
             `,
       [
-            {
-              "foo": 4,
-            },
-            {
-              "foo": 4,
-            },
-            {
-              "foo": 4,
-            },
-            {
-              "foo": 4,
-            },
-          ]
+        {
+          foo: 4,
+        },
+        {
+          foo: 4,
+        },
+        {
+          foo: 4,
+        },
+        {
+          foo: 4,
+        },
+      ],
     );
   });
 
@@ -4826,27 +4873,27 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Alice';
             `,
       [
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
-                {
-                  "c": 2,
-                  "name": "Imp",
-                },
-                {
-                  "c": 2,
-                  "name": "Dragon",
-                },
-                {
-                  "c": 3,
-                  "name": "Bog monster",
-                },
-                {
-                  "c": 3,
-                  "name": "Giant turtle",
-                },
-              ]),
+              c: 2,
+              name: "Imp",
             },
-          ]
+            {
+              c: 2,
+              name: "Dragon",
+            },
+            {
+              c: 3,
+              name: "Bog monster",
+            },
+            {
+              c: 3,
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4857,27 +4904,27 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Alice';
             `,
       [
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
-                {
-                  "@c": 2,
-                  "name": "Imp",
-                },
-                {
-                  "@c": 2,
-                  "name": "Dragon",
-                },
-                {
-                  "@c": 3,
-                  "name": "Bog monster",
-                },
-                {
-                  "@c": 3,
-                  "name": "Giant turtle",
-                },
-              ]),
+              "@c": 2,
+              name: "Imp",
             },
-          ]
+            {
+              "@c": 2,
+              name: "Dragon",
+            },
+            {
+              "@c": 3,
+              name: "Bog monster",
+            },
+            {
+              "@c": 3,
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4899,27 +4946,27 @@ describe("TestEdgeQLScope", () => {
             } filter .name = 'Alice';
             `,
       [
+        {
+          deck: unorderedBag([
             {
-              "deck": unorderedBag([
-                {
-                  "@count": 2,
-                  "name": "Imp",
-                },
-                {
-                  "@count": 2,
-                  "name": "Dragon",
-                },
-                {
-                  "@count": 3,
-                  "name": "Bog monster",
-                },
-                {
-                  "@count": 3,
-                  "name": "Giant turtle",
-                },
-              ]),
+              "@count": 2,
+              name: "Imp",
             },
-          ]
+            {
+              "@count": 2,
+              name: "Dragon",
+            },
+            {
+              "@count": 3,
+              name: "Bog monster",
+            },
+            {
+              "@count": 3,
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -4933,27 +4980,27 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Alice';
             `,
       [
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
-                {
-                  "@count": 2,
-                  "name": "Imp",
-                },
-                {
-                  "@count": 2,
-                  "name": "Dragon",
-                },
-                {
-                  "@count": 3,
-                  "name": "Bog monster",
-                },
-                {
-                  "@count": 3,
-                  "name": "Giant turtle",
-                },
-              ]),
+              "@count": 2,
+              name: "Imp",
             },
-          ]
+            {
+              "@count": 2,
+              name: "Dragon",
+            },
+            {
+              "@count": 3,
+              name: "Bog monster",
+            },
+            {
+              "@count": 3,
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -4967,27 +5014,27 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Alice';
             `,
       [
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
-                {
-                  "c": 2,
-                  "name": "Imp",
-                },
-                {
-                  "c": 2,
-                  "name": "Dragon",
-                },
-                {
-                  "c": 3,
-                  "name": "Bog monster",
-                },
-                {
-                  "c": 3,
-                  "name": "Giant turtle",
-                },
-              ]),
+              c: 2,
+              name: "Imp",
             },
-          ]
+            {
+              c: 2,
+              name: "Dragon",
+            },
+            {
+              c: 3,
+              name: "Bog monster",
+            },
+            {
+              c: 3,
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4998,27 +5045,27 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Alice';
             `,
       [
+        {
+          cards: unorderedBag([
             {
-              "cards": unorderedBag([
-                {
-                  "c": 2,
-                  "name": "Imp",
-                },
-                {
-                  "c": 2,
-                  "name": "Dragon",
-                },
-                {
-                  "c": 3,
-                  "name": "Bog monster",
-                },
-                {
-                  "c": 3,
-                  "name": "Giant turtle",
-                },
-              ]),
+              c: 2,
+              name: "Imp",
             },
-          ]
+            {
+              c: 2,
+              name: "Dragon",
+            },
+            {
+              c: 3,
+              name: "Bog monster",
+            },
+            {
+              c: 3,
+              name: "Giant turtle",
+            },
+          ]),
+        },
+      ],
     );
   });
 
@@ -5028,18 +5075,14 @@ describe("TestEdgeQLScope", () => {
       `
             select User filter .avatar ?= <Card>{} and .name = 'Bob';
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     assertQueryResult(
       h,
       `
             select User filter .name = 'Bob' and .avatar ?= <Card>{}
             `,
-      [
-            {},
-          ]
+      [{}],
     );
   });
 
@@ -5063,19 +5106,19 @@ describe("TestEdgeQLScope", () => {
             order by .keyCard.cost
             `,
       [
-            {
-              "keyCard": {},
-            },
-            {
-              "keyCard": {},
-            },
-            {
-              "keyCard": {},
-            },
-            {
-              "keyCard": {},
-            },
-          ]
+        {
+          keyCard: {},
+        },
+        {
+          keyCard: {},
+        },
+        {
+          keyCard: {},
+        },
+        {
+          keyCard: {},
+        },
+      ],
     );
   });
 
@@ -5101,19 +5144,19 @@ describe("TestEdgeQLScope", () => {
             order by .minCost;
             `,
       [
-            {
-              "minCost": 1,
-            },
-            {
-              "minCost": 1,
-            },
-            {
-              "minCost": 1,
-            },
-            {
-              "minCost": 2,
-            },
-          ]
+        {
+          minCost: 1,
+        },
+        {
+          minCost: 1,
+        },
+        {
+          minCost: 1,
+        },
+        {
+          minCost: 2,
+        },
+      ],
     );
   });
 
@@ -5124,19 +5167,19 @@ describe("TestEdgeQLScope", () => {
                 select Card { name } order by .name offset 3
             `,
       [
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant eagle",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Golem",
-            },
-          ]
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant eagle",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Golem",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5145,19 +5188,19 @@ describe("TestEdgeQLScope", () => {
             select W { name } order by .name offset 3;
             `,
       [
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant eagle",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Golem",
-            },
-          ]
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant eagle",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Golem",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5165,13 +5208,13 @@ describe("TestEdgeQLScope", () => {
                 select Card { name } order by .name offset 3 limit 2
             `,
       [
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant eagle",
-            },
-          ]
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant eagle",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5180,20 +5223,20 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Carol';
             `,
       [
+        {
+          deck: [
             {
-              "deck": [
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-                {
-                  "name": "Golem",
-                },
-              ],
+              name: "Giant eagle",
             },
-          ]
+            {
+              name: "Giant turtle",
+            },
+            {
+              name: "Golem",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -5205,20 +5248,20 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Carol';
             `,
       [
+        {
+          deck: [
             {
-              "deck": [
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-                {
-                  "name": "Golem",
-                },
-              ],
+              name: "Giant eagle",
             },
-          ]
+            {
+              name: "Giant turtle",
+            },
+            {
+              name: "Golem",
+            },
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5228,20 +5271,20 @@ describe("TestEdgeQLScope", () => {
             filter .name = 'Carol';
             `,
       [
+        {
+          cards: [
             {
-              "cards": [
-                {
-                  "name": "Giant eagle",
-                },
-                {
-                  "name": "Giant turtle",
-                },
-                {
-                  "name": "Golem",
-                },
-              ],
+              name: "Giant eagle",
             },
-          ]
+            {
+              name: "Giant turtle",
+            },
+            {
+              name: "Golem",
+            },
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5249,19 +5292,19 @@ describe("TestEdgeQLScope", () => {
                 select Card { name } order by .name offset 3 limit 100
             `,
       [
-            {
-              "name": "Dwarf",
-            },
-            {
-              "name": "Giant eagle",
-            },
-            {
-              "name": "Giant turtle",
-            },
-            {
-              "name": "Golem",
-            },
-          ]
+        {
+          name: "Dwarf",
+        },
+        {
+          name: "Giant eagle",
+        },
+        {
+          name: "Giant turtle",
+        },
+        {
+          name: "Golem",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5269,10 +5312,10 @@ describe("TestEdgeQLScope", () => {
                 select Card { name } order by .name offset 3 limit 1
             `,
       [
-            {
-              "name": "Dwarf",
-            },
-          ]
+        {
+          name: "Dwarf",
+        },
+      ],
     );
   });
 });

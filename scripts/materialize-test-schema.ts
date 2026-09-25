@@ -9,7 +9,10 @@ const inferredModuleNameFromSchema = (schemaName: string): string => {
   if (idx < 0) {
     return "default";
   }
-  return schemaName.slice(idx + 1).toLowerCase().replace(/_/g, "::");
+  return schemaName
+    .slice(idx + 1)
+    .toLowerCase()
+    .replace(/_/g, "::");
 };
 
 const hasExplicitModuleDeclaration = (source: string): boolean => {

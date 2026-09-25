@@ -63,8 +63,10 @@ const dashUuid = (value: string): string => {
 
 const identity: Converter = (value) => value;
 
-const nullSafe = (convert: Converter): Converter => (value) =>
-  value === null || value === undefined ? value : convert(value);
+const nullSafe =
+  (convert: Converter): Converter =>
+  (value) =>
+    value === null || value === undefined ? value : convert(value);
 
 const scalarConverter = (typeName: string): Converter => {
   switch (typeName) {
@@ -99,13 +101,13 @@ const scalarConverter = (typeName: string): Converter => {
         }
       });
     case "std::duration":
-      return nullSafe((v) => (typeof v === "string" ? Duration.fromString(v) ?? v : v));
+      return nullSafe((v) => (typeof v === "string" ? (Duration.fromString(v) ?? v) : v));
     case "cal::local_date":
-      return nullSafe((v) => (typeof v === "string" ? LocalDate.fromString(v) ?? v : v));
+      return nullSafe((v) => (typeof v === "string" ? (LocalDate.fromString(v) ?? v) : v));
     case "cal::local_time":
-      return nullSafe((v) => (typeof v === "string" ? LocalTime.fromString(v) ?? v : v));
+      return nullSafe((v) => (typeof v === "string" ? (LocalTime.fromString(v) ?? v) : v));
     case "cal::local_datetime":
-      return nullSafe((v) => (typeof v === "string" ? LocalDateTime.fromString(v) ?? v : v));
+      return nullSafe((v) => (typeof v === "string" ? (LocalDateTime.fromString(v) ?? v) : v));
     case "cal::relative_duration":
       // The engine surfaces these as strings; without component breakdown we
       // wrap the raw value only when it parses as an absolute duration.
@@ -116,7 +118,7 @@ const scalarConverter = (typeName: string): Converter => {
         return v;
       });
     case "cal::date_duration":
-      return nullSafe((v) => (typeof v === "string" ? parseDateDuration(v) ?? v : v));
+      return nullSafe((v) => (typeof v === "string" ? (parseDateDuration(v) ?? v) : v));
     default:
       return identity;
   }
@@ -124,10 +126,18 @@ const scalarConverter = (typeName: string): Converter => {
 
 const parseDateDuration = (value: string): DateDuration | null => {
   const iso = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?$/.exec(value.trim());
-  if (!iso || (iso[1] === undefined && iso[2] === undefined && iso[3] === undefined && iso[4] === undefined)) {
+  if (
+    !iso ||
+    (iso[1] === undefined && iso[2] === undefined && iso[3] === undefined && iso[4] === undefined)
+  ) {
     return null;
   }
-  return new DateDuration(Number(iso[1] ?? 0), Number(iso[2] ?? 0), Number(iso[3] ?? 0), Number(iso[4] ?? 0));
+  return new DateDuration(
+    Number(iso[1] ?? 0),
+    Number(iso[2] ?? 0),
+    Number(iso[3] ?? 0),
+    Number(iso[4] ?? 0),
+  );
 };
 
 // Strip engine-internal keys recursively; applied even when no IR-derived
@@ -207,12 +217,13 @@ const setConverter = (set: SetLike | undefined): Converter => {
     return valueConverter;
   }
   const typeName = normalizeTypeName(typeref);
-  const looksLikeObjectType = typeref !== undefined
-    && !typeref.isScalar
-    && typeref.collection === undefined
-    && !typeName.startsWith("std::")
-    && !typeName.startsWith("cal::")
-    && typeName.includes("::");
+  const looksLikeObjectType =
+    typeref !== undefined &&
+    !typeref.isScalar &&
+    typeref.collection === undefined &&
+    !typeName.startsWith("std::") &&
+    !typeName.startsWith("cal::") &&
+    typeName.includes("::");
   if (looksLikeObjectType) {
     // Object set without an explicit shape — identity objects; strip
     // internals and dash the id.
@@ -239,7 +250,10 @@ export const buildRowConverter = (
     const parsed = parseEdgeQL(query) as unknown;
     const statement = Array.isArray(parsed) ? parsed[0] : parsed;
     const expanded = expandSchemaAliasesInStatement(statement as never, schema);
-    const ir = compileASTToGelIR(expanded as never, { schema, defaultModule } as never) as { kind?: string; expr?: SetLike };
+    const ir = compileASTToGelIR(expanded as never, { schema, defaultModule } as never) as {
+      kind?: string;
+      expr?: SetLike;
+    };
     if (ir?.kind !== "select_stmt" || !ir.expr) return null;
     return setConverter(ir.expr);
   } catch {

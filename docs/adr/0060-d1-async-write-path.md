@@ -9,7 +9,7 @@ file-backed client, and the new browser/WASM client all do **reads + writes**.
 
 The query engine is synchronous. `executeQuery` and, underneath it, the write
 executor `runWriteWithAccessPolicies` (engine.ts, ~578 lines) call
-`db.prepare(...).all()/.run()` directly and *interleave* those calls with
+`db.prepare(...).all()/.run()` directly and _interleave_ those calls with
 in-process computation. For a write the interleaving is intrinsic and
 data-dependent — you cannot pre-fetch what the next read will be:
 
@@ -24,12 +24,12 @@ data-dependent — you cannot pre-fetch what the next read will be:
 
 Three execution environments, two storage shapes:
 
-| Backend | Storage API | Can run the sync engine? |
-| --- | --- | --- |
-| better-sqlite3 (Node, file) | synchronous | yes — full reads + writes |
-| Durable Object (`ctx.storage.sql`) | **synchronous** | yes — full reads + writes |
-| Browser (sql.js / WASM) | **synchronous** | yes — full reads + writes |
-| **Cloudflare D1** | **asynchronous** | **reads only** |
+| Backend                            | Storage API      | Can run the sync engine?  |
+| ---------------------------------- | ---------------- | ------------------------- |
+| better-sqlite3 (Node, file)        | synchronous      | yes — full reads + writes |
+| Durable Object (`ctx.storage.sql`) | **synchronous**  | yes — full reads + writes |
+| Browser (sql.js / WASM)            | **synchronous**  | yes — full reads + writes |
+| **Cloudflare D1**                  | **asynchronous** | **reads only**            |
 
 The read path already ships for D1 ("await at the edge", `executeSelectAsync`):
 a lowered SELECT is compile → one SQL string → one awaited `.all()` → decode,
@@ -46,7 +46,7 @@ working set" is unbounded (whole tables). That path is rejected.
 Do **not** add a D1 async write path yet, and do **not** ship an unsound
 shortcut to fake one. Specifically rejected:
 
-- **Reusing `buildInsertRowSql` directly** — it consumes *already-resolved*
+- **Reusing `buildInsertRowSql` directly** — it consumes _already-resolved_
   column values; the resolution (defaults/sequences/link targets) is exactly the
   interleaved-read work, so this reimplements the hard part.
 - **A "simple INSERT/UPDATE/DELETE" fast path** that runs the precompiled SQL and
@@ -60,7 +60,7 @@ provision off-band (`gel migrate`/`push` against a file, ship the SQLite to D1).
 ## The only sound way forward: decolor the write core
 
 To run the write executor on an async backend without divergence, the engine's
-DB-access seam must become non-blocking *without forking the logic*. Two shapes:
+DB-access seam must become non-blocking _without forking the logic_. Two shapes:
 
 1. **Generator decolor.** Rewrite `runWriteWithAccessPolicies` and its helpers as
    generators that `yield { sql, params, kind }` and resume via `.next(rows)`. A

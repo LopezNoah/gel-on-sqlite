@@ -28,7 +28,9 @@ const schema = schemaSnapshotFromDeclarative(decl);
 const { db } = openSQLite();
 materializeSchema(db, schema);
 executeScript(db, schema, read("issues_setup.edgeql"), undefined, { defaultModule: "default" });
-executeScript(db, schema, `SET MODULE cards;\n` + read("cards_setup.edgeql"), undefined, { defaultModule: "default" });
+executeScript(db, schema, `SET MODULE cards;\n` + read("cards_setup.edgeql"), undefined, {
+  defaultModule: "default",
+});
 
 if (!rowsOnly) {
   try {

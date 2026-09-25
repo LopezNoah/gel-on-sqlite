@@ -1,6 +1,6 @@
 # Wire scope-tree validation into the Live IR (the last inference dimension)
 
-The final dimension of candidate 6 (Live-IR inference parity → retire the `semantic.ts` oracle, ADR 0001). Unlike volatility/cardinality/multiplicity/type — which are *values* the oracle computes and the Live IR can additively reproduce — **scope-tree** is **error-detection**: its 6 cases assert that the compile *throws* a correlated-reference violation (a path that "changes the interpretation of 'X' elsewhere in the query", or a correlated set referenced inside a nested mutation). So it is not additive: making the Live IR throw could over-reject queries it currently compiles.
+The final dimension of candidate 6 (Live-IR inference parity → retire the `semantic.ts` oracle, ADR 0001). Unlike volatility/cardinality/multiplicity/type — which are _values_ the oracle computes and the Live IR can additively reproduce — **scope-tree** is **error-detection**: its 6 cases assert that the compile _throws_ a correlated-reference violation (a path that "changes the interpretation of 'X' elsewhere in the query", or a correlated set referenced inside a nested mutation). So it is not additive: making the Live IR throw could over-reject queries it currently compiles.
 
 **The gap (measured).** `checkScopeTreeViolations(statement, schema)` already exists as a standalone module (`src/compiler/scope_tree_check.ts`), called by the oracle's `compileToIR` (semantic.ts:508) but **not** by `compileASTToGelIR`. A probe confirmed the Live IR compiled all 5 throwing scope cases without diagnosing them.
 

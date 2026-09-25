@@ -26,8 +26,8 @@ value/source/alias it built inline, and `sourceSql` is the exact post-`FROM`
 text (some sites parenthesize a bare SELECT, others pass an already-aliased
 source — the helper does not re-parenthesize).
 
-**Scoped out, deliberately — the rest of candidate 5:** this names the *result
-wrapper* the entangled shape cases share; it does **not** yet lift those cases
+**Scoped out, deliberately — the rest of candidate 5:** this names the _result
+wrapper_ the entangled shape cases share; it does **not** yet lift those cases
 (the object-set coalesce `compileSideArray`, the optional-operator subqueries)
 into named helpers, nor does it touch `compileScalarSelectSQLInner`'s state frame
 (ADR 0042's `sources` / `valueSql` / `appliedOuterWheres` cluster feeding ~360

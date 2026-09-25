@@ -75,10 +75,14 @@ export class MigrationSession {
     },
   ) {
     this.initialSchemaSource = options.initialSchemaSource;
-    this.initialSchema = parseDeclarativeSchema(options.initialSchemaSource, { legacySyntaxCompat: true});
+    this.initialSchema = parseDeclarativeSchema(options.initialSchemaSource, {
+      legacySyntaxCompat: true,
+    });
 
     this.currentSchemaSource = options.currentSchemaSource ?? options.initialSchemaSource;
-    this.currentSchema = parseDeclarativeSchema(this.currentSchemaSource, { legacySyntaxCompat: true});
+    this.currentSchema = parseDeclarativeSchema(this.currentSchemaSource, {
+      legacySyntaxCompat: true,
+    });
   }
 
   getState(): MigrationSessionState {
@@ -93,7 +97,9 @@ export class MigrationSession {
 
   startMigration(params: StartMigrationParams): MigrationPlan {
     this.requireNoActiveMigration("Cannot start migration: another migration is already active");
-    const targetSchema = parseDeclarativeSchema(params.targetSchemaSource, { legacySyntaxCompat: true});
+    const targetSchema = parseDeclarativeSchema(params.targetSchemaSource, {
+      legacySyntaxCompat: true,
+    });
     const plan = planSchemaMigration(this.currentSchema, targetSchema);
     this.activeMigration = {
       migrationId: params.migrationId,
@@ -104,7 +110,9 @@ export class MigrationSession {
     return plan;
   }
 
-  applyAutomaticMigration(params: StartMigrationParams & CommitMigrationParams): MigrationCommitResult {
+  applyAutomaticMigration(
+    params: StartMigrationParams & CommitMigrationParams,
+  ): MigrationCommitResult {
     this.startMigration({
       targetSchemaSource: params.targetSchemaSource,
       migrationId: params.migrationId,
@@ -189,9 +197,16 @@ export class MigrationSession {
   }
 
   startMigrationRewrite(): void {
-    const active = this.requireActiveMigration("Cannot start migration rewrite: no active migration");
+    const active = this.requireActiveMigration(
+      "Cannot start migration rewrite: no active migration",
+    );
     if (this.rewriteSession) {
-      throw new AppError("E_RUNTIME", "Cannot start migration rewrite: rewrite session is already active", 1, 1);
+      throw new AppError(
+        "E_RUNTIME",
+        "Cannot start migration rewrite: rewrite session is already active",
+        1,
+        1,
+      );
     }
 
     this.rewriteSession = {
@@ -201,7 +216,9 @@ export class MigrationSession {
   }
 
   applyMigrationRewriteDDL(step: RewriteDDLStep): void {
-    const rewrite = this.requireRewriteSession("Cannot apply rewrite DDL: no active rewrite session");
+    const rewrite = this.requireRewriteSession(
+      "Cannot apply rewrite DDL: no active rewrite session",
+    );
     rewrite.steps.push({
       description: step.description,
       sql: step.sql,
@@ -212,12 +229,16 @@ export class MigrationSession {
     if (name.trim().length === 0) {
       throw new AppError("E_RUNTIME", "Savepoint name cannot be empty", 1, 1);
     }
-    const rewrite = this.requireRewriteSession("Cannot declare savepoint: no active rewrite session");
+    const rewrite = this.requireRewriteSession(
+      "Cannot declare savepoint: no active rewrite session",
+    );
     rewrite.savepoints.set(name, cloneSteps(rewrite.steps));
   }
 
   releaseSavepoint(name: string): void {
-    const rewrite = this.requireRewriteSession("Cannot release savepoint: no active rewrite session");
+    const rewrite = this.requireRewriteSession(
+      "Cannot release savepoint: no active rewrite session",
+    );
     if (!rewrite.savepoints.has(name)) {
       throw new AppError("E_RUNTIME", `Savepoint '${name}' does not exist`, 1, 1);
     }
@@ -225,7 +246,9 @@ export class MigrationSession {
   }
 
   rollbackToSavepoint(name: string): void {
-    const rewrite = this.requireRewriteSession("Cannot rollback to savepoint: no active rewrite session");
+    const rewrite = this.requireRewriteSession(
+      "Cannot rollback to savepoint: no active rewrite session",
+    );
     const snapshot = rewrite.savepoints.get(name);
     if (!snapshot) {
       throw new AppError("E_RUNTIME", `Savepoint '${name}' does not exist`, 1, 1);
@@ -240,8 +263,12 @@ export class MigrationSession {
   }
 
   commitMigrationRewrite(): void {
-    const active = this.requireActiveMigration("Cannot commit migration rewrite: no active migration");
-    const rewrite = this.requireRewriteSession("Cannot commit migration rewrite: no active rewrite session");
+    const active = this.requireActiveMigration(
+      "Cannot commit migration rewrite: no active migration",
+    );
+    const rewrite = this.requireRewriteSession(
+      "Cannot commit migration rewrite: no active rewrite session",
+    );
     active.plan = {
       steps: cloneSteps(rewrite.steps),
     };
@@ -262,7 +289,9 @@ export class MigrationSession {
       return this.createMigration(createMatch[1]);
     }
 
-    const descriptionMatch = normalized.match(/^set\s+migration\s+description\s+(["'])([\s\S]*)\1$/i);
+    const descriptionMatch = normalized.match(
+      /^set\s+migration\s+description\s+(["'])([\s\S]*)\1$/i,
+    );
     if (descriptionMatch) {
       this.setDescription(descriptionMatch[2]);
       return { ok: true };
@@ -280,7 +309,9 @@ export class MigrationSession {
       return { ok: true };
     }
 
-    const rollbackToSavepointMatch = normalized.match(/^rollback\s+to\s+savepoint\s+([A-Za-z0-9_.:-]+)$/i);
+    const rollbackToSavepointMatch = normalized.match(
+      /^rollback\s+to\s+savepoint\s+([A-Za-z0-9_.:-]+)$/i,
+    );
     if (rollbackToSavepointMatch) {
       this.rollbackToSavepoint(rollbackToSavepointMatch[1]);
       return { ok: true };

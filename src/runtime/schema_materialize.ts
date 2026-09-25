@@ -23,7 +23,9 @@ import type { SQLiteDatabase } from "./database.js";
 
 export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): void => {
   const types = schema.listTypes();
-  const typeToTable = new Map(types.map((typeDef) => [qualifiedTypeName(typeDef), tableName(typeDef)]));
+  const typeToTable = new Map(
+    types.map((typeDef) => [qualifiedTypeName(typeDef), tableName(typeDef)]),
+  );
 
   db.prepare(
     `CREATE TABLE IF NOT EXISTS ${quoteIdent("__gel_global_ids")} (${quoteIdent("id")} TEXT PRIMARY KEY, ${quoteIdent("type_name")} TEXT NOT NULL)`,
@@ -35,7 +37,10 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
       `${quoteIdent("id")} TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16))))`,
       ...typeDef.fields
         .filter((f) => f.name !== "id")
-        .map((f) => `${quoteIdent(f.name)} ${f.multi ? "TEXT" : columnType(f.type)}${f.required && !f.hasDefault ? " NOT NULL" : ""}`),
+        .map(
+          (f) =>
+            `${quoteIdent(f.name)} ${f.multi ? "TEXT" : columnType(f.type)}${f.required && !f.hasDefault ? " NOT NULL" : ""}`,
+        ),
     ];
     const ddl = `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${fieldSQL.join(", ")})`;
     db.prepare(ddl).run();
@@ -48,7 +53,9 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
     // clause, which the shared-table mechanism handles instead.
     for (const field of typeDef.fields) {
       if (field.name === "id" || field.multi) continue;
-      const constraints = (field as { constraints?: Array<{ name: string; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
+      const constraints =
+        (field as { constraints?: Array<{ name: string; onExpr?: string; exceptExpr?: string }> })
+          .constraints ?? [];
       const excl = constraints.find((c) => c.name === "std::exclusive" || c.name === "exclusive");
       if (excl && excl.onExpr === undefined && excl.exceptExpr === undefined) {
         db.prepare(
@@ -70,8 +77,10 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
       }
 
       const linkTable = `${table}__${link.name.toLowerCase()}`;
-      const propertyColumns = (link.properties ?? [])
-        .map((property) => `${quoteIdent(property.name)} ${columnType(property.type)}${property.required ? " NOT NULL" : ""}`);
+      const propertyColumns = (link.properties ?? []).map(
+        (property) =>
+          `${quoteIdent(property.name)} ${columnType(property.type)}${property.required ? " NOT NULL" : ""}`,
+      );
       db.prepare(
         `CREATE TABLE IF NOT EXISTS ${quoteIdent(linkTable)} (${quoteIdent("source")} TEXT NOT NULL, ${quoteIdent("target")} TEXT NOT NULL${propertyColumns.length ? `, ${propertyColumns.join(", ")}` : ""}, PRIMARY KEY (${quoteIdent("source")}, ${quoteIdent("target")}))`,
       ).run();
@@ -183,7 +192,14 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
     const key = `${qualifiedTypeName(keyOwner)}|${field}`;
     let group = groups.get(key);
     if (!group) {
-      group = { ownerKey: key, field, tables: [], exceptField: opts.exceptField, lower: opts.lower, multi: opts.multi };
+      group = {
+        ownerKey: key,
+        field,
+        tables: [],
+        exceptField: opts.exceptField,
+        lower: opts.lower,
+        multi: opts.multi,
+      };
       groups.set(key, group);
     }
     const tbl = tableName(member);
@@ -196,7 +212,17 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
     // ── Field-level `constraint exclusive` (incl. `on (str_lower(...))`) ──
     for (const field of typeDef.fields) {
       if (field.name === "id") continue;
-      const constraints = (field as { constraints?: Array<{ name: string; delegated?: boolean; onExpr?: string; exceptExpr?: string }> }).constraints ?? [];
+      const constraints =
+        (
+          field as {
+            constraints?: Array<{
+              name: string;
+              delegated?: boolean;
+              onExpr?: string;
+              exceptExpr?: string;
+            }>;
+          }
+        ).constraints ?? [];
       const excl = constraints.find(constraintIsExclusive);
       if (!excl) continue;
       // Delegated constraints are enforced per-type only — the same-table
@@ -205,7 +231,9 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
       if (excl.delegated === true) continue;
       let owner = typeDef;
       for (const anc of typeAncestors(schema, typeDef)) {
-        const ancField = anc.fields.find((f) => f.name === field.name) as { constraints?: Array<{ name: string }> } | undefined;
+        const ancField = anc.fields.find((f) => f.name === field.name) as
+          | { constraints?: Array<{ name: string }> }
+          | undefined;
         if (ancField?.constraints?.some(constraintIsExclusive)) owner = anc;
       }
       addParticipant(owner, field.name, typeDef, {
@@ -227,12 +255,20 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
       field: string,
     ): { exceptExpr?: string; exprText: string } | undefined => {
       const own = (typeDef.typeConstraints ?? []).find(
-        (c) => constraintIsExclusive(c) && !c.delegated && c.fieldRefs.length === 1 && c.fieldRefs[0] === field,
+        (c) =>
+          constraintIsExclusive(c) &&
+          !c.delegated &&
+          c.fieldRefs.length === 1 &&
+          c.fieldRefs[0] === field,
       );
       if (own) return own;
       for (const anc of typeAncestors(schema, typeDef)) {
         const inherited = (anc.typeConstraints ?? []).find(
-          (c) => constraintIsExclusive(c) && !c.delegated && c.fieldRefs.length === 1 && c.fieldRefs[0] === field,
+          (c) =>
+            constraintIsExclusive(c) &&
+            !c.delegated &&
+            c.fieldRefs.length === 1 &&
+            c.fieldRefs[0] === field,
         );
         if (inherited) return inherited;
       }
@@ -242,23 +278,35 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
     // this type's lineage.
     const candidateFields = new Set<string>();
     for (const tc of typeDef.typeConstraints ?? []) {
-      if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1) candidateFields.add(tc.fieldRefs[0]);
+      if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1)
+        candidateFields.add(tc.fieldRefs[0]);
     }
     for (const anc of typeAncestors(schema, typeDef)) {
       for (const tc of anc.typeConstraints ?? []) {
-        if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1) candidateFields.add(tc.fieldRefs[0]);
+        if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1)
+          candidateFields.add(tc.fieldRefs[0]);
       }
     }
     for (const field of candidateFields) {
       const tc = lineageTypeConstraint(field);
       if (!tc) continue;
-      const fieldDef = typeDef.fields.find((f) => f.name === field) as { multi?: boolean } | undefined;
+      const fieldDef = typeDef.fields.find((f) => f.name === field) as
+        | { multi?: boolean }
+        | undefined;
       if (!fieldDef || fieldDef.multi) continue;
       // Owner: topmost ancestor declaring the same single-field type constraint
       // (or this type itself).
       let owner = typeDef;
       for (const anc of typeAncestors(schema, typeDef)) {
-        if ((anc.typeConstraints ?? []).some((c) => constraintIsExclusive(c) && !c.delegated && c.fieldRefs.length === 1 && c.fieldRefs[0] === field)) {
+        if (
+          (anc.typeConstraints ?? []).some(
+            (c) =>
+              constraintIsExclusive(c) &&
+              !c.delegated &&
+              c.fieldRefs.length === 1 &&
+              c.fieldRefs[0] === field,
+          )
+        ) {
           owner = anc;
         }
       }
@@ -286,8 +334,8 @@ const dropStaleExclusivityArtifacts = (db: SQLiteDatabase, liveGroupIds: Set<str
   // can't be dropped directly).
   const objects = db
     .prepare(
-      "SELECT type, name FROM sqlite_master WHERE name LIKE '__gel_excl__%' "
-      + "OR name LIKE '%__excl_ins__%' OR name LIKE '%__excl_upd__%' OR name LIKE '%__excl_del__%'",
+      "SELECT type, name FROM sqlite_master WHERE name LIKE '__gel_excl__%' " +
+        "OR name LIKE '%__excl_ins__%' OR name LIKE '%__excl_upd__%' OR name LIKE '%__excl_del__%'",
     )
     .all() as Array<{ type: string; name: string }>;
   for (const obj of objects) {
@@ -306,7 +354,10 @@ const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): voi
   const groups = collectExclusiveGroups(schema);
   const liveGroupIds = new Set(
     groups
-      .filter((g) => g.tables.length > 0 && !(g.tables.length === 1 && !g.lower && !g.exceptField && !g.multi))
+      .filter(
+        (g) =>
+          g.tables.length > 0 && !(g.tables.length === 1 && !g.lower && !g.exceptField && !g.multi),
+      )
       .map((g) => g.ownerKey.replaceAll(/[^A-Za-z0-9_]/g, "_")),
   );
   dropStaleExclusivityArtifacts(db, liveGroupIds);
@@ -335,14 +386,16 @@ const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): voi
     // UNIQUE index name carries `__excl__<prop>` so error translation can
     // recover the property name. `lower` constraints index lower(v).
     const indexCol = group.lower ? `lower(${quoteIdent("v")})` : quoteIdent("v");
-    const whereClause = group.exceptField
-      ? ` WHERE ${quoteIdent("ex")} IS NOT 1`
-      : "";
+    const whereClause = group.exceptField ? ` WHERE ${quoteIdent("ex")} IS NOT 1` : "";
     if (group.exceptField) {
       // need the except flag in the shared table for the partial index
-      const cols = (db.prepare(`PRAGMA table_info(${quoteIdent(sharedTable)})`).all() as Array<{ name: string }>).map((r) => r.name);
+      const cols = (
+        db.prepare(`PRAGMA table_info(${quoteIdent(sharedTable)})`).all() as Array<{ name: string }>
+      ).map((r) => r.name);
       if (!cols.includes("ex")) {
-        db.prepare(`ALTER TABLE ${quoteIdent(sharedTable)} ADD COLUMN ${quoteIdent("ex")} INTEGER`).run();
+        db.prepare(
+          `ALTER TABLE ${quoteIdent(sharedTable)} ADD COLUMN ${quoteIdent("ex")} INTEGER`,
+        ).run();
       }
     }
     db.prepare(
@@ -393,7 +446,12 @@ const materializeExclusivity = (db: SQLiteDatabase, schema: SchemaSnapshot): voi
       } catch (err) {
         const msg = String((err as Error).message ?? err);
         if (/UNIQUE constraint failed/.test(msg)) {
-          throw new AppError("E_VALIDATION", `${group.field} violates exclusivity constraint`, 1, 1);
+          throw new AppError(
+            "E_VALIDATION",
+            `${group.field} violates exclusivity constraint`,
+            1,
+            1,
+          );
         }
         throw err;
       }
@@ -458,7 +516,9 @@ const compileCustomTriggerSQL = (
   const timing = "AFTER";
   const event = trigger.event.toUpperCase();
   const whenClause = compileTriggerWhenClause(trigger.when, trigger.event);
-  const statements = trigger.actions.map((action) => compileTriggerActionSQL(action, trigger.event, typeDef, typeToTable));
+  const statements = trigger.actions.map((action) =>
+    compileTriggerActionSQL(action, trigger.event, typeDef, typeToTable),
+  );
 
   if (statements.length === 0) {
     return null;
@@ -467,7 +527,10 @@ const compileCustomTriggerSQL = (
   return `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(triggerName(sourceTable, `custom_${trigger.name}`))} ${timing} ${event} ON ${quoteIdent(sourceTable)}${whenClause} BEGIN ${statements.join(" ")} END`;
 };
 
-const compileTriggerWhenClause = (whenClause: TriggerDef["when"], event: TriggerDef["event"]): string => {
+const compileTriggerWhenClause = (
+  whenClause: TriggerDef["when"],
+  event: TriggerDef["event"],
+): string => {
   if (!whenClause || whenClause.kind === "always") {
     return "";
   }
@@ -492,7 +555,10 @@ const compileTriggerActionSQL = (
   const targetType = normalizeTypeName(action.targetType, typeDef.module ?? "default");
   const targetTable = typeToTable.get(targetType);
   if (!targetTable) {
-    throw new AppError("E_SEMANTIC", `Unknown trigger target type '${targetType}' in ${qualifiedTypeName(typeDef)}.${action.kind}`);
+    throw new AppError(
+      "E_SEMANTIC",
+      `Unknown trigger target type '${targetType}' in ${qualifiedTypeName(typeDef)}.${action.kind}`,
+    );
   }
 
   const entries = Object.entries(action.values);
@@ -557,11 +623,13 @@ const literalToSQL = (value: ScalarValue): string => {
   return `'${value.replaceAll("'", "''")}'`;
 };
 
-const tableName = (typeDef: TypeDef): string => `${(typeDef.module ?? "default").toLowerCase()}__${typeDef.name.toLowerCase()}`;
+const tableName = (typeDef: TypeDef): string =>
+  `${(typeDef.module ?? "default").toLowerCase()}__${typeDef.name.toLowerCase()}`;
 
 const quoteIdent = (ident: string): string => `"${ident.replaceAll('"', '""')}"`;
 
-const triggerName = (table: string, suffix: string): string => `${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}__${suffix}`;
+const triggerName = (table: string, suffix: string): string =>
+  `${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}__${suffix}`;
 
 const columnType = (kind: ScalarType): string => {
   switch (kind) {

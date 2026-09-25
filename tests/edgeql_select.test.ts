@@ -5,7 +5,7 @@ import {
   queryRows,
   querySingle,
   unorderedBag,
-  unorderedSet
+  unorderedSet,
 } from "./python_query_test_helpers.js";
 
 describe("TestEdgeQLSelect", () => {
@@ -14,7 +14,7 @@ describe("TestEdgeQLSelect", () => {
   beforeEach(async () => {
     h = await QueryHarness.create({
       schema: "issues",
-      setup: "issues_setup"
+      setup: "issues_setup",
     });
   });
 
@@ -28,19 +28,19 @@ describe("TestEdgeQLSelect", () => {
                 } ORDER BY .name;
             `,
       [
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-            {
-              "name": "Regression.",
-            },
-            {
-              "name": "Release EdgeDB",
-            },
-            {
-              "name": "Repl tweak.",
-            },
-          ]
+        {
+          name: "Improve EdgeDB repl output rendering.",
+        },
+        {
+          name: "Regression.",
+        },
+        {
+          name: "Release EdgeDB",
+        },
+        {
+          name: "Repl tweak.",
+        },
+      ],
     );
   });
 
@@ -52,13 +52,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.owner.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -78,12 +78,12 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "aliased_number": "1",
-              "total_time_spent": 50000,
-            },
-          ]
+        {
+          number: "1",
+          aliased_number: "1",
+          total_time_spent: 50000,
+        },
+      ],
     );
   });
 
@@ -102,11 +102,11 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "total_time_spent": 50000,
-            },
-          ]
+        {
+          number: "1",
+          total_time_spent: 50000,
+        },
+      ],
     );
   });
 
@@ -132,13 +132,13 @@ describe("TestEdgeQLSelect", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_own_text": {
-                "body": "Rewriting everything.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_own_text: {
+            body: "Rewriting everything.",
+          },
+        },
+      ],
     );
   });
 
@@ -166,13 +166,13 @@ describe("TestEdgeQLSelect", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text": {
-                "body": "Minor lexer tweaks.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text: {
+            body: "Minor lexer tweaks.",
+          },
+        },
+      ],
     );
   });
 
@@ -211,16 +211,16 @@ describe("TestEdgeQLSelect", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_own_text": {
-                "body": "Rewriting everything.",
-              },
-              "shortest_text": {
-                "body": "Minor lexer tweaks.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_own_text: {
+            body: "Rewriting everything.",
+          },
+          shortest_text: {
+            body: "Minor lexer tweaks.",
+          },
+        },
+      ],
     );
   });
 
@@ -245,13 +245,13 @@ describe("TestEdgeQLSelect", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text": {
-                "body": "Minor lexer tweaks.",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text: {
+            body: "Minor lexer tweaks.",
+          },
+        },
+      ],
     );
   });
 
@@ -272,18 +272,18 @@ describe("TestEdgeQLSelect", () => {
             FILTER User.name = 'Elvis';
             `,
       [
+        {
+          name: "Elvis",
+          special_texts: [
             {
-              "name": "Elvis",
-              "special_texts": [
-                {
-                  "body": "We need to be able to render data in tabular format.",
-                },
-                {
-                  "body": "Minor lexer tweaks.",
-                },
-              ],
+              body: "We need to be able to render data in tabular format.",
             },
-          ]
+            {
+              body: "Minor lexer tweaks.",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -314,24 +314,24 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY User.name;
             `,
       [
-            {
-              "name": "Elvis",
-              "special_issue": null,
+        {
+          name: "Elvis",
+          special_issue: null,
+        },
+        {
+          name: "Yury",
+          special_issue: {
+            name: "Improve EdgeDB repl output rendering.",
+            owner: {
+              name: "Yury",
             },
-            {
-              "name": "Yury",
-              "special_issue": {
-                "name": "Improve EdgeDB repl output rendering.",
-                "owner": {
-                  "name": "Yury",
-                },
-                "status": {
-                  "name": "Open",
-                },
-                "number": "2",
-              },
+            status: {
+              name: "Open",
             },
-          ]
+            number: "2",
+          },
+        },
+      ],
     );
   });
 
@@ -349,31 +349,31 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-              "name": "comment",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-              "name": "Regression.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-              "name": "Release EdgeDB",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-              "name": "Repl tweak.",
-            },
-            {
-              "body": "Rewriting everything.",
-              "name": "log",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+          name: "comment",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+          name: "Regression.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+          name: "Release EdgeDB",
+        },
+        {
+          body: "Minor lexer tweaks.",
+          name: "Repl tweak.",
+        },
+        {
+          body: "Rewriting everything.",
+          name: "log",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+          name: "Improve EdgeDB repl output rendering.",
+        },
+      ],
     );
   });
 
@@ -390,12 +390,12 @@ describe("TestEdgeQLSelect", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "number": "1",
-              "foo": 11,
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          number: "1",
+          foo: 11,
+        },
+      ],
     );
   });
 
@@ -415,7 +415,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 sub.body;
             `,
-      ["Minor lexer tweaks."]
+      ["Minor lexer tweaks."],
     );
   });
 
@@ -435,7 +435,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 sub.__type__.name;
             `,
-      ["default::Issue"]
+      ["default::Issue"],
     );
   });
 
@@ -455,7 +455,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 sub[IS Issue].number;
             `,
-      ["3"]
+      ["3"],
     );
   });
 
@@ -472,12 +472,12 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "number": "1",
-              "foo": [11],
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          number: "1",
+          foo: [11],
+        },
+      ],
     );
   });
 
@@ -491,9 +491,13 @@ describe("TestEdgeQLSelect", () => {
                     single foo := {1, 2}
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression for a computed property 'foo' declared as 'single'"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression for a computed property 'foo' declared as 'single'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_16", () => {
@@ -509,13 +513,13 @@ describe("TestEdgeQLSelect", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "number": "1",
-              "foo": null,
-              "bar": 11,
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          number: "1",
+          foo: null,
+          bar: 11,
+        },
+      ],
     );
   });
 
@@ -530,9 +534,13 @@ describe("TestEdgeQLSelect", () => {
                     V {
                         single foo := .foo
                     };
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression for a computed property 'foo' declared as 'single'"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression for a computed property 'foo' declared as 'single'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_18", () => {
@@ -541,7 +549,7 @@ describe("TestEdgeQLSelect", () => {
                     INSERT Publication {
                         title := 'aaa'
                     }
-                `
+                `,
     );
     assertQueryResult(
       h,
@@ -558,16 +566,16 @@ describe("TestEdgeQLSelect", () => {
                     FILTER .title = 'aaa'
                 `,
       [
-            {
-              "title": "aaa",
-              "title1": "aaa",
-              "title2": "aaa",
-              "title3": "aaa",
-              "title4": "aaa",
-              "title5": ["aaa"],
-              "title6": ["aaa"],
-            },
-          ]
+        {
+          title: "aaa",
+          title1: "aaa",
+          title2: "aaa",
+          title3: "aaa",
+          title4: "aaa",
+          title5: ["aaa"],
+          title6: ["aaa"],
+        },
+      ],
     );
   });
 
@@ -582,11 +590,11 @@ describe("TestEdgeQLSelect", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "foo": 42,
-            },
-          ]
+        {
+          number: "1",
+          foo: 42,
+        },
+      ],
     );
   });
 
@@ -604,14 +612,14 @@ describe("TestEdgeQLSelect", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "foo": 1,
-              "bar": 1,
-              "baz": unorderedSet([1]),
-              "te": "3000",
-            },
-          ]
+        {
+          number: "1",
+          foo: 1,
+          bar: 1,
+          baz: unorderedSet([1]),
+          te: "3000",
+        },
+      ],
     );
   });
 
@@ -623,9 +631,13 @@ describe("TestEdgeQLSelect", () => {
                     required foo := <int64>{},
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_22", () => {
@@ -636,9 +648,13 @@ describe("TestEdgeQLSelect", () => {
                     required single foo := <int64>{},
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_23", () => {
@@ -649,9 +665,13 @@ describe("TestEdgeQLSelect", () => {
                     required multi foo := <int64>{},
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_24", () => {
@@ -662,9 +682,13 @@ describe("TestEdgeQLSelect", () => {
                     required single foo := {1, 2},
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression for a computed property 'foo' declared as 'single'"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression for a computed property 'foo' declared as 'single'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_25", () => {
@@ -675,9 +699,13 @@ describe("TestEdgeQLSelect", () => {
                     required foo := <str>.time_estimate,
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_26", () => {
@@ -688,9 +716,13 @@ describe("TestEdgeQLSelect", () => {
                     required single foo := <str>.time_estimate,
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_27", () => {
@@ -701,9 +733,13 @@ describe("TestEdgeQLSelect", () => {
                     required multi foo := <str>.time_estimate,
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed property 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_28", () => {
@@ -725,21 +761,21 @@ describe("TestEdgeQLSelect", () => {
             FILTER Issue.number = '1';
             `,
       [
+        {
+          number: "1",
+          foo: {
+            name: "Elvis",
+          },
+          bar: {
+            name: "Elvis",
+          },
+          baz: [
             {
-              "number": "1",
-              "foo": {
-                "name": "Elvis",
-              },
-              "bar": {
-                "name": "Elvis",
-              },
-              "baz": [
-                {
-                  "name": "Elvis",
-                },
-              ],
+              name: "Elvis",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -751,9 +787,13 @@ describe("TestEdgeQLSelect", () => {
                     required multi foo := .owner.todo,
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed link 'foo' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed link 'foo' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_computable_30", () => {
@@ -764,13 +804,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT (O {m}, O.m);
             `,
       [
-            [
-              {
-                "m": 10,
-              },
-              10,
-            ],
-          ]
+        [
+          {
+            m: 10,
+          },
+          10,
+        ],
+      ],
     );
   });
 
@@ -782,10 +822,10 @@ describe("TestEdgeQLSelect", () => {
                 SELECT (O {m});
             `,
       [
-            {
-              "m": [10],
-            },
-          ]
+        {
+          m: [10],
+        },
+      ],
     );
   });
 
@@ -796,9 +836,9 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := (User {x := .name}.x, (SELECT User.name)) ORDER BY _;
             `,
       [
-            ["Elvis", "Elvis"],
-            ["Yury", "Yury"],
-          ]
+        ["Elvis", "Elvis"],
+        ["Yury", "Yury"],
+      ],
     );
     assertQueryResult(
       h,
@@ -806,9 +846,9 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := ((SELECT User.name), User {x := .name}.x) ORDER BY _;
             `,
       [
-            ["Elvis", "Elvis"],
-            ["Yury", "Yury"],
-          ]
+        ["Elvis", "Elvis"],
+        ["Yury", "Yury"],
+      ],
     );
     assertQueryResult(
       h,
@@ -817,9 +857,9 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _;
             `,
       [
-            ["Elvis", "Elvis"],
-            ["Yury", "Yury"],
-          ]
+        ["Elvis", "Elvis"],
+        ["Yury", "Yury"],
+      ],
     );
   });
 
@@ -830,14 +870,11 @@ describe("TestEdgeQLSelect", () => {
             SELECT User {name, todo_ids := .todo.id} FILTER .name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "todo_ids": [
-                "str",
-                "str",
-              ],
-            },
-          ]
+        {
+          name: "Elvis",
+          todo_ids: ["str", "str"],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -847,11 +884,11 @@ describe("TestEdgeQLSelect", () => {
             SELECT Z {name, asdf_id := .asdf.id} FILTER .name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "asdf_id": "str",
-            },
-          ]
+        {
+          name: "Elvis",
+          asdf_id: "str",
+        },
+      ],
     );
   });
 
@@ -863,9 +900,11 @@ describe("TestEdgeQLSelect", () => {
                     foo := .owner.todo UNION .owner.todo,
                 }
                 FILTER Issue.number = '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly not a distinct set returned by an expression for a computed link 'foo'"));
+    }).toThrow(
+      new RegExp("possibly not a distinct set returned by an expression for a computed link 'foo'"),
+    );
   });
 
   it("test_edgeql_select_computable_35", () => {
@@ -879,13 +918,13 @@ describe("TestEdgeQLSelect", () => {
             FILTER .number = '3'
             `,
       [
-            {
-              "number": "3",
-              "__type__": {
-                "name": "default::Issue",
-              },
-            },
-          ]
+        {
+          number: "3",
+          __type__: {
+            name: "default::Issue",
+          },
+        },
+      ],
     );
   });
 
@@ -897,7 +936,7 @@ describe("TestEdgeQLSelect", () => {
                     using ([[1]])
                 };
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -908,13 +947,11 @@ describe("TestEdgeQLSelect", () => {
             FILTER .number = '3'
             `,
       [
-            {
-              "number": "3",
-              "array_of_array": [
-                [1],
-              ],
-            },
-          ]
+        {
+          number: "3",
+          array_of_array: [[1]],
+        },
+      ],
     );
   });
 
@@ -928,7 +965,7 @@ describe("TestEdgeQLSelect", () => {
                 Issue.name LIKE '%edgedb'
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
@@ -940,10 +977,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -955,13 +992,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -976,19 +1013,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1000,16 +1037,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1021,13 +1058,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1042,10 +1079,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1057,10 +1094,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1072,19 +1109,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1099,16 +1136,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1120,16 +1157,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1140,7 +1177,7 @@ describe("TestEdgeQLSelect", () => {
                 Issue.name NOT ILIKE '%re%'
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -1155,16 +1192,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1176,13 +1213,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1194,13 +1231,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
   });
 
@@ -1215,19 +1252,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1239,19 +1276,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1263,16 +1300,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
   });
 
@@ -1291,13 +1328,13 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number = '1';
             `,
       [
-            {
-              "number": "1",
-              "__type__": {
-                "name": "default::Issue",
-              },
-            },
-          ]
+        {
+          number: "1",
+          __type__: {
+            name: "default::Issue",
+          },
+        },
+      ],
     );
   });
 
@@ -1307,7 +1344,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT User.__type__.name LIMIT 1;
             `,
-      ["default::User"]
+      ["default::User"],
     );
   });
 
@@ -1316,13 +1353,16 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT User.name.__type__.name LIMIT 1;
-            `
+            `,
       );
     }).toThrow(new RegExp("invalid property reference"));
   });
 
   it("test_edgeql_select_type_04", () => {
-    let res = querySingle<{ __type__: { name: string; id: unknown } }>(h, "\n            SELECT User {\n                __type__: {\n                    name,\n                    id,\n                }\n            } LIMIT 1;\n        ");
+    let res = querySingle<{ __type__: { name: string; id: unknown } }>(
+      h,
+      "\n            SELECT User {\n                __type__: {\n                    name,\n                    id,\n                }\n            } LIMIT 1;\n        ",
+    );
     assertQueryResult(
       h,
       `
@@ -1332,7 +1372,7 @@ describe("TestEdgeQLSelect", () => {
                 id,
             } FILTER \`ObjectType\`.name = 'default::User';
             `,
-      [{"name": res.__type__.name, "id": String(res.__type__.id)}]
+      [{ name: res.__type__.name, id: String(res.__type__.id) }],
     );
   });
 
@@ -1343,10 +1383,10 @@ describe("TestEdgeQLSelect", () => {
             SELECT User.__type__ { name };
             `,
       [
-            {
-              "name": "default::User",
-            },
-          ]
+        {
+          name: "default::User",
+        },
+      ],
     );
   });
 
@@ -1365,15 +1405,15 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number = '2';
             `,
       [
+        {
+          number: "3",
+          related_to: [
             {
-              "number": "3",
-              "related_to": [
-                {
-                  "number": "2",
-                },
-              ],
+              number: "2",
             },
-          ]
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1387,15 +1427,15 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number = '2';
             `,
       [
+        {
+          number: "3",
+          related_to: [
             {
-              "number": "3",
-              "related_to": [
-                {
-                  "number": "2",
-                },
-              ],
+              number: "2",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1409,13 +1449,13 @@ describe("TestEdgeQLSelect", () => {
             OFFSET 2;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1426,16 +1466,16 @@ describe("TestEdgeQLSelect", () => {
             LIMIT 3;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1446,13 +1486,13 @@ describe("TestEdgeQLSelect", () => {
             OFFSET 2 LIMIT 3;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1466,13 +1506,13 @@ describe("TestEdgeQLSelect", () => {
             OFFSET 1 + 1;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1483,16 +1523,16 @@ describe("TestEdgeQLSelect", () => {
             LIMIT 6 // 2;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1503,13 +1543,13 @@ describe("TestEdgeQLSelect", () => {
             OFFSET 4 - 2 LIMIT 5 * 2 - 7;
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1523,13 +1563,13 @@ describe("TestEdgeQLSelect", () => {
             OFFSET (SELECT count(Status));
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1540,16 +1580,16 @@ describe("TestEdgeQLSelect", () => {
             LIMIT (SELECT count(Status) + 1);
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1561,13 +1601,13 @@ describe("TestEdgeQLSelect", () => {
             LIMIT (SELECT count(Priority) + 1);
             `,
       [
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -1588,19 +1628,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY User.name;
             `,
       [
-            {
-              "name": "Elvis",
-              "owner_of": {
-                "number": "1",
-              },
-            },
-            {
-              "name": "Yury",
-              "owner_of": {
-                "number": "2",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          owner_of: {
+            number: "1",
+          },
+        },
+        {
+          name: "Yury",
+          owner_of: {
+            number: "2",
+          },
+        },
+      ],
     );
   });
 
@@ -1621,26 +1661,26 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "1",
-                },
-                {
-                  "number": "4",
-                },
-              ],
+              number: "1",
             },
             {
-              "name": "Yury",
-              "owner_of": [
-                {
-                  "number": "2",
-                },
-              ],
+              number: "4",
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          owner_of: [
+            {
+              number: "2",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -1651,9 +1691,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT
                     User { name }
                 LIMIT <int64>User.<owner[IS Issue].number;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_select_limit_07", () => {
@@ -1663,9 +1707,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT
                     User { name }
                 OFFSET <int64>User.<owner[IS Issue].number;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_select_limit_08", () => {
@@ -1675,7 +1723,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT
                     User { name }
                 LIMIT <int64>.<owner[IS Issue].number;
-            `
+            `,
       );
     }).toThrow(new RegExp("could not resolve partial path"));
   });
@@ -1687,7 +1735,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT
                     User { name }
                 OFFSET <int64>.<owner[IS Issue].number;
-            `
+            `,
       );
     }).toThrow(new RegExp("could not resolve partial path"));
   });
@@ -1697,7 +1745,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT 1 LIMIT -1
-            `
+            `,
       );
     }).toThrow(new RegExp("LIMIT must not be negative"));
   });
@@ -1708,14 +1756,14 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT (SELECT {<optional str>$0, 'x'} LIMIT 1)
             `,
-      ["x"]
+      ["x"],
     );
     assertQueryResult(
       h,
       `
             SELECT (SELECT {<optional str>$0, 'x'} OFFSET 1)
             `,
-      []
+      [],
     );
   });
 
@@ -1724,7 +1772,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT 1 OFFSET -1
-            `
+            `,
       );
     }).toThrow(new RegExp("OFFSET must not be negative"));
   });
@@ -1738,25 +1786,25 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "Minor lexer tweaks.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1769,31 +1817,31 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-              "name": null,
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-              "name": "Regression.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-              "name": "Release EdgeDB",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-              "name": "Repl tweak.",
-            },
-            {
-              "body": "Rewriting everything.",
-              "name": null,
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+          name: null,
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+          name: "Regression.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+          name: "Release EdgeDB",
+        },
+        {
+          body: "Minor lexer tweaks.",
+          name: "Repl tweak.",
+        },
+        {
+          body: "Rewriting everything.",
+          name: null,
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+          name: "Improve EdgeDB repl output rendering.",
+        },
+      ],
     );
   });
 
@@ -1809,15 +1857,15 @@ describe("TestEdgeQLSelect", () => {
             } FILTER User.name = 'Elvis';
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "body": "Rewriting everything.",
-                },
-              ],
+              body: "Rewriting everything.",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1835,15 +1883,15 @@ describe("TestEdgeQLSelect", () => {
             } FILTER User.name = 'Elvis';
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "1",
-                },
-              ],
+              number: "1",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -1854,7 +1902,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT User {
                     [IS Named].id,
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot access property 'id' on a polymorphic shape element"));
   });
@@ -1865,14 +1913,14 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT Object[IS Status].name;
             `,
-      unorderedSet(["Closed", "Open"])
+      unorderedSet(["Closed", "Open"]),
     );
     assertQueryResult(
       h,
       `
             SELECT Object[IS Priority].name;
             `,
-      unorderedSet(["High", "Low"])
+      unorderedSet(["High", "Low"]),
     );
   });
 
@@ -1882,7 +1930,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT Object[IS Status].name ?? Object[IS Priority].name;
             `,
-      unorderedSet(["Closed", "High", "Low", "Open"])
+      unorderedSet(["Closed", "High", "Low", "Open"]),
     );
   });
 
@@ -1894,7 +1942,7 @@ describe("TestEdgeQLSelect", () => {
             # the above should be equivalent to this:
             # SELECT Object[IS Status].name ?? Object[IS Priority].name;
             `,
-      unorderedSet(["Closed", "High", "Low", "Open"])
+      unorderedSet(["Closed", "High", "Low", "Open"]),
     );
   });
 
@@ -1907,52 +1955,52 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY .name;
             `,
       [
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": "Closed",
-            },
-            {
-              "name": "High",
-            },
-            {
-              "name": "Low",
-            },
-            {
-              "name": "Open",
-            },
-          ]
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: "Closed",
+        },
+        {
+          name: "High",
+        },
+        {
+          name: "Low",
+        },
+        {
+          name: "Open",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -1963,52 +2011,52 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY .name;
             `,
       [
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": null,
-            },
-            {
-              "name": "Closed",
-            },
-            {
-              "name": "High",
-            },
-            {
-              "name": "Low",
-            },
-            {
-              "name": "Open",
-            },
-          ]
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: null,
+        },
+        {
+          name: "Closed",
+        },
+        {
+          name: "High",
+        },
+        {
+          name: "Low",
+        },
+        {
+          name: "Open",
+        },
+      ],
     );
   });
 
@@ -2026,23 +2074,23 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY .name;
             `,
       [
+        {
+          name: "Improve EdgeDB repl output rendering.",
+          references: [
             {
-              "name": "Improve EdgeDB repl output rendering.",
-              "references": [
-                {
-                  "name": "screenshot.png",
-                },
-              ],
+              name: "screenshot.png",
             },
-            {
-              "name": "Release EdgeDB",
-              "references": [],
-            },
-            {
-              "name": "edgedb.com",
-              "references": [],
-            },
-          ]
+          ],
+        },
+        {
+          name: "Release EdgeDB",
+          references: [],
+        },
+        {
+          name: "edgedb.com",
+          references: [],
+        },
+      ],
     );
   });
 
@@ -2054,7 +2102,7 @@ describe("TestEdgeQLSelect", () => {
                 count(Object[IS Named][IS Text])
                 != count(Object[IS Text]);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -2063,7 +2111,7 @@ describe("TestEdgeQLSelect", () => {
                 count(User.<owner[IS Named][IS Text])
                 != count(User.<owner[IS Text]);
             `,
-      [true]
+      [true],
     );
   });
 
@@ -2080,7 +2128,7 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY
                 _
             `,
-      [50000]
+      [50000],
     );
   });
 
@@ -2106,7 +2154,7 @@ describe("TestEdgeQLSelect", () => {
                     }
                 )
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2121,21 +2169,21 @@ describe("TestEdgeQLSelect", () => {
             FILTER .number = '333'
             `,
       [
+        {
+          references: [
             {
-              "references": [
+              authors: [
                 {
-                  "authors": [
-                    {
-                      "name": "Yury",
-                    },
-                    {
-                      "name": "Elvis",
-                    },
-                  ],
+                  name: "Yury",
+                },
+                {
+                  name: "Elvis",
                 },
               ],
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -2161,7 +2209,7 @@ describe("TestEdgeQLSelect", () => {
                     )
                 )
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2174,17 +2222,17 @@ describe("TestEdgeQLSelect", () => {
             FILTER .name = 'Polymorphic Test 13'
             `,
       [
+        {
+          references: [
             {
-              "references": [
-                {
-                  "title": "Introduction to EdgeDB",
-                },
-                {
-                  "title": "Introduction to EdgeDB Part Deux",
-                },
-              ],
+              title: "Introduction to EdgeDB",
             },
-          ]
+            {
+              title: "Introduction to EdgeDB Part Deux",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -2196,19 +2244,15 @@ describe("TestEdgeQLSelect", () => {
             filter exists .related_to;
             `,
       unorderedBag([
-            {
-              "number": "3",
-              "related_to": [
-                {},
-              ],
-            },
-            {
-              "number": "4",
-              "related_to": [
-                {},
-              ],
-            },
-          ])
+        {
+          number: "3",
+          related_to: [{}],
+        },
+        {
+          number: "4",
+          related_to: [{}],
+        },
+      ]),
     );
   });
 
@@ -2220,14 +2264,14 @@ describe("TestEdgeQLSelect", () => {
             filter .number = "1"
             `,
       [
-            {
-              "number": "1",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "time_estimate": 3000,
-              "priority": null,
-            },
-          ]
+        {
+          number: "1",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          time_estimate: 3000,
+          priority: null,
+        },
+      ],
     );
   });
 
@@ -2239,25 +2283,25 @@ describe("TestEdgeQLSelect", () => {
             filter .number = "1"
             `,
       unorderedBag([
+        {
+          number: "1",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          time_estimate: 3000,
+          owner: {
+            name: "Elvis",
+            "@note": "automatic assignment",
+          },
+          watchers: [
             {
-              "number": "1",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "time_estimate": 3000,
-              "owner": {
-                "name": "Elvis",
-                "@note": "automatic assignment",
-              },
-              "watchers": [
-                {
-                  "name": "Yury",
-                },
-              ],
-              "status": {
-                "name": "Open",
-              },
+              name: "Yury",
             },
-          ])
+          ],
+          status: {
+            name: "Open",
+          },
+        },
+      ]),
     );
   });
 
@@ -2275,25 +2319,25 @@ describe("TestEdgeQLSelect", () => {
             filter .number = "1"
             `,
       unorderedBag([
+        {
+          number: "1",
+          name: "Release EdgeDB!",
+          body: "Initial public release of EdgeDB.",
+          time_estimate: 3000,
+          owner: {
+            name: "Elvis",
+            "@note": "automatic assignment",
+          },
+          watchers: [
             {
-              "number": "1",
-              "name": "Release EdgeDB!",
-              "body": "Initial public release of EdgeDB.",
-              "time_estimate": 3000,
-              "owner": {
-                "name": "Elvis",
-                "@note": "automatic assignment",
-              },
-              "watchers": [
-                {
-                  "name": "Yury",
-                },
-              ],
-              "status": {
-                "comp": 1,
-              },
+              name: "Yury",
             },
-          ])
+          ],
+          status: {
+            comp: 1,
+          },
+        },
+      ]),
     );
   });
 
@@ -2322,7 +2366,7 @@ describe("TestEdgeQLSelect", () => {
                     }),
                 }
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2336,25 +2380,25 @@ describe("TestEdgeQLSelect", () => {
             filter .name = 'Polymorphic Splat Test 04'
             `,
       unorderedBag([
+        {
+          references: unorderedBag([
             {
-              "references": unorderedBag([
+              title: "Introduction to EdgeDB",
+              authors: unorderedBag([
                 {
-                  "title": "Introduction to EdgeDB",
-                  "authors": unorderedBag([
-                    {
-                      "name": "Yury",
-                    },
-                    {
-                      "name": "Elvis",
-                    },
-                  ]),
+                  name: "Yury",
                 },
                 {
-                  "name": "file01.jpg",
+                  name: "Elvis",
                 },
               ]),
             },
-          ])
+            {
+              name: "file01.jpg",
+            },
+          ]),
+        },
+      ]),
     );
   });
 
@@ -2367,25 +2411,25 @@ describe("TestEdgeQLSelect", () => {
             order by .name;
             `,
       [
-            {
-              "id": "str",
-              "name": "Elvis",
-              "body": null,
-              "due_date": null,
-              "number": null,
-              "start_date": null,
-              "time_estimate": null,
-            },
-            {
-              "id": "str",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "due_date": null,
-              "number": "1",
-              "start_date": "str",
-              "time_estimate": 3000,
-            },
-          ]
+        {
+          id: "str",
+          name: "Elvis",
+          body: null,
+          due_date: null,
+          number: null,
+          start_date: null,
+          time_estimate: null,
+        },
+        {
+          id: "str",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          due_date: null,
+          number: "1",
+          start_date: "str",
+          time_estimate: 3000,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2395,25 +2439,25 @@ describe("TestEdgeQLSelect", () => {
             order by .name;
             `,
       [
-            {
-              "id": "str",
-              "name": "Elvis",
-              "body": null,
-              "due_date": null,
-              "number": null,
-              "start_date": null,
-              "time_estimate": null,
-            },
-            {
-              "id": "str",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "due_date": null,
-              "number": "1",
-              "start_date": "str",
-              "time_estimate": 3000,
-            },
-          ]
+        {
+          id: "str",
+          name: "Elvis",
+          body: null,
+          due_date: null,
+          number: null,
+          start_date: null,
+          time_estimate: null,
+        },
+        {
+          id: "str",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          due_date: null,
+          number: "1",
+          start_date: "str",
+          time_estimate: 3000,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2423,25 +2467,25 @@ describe("TestEdgeQLSelect", () => {
             order by .name;
             `,
       [
-            {
-              "id": "str",
-              "name": "Elvis",
-              "body": null,
-              "due_date": null,
-              "number": null,
-              "start_date": null,
-              "time_estimate": null,
-            },
-            {
-              "id": "str",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "due_date": null,
-              "number": "1",
-              "start_date": "str",
-              "time_estimate": 3000,
-            },
-          ]
+        {
+          id: "str",
+          name: "Elvis",
+          body: null,
+          due_date: null,
+          number: null,
+          start_date: null,
+          time_estimate: null,
+        },
+        {
+          id: "str",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          due_date: null,
+          number: "1",
+          start_date: "str",
+          time_estimate: 3000,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2451,25 +2495,25 @@ describe("TestEdgeQLSelect", () => {
             order by .name;
             `,
       [
-            {
-              "id": "str",
-              "name": "Elvis",
-              "body": null,
-              "due_date": null,
-              "number": null,
-              "start_date": null,
-              "time_estimate": null,
-            },
-            {
-              "id": "str",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "due_date": null,
-              "number": "1",
-              "start_date": "str",
-              "time_estimate": 3000,
-            },
-          ]
+        {
+          id: "str",
+          name: "Elvis",
+          body: null,
+          due_date: null,
+          number: null,
+          start_date: null,
+          time_estimate: null,
+        },
+        {
+          id: "str",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          due_date: null,
+          number: "1",
+          start_date: "str",
+          time_estimate: 3000,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2479,25 +2523,25 @@ describe("TestEdgeQLSelect", () => {
             order by .name;
             `,
       [
-            {
-              "id": "str",
-              "name": "Elvis",
-              "body": null,
-              "due_date": null,
-              "number": null,
-              "start_date": null,
-              "time_estimate": null,
-            },
-            {
-              "id": "str",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "due_date": null,
-              "number": "1",
-              "start_date": "str",
-              "time_estimate": 3000,
-            },
-          ]
+        {
+          id: "str",
+          name: "Elvis",
+          body: null,
+          due_date: null,
+          number: null,
+          start_date: null,
+          time_estimate: null,
+        },
+        {
+          id: "str",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          due_date: null,
+          number: "1",
+          start_date: "str",
+          time_estimate: 3000,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -2507,25 +2551,25 @@ describe("TestEdgeQLSelect", () => {
             order by .name;
             `,
       [
-            {
-              "id": "str",
-              "name": "Elvis",
-              "body": null,
-              "due_date": null,
-              "number": null,
-              "start_date": null,
-              "time_estimate": null,
-            },
-            {
-              "id": "str",
-              "name": "Release EdgeDB",
-              "body": "Initial public release of EdgeDB.",
-              "due_date": null,
-              "number": "1",
-              "start_date": "str",
-              "time_estimate": 3000,
-            },
-          ]
+        {
+          id: "str",
+          name: "Elvis",
+          body: null,
+          due_date: null,
+          number: null,
+          start_date: null,
+          time_estimate: null,
+        },
+        {
+          id: "str",
+          name: "Release EdgeDB",
+          body: "Initial public release of EdgeDB.",
+          due_date: null,
+          number: "1",
+          start_date: "str",
+          time_estimate: 3000,
+        },
+      ],
     );
     expect(() => {
       h.script(
@@ -2533,7 +2577,7 @@ describe("TestEdgeQLSelect", () => {
                 select Object { [is User].*, [is Issue].* }
                 filter .name in {'Elvis', 'Release EdgeDB'}
                 order by .name;
-            `
+            `,
       );
     }).toThrow(new RegExp("appears in splats for unrelated types"));
   });
@@ -2550,7 +2594,7 @@ describe("TestEdgeQLSelect", () => {
                 };
             };
             insert Y { x := ( insert X { a := 1 } ){ @a := 2 } };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -2558,36 +2602,40 @@ describe("TestEdgeQLSelect", () => {
             select Y {**}
             `,
       unorderedBag([
-            {
-              "x": {
-                "a": 1,
-                "@a": 2,
-              },
-            },
-          ])
+        {
+          x: {
+            a: 1,
+            "@a": 2,
+          },
+        },
+      ]),
     );
   });
 
   it("test_edgeql_select_splat_07", () => {
-    let res = queryRows<Record<string, unknown>>(h, "\n            select Issue {\n                **,\n            }\n            filter .number = \"1\"\n            ");
+    let res = queryRows<Record<string, unknown>>(
+      h,
+      '\n            select Issue {\n                **,\n            }\n            filter .number = "1"\n            ',
+    );
     expect(res[0]).not.toHaveProperty("tags");
     expect(res[0]).not.toHaveProperty("related_to");
     expect(res[0]).toHaveProperty("num_watchers");
     h.script(
       `
             create future no_linkful_computed_splats
-        `
+        `,
     );
-    res = queryRows<Record<string, unknown>>(h, "\n            select Issue {\n                **,\n            }\n            filter .number = \"1\"\n            ");
+    res = queryRows<Record<string, unknown>>(
+      h,
+      '\n            select Issue {\n                **,\n            }\n            filter .number = "1"\n            ',
+    );
     expect(res[0]).not.toHaveProperty("tags");
     expect(res[0]).not.toHaveProperty("related_to");
     expect(res[0]).not.toHaveProperty("num_watchers");
   });
 
   it("test_edgeql_select_id_01", () => {
-    h.query(
-      `SELECT schema::Type { XYZ := .id};`
-    );
+    h.query(`SELECT schema::Type { XYZ := .id};`);
   });
 
   it("test_edgeql_select_reverse_link_01", () => {
@@ -2597,7 +2645,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 (INTROSPECT TYPEOF User.<owner).name;
             `,
-      ["std::BaseObject"]
+      ["std::BaseObject"],
     );
   });
 
@@ -2608,7 +2656,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 User.<owner[IS Issue]@since
             `,
-      ["2018-01-01T00:00:00+00:00"]
+      ["2018-01-01T00:00:00+00:00"],
     );
     assertQueryResult(
       h,
@@ -2616,7 +2664,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 User.<owner[IS Named]@since
             `,
-      ["2018-01-01T00:00:00+00:00"]
+      ["2018-01-01T00:00:00+00:00"],
     );
   });
 
@@ -2626,7 +2674,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 SELECT
                     User.<owner[IS Text]@since
-                `
+                `,
       );
     }).toThrow(new RegExp("no property 'since'"));
   });
@@ -2637,7 +2685,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 SELECT
                     Issue.<related_to.number
-                `
+                `,
       );
     }).toThrow(new RegExp("no link or property 'number'"));
   });
@@ -2648,7 +2696,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT (User.<owner[IS Comment], User.<owner[IS Issue]);
             `,
-      []
+      [],
     );
   });
 
@@ -2658,7 +2706,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 SELECT
                     User.<owner[IS Status]@since
-                `
+                `,
       );
     }).toThrow(new RegExp("property 'since' does not exist.*no 'owner' links*"));
   });
@@ -2670,13 +2718,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT (SELECT (SELECT Issue { watchers: {name} }).watchers);
             `,
       unorderedBag([
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ])
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ]),
     );
   });
 
@@ -2692,27 +2740,27 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY Issue.number;
             `,
       [
+        {
+          number: "1",
+          related_to: [],
+        },
+        {
+          number: "2",
+          related_to: [],
+        },
+        {
+          number: "3",
+          related_to: [
             {
-              "number": "1",
-              "related_to": [],
+              number: "2",
             },
-            {
-              "number": "2",
-              "related_to": [],
-            },
-            {
-              "number": "3",
-              "related_to": [
-                {
-                  "number": "2",
-                },
-              ],
-            },
-            {
-              "number": "4",
-              "related_to": [],
-            },
-          ]
+          ],
+        },
+        {
+          number: "4",
+          related_to: [],
+        },
+      ],
     );
   });
 
@@ -2730,23 +2778,23 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "4",
-                },
-              ],
+              number: "4",
             },
+          ],
+        },
+        {
+          name: "Yury",
+          owner_of: [
             {
-              "name": "Yury",
-              "owner_of": [
-                {
-                  "number": "3",
-                },
-              ],
+              number: "3",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -2764,29 +2812,29 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          owner_of: [
             {
-              "name": "Elvis",
-              "owner_of": [
-                {
-                  "number": "4",
-                },
-                {
-                  "number": "1",
-                },
-              ],
+              number: "4",
             },
             {
-              "name": "Yury",
-              "owner_of": [
-                {
-                  "number": "3",
-                },
-                {
-                  "number": "2",
-                },
-              ],
+              number: "1",
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          owner_of: [
+            {
+              number: "3",
+            },
+            {
+              number: "2",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -2805,10 +2853,10 @@ describe("TestEdgeQLSelect", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -2827,33 +2875,33 @@ describe("TestEdgeQLSelect", () => {
             };
             `,
       unorderedBag([
+        {
+          name: "Elvis",
+          foo: [
             {
-              "name": "Elvis",
-              "foo": [
-                {
-                  "bar": "Elvis",
-                  "number": "1",
-                },
-                {
-                  "bar": "Elvis",
-                  "number": "4",
-                },
-              ],
+              bar: "Elvis",
+              number: "1",
             },
             {
-              "name": "Yury",
-              "foo": [
-                {
-                  "bar": "Yury",
-                  "number": "2",
-                },
-                {
-                  "bar": "Yury",
-                  "number": "3",
-                },
-              ],
+              bar: "Elvis",
+              number: "4",
             },
-          ])
+          ],
+        },
+        {
+          name: "Yury",
+          foo: [
+            {
+              bar: "Yury",
+              number: "2",
+            },
+            {
+              bar: "Yury",
+              number: "3",
+            },
+          ],
+        },
+      ]),
     );
   });
 
@@ -2872,11 +2920,11 @@ describe("TestEdgeQLSelect", () => {
             } FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "foo": "Open",
-            },
-          ]
+        {
+          name: "Elvis",
+          foo: "Open",
+        },
+      ],
     );
   });
 
@@ -2899,11 +2947,11 @@ describe("TestEdgeQLSelect", () => {
             # wrong in the query
             `,
       [
-            {
-              "name": "Elvis",
-              "foo": "Open",
-            },
-          ]
+        {
+          name: "Elvis",
+          foo: "Open",
+        },
+      ],
     );
   });
 
@@ -2924,11 +2972,11 @@ describe("TestEdgeQLSelect", () => {
             } FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "foo": ["default::User"],
-            },
-          ]
+        {
+          name: "Elvis",
+          foo: ["default::User"],
+        },
+      ],
     );
   });
 
@@ -2941,7 +2989,7 @@ describe("TestEdgeQLSelect", () => {
                         x := .number ++ "!"
                     }), Issue).0.x ++ (SELECT Issue.number));
             `,
-      unorderedSet(["1!1", "2!2", "3!3", "4!4"])
+      unorderedSet(["1!1", "2!2", "3!3", "4!4"]),
     );
   });
 
@@ -2952,9 +3000,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT User {
                     name := 1
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot redefine property 'name' of object type 'default::User' as scalar type 'std::int64'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine property 'name' of object type 'default::User' as scalar type 'std::int64'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_02", () => {
@@ -2964,9 +3016,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT User {
                     name := Issue
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot redefine property 'name' of object type 'default::User' as object type 'default::Issue'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine property 'name' of object type 'default::User' as object type 'default::Issue'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_03", () => {
@@ -2976,9 +3032,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     related_to := 1
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot redefine link 'related_to' of object type 'default::Issue' as scalar type 'std::int64'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine link 'related_to' of object type 'default::Issue' as scalar type 'std::int64'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_04", () => {
@@ -2988,9 +3048,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     related_to := Text
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot redefine link 'related_to' of object type 'default::Issue' as object type 'default::Text'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine link 'related_to' of object type 'default::Issue' as object type 'default::Text'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_05", () => {
@@ -3000,9 +3064,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     priority := Priority
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression for a computed link 'priority' declared as 'single'"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression for a computed link 'priority' declared as 'single'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_06", () => {
@@ -3012,9 +3080,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     multi owner := User
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot redefine the cardinality of link 'owner': it is defined as 'single' in the base object type 'default::Issue'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine the cardinality of link 'owner': it is defined as 'single' in the base object type 'default::Issue'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_07", () => {
@@ -3024,9 +3096,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     single related_to := (SELECT Issue LIMIT 1)
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot redefine the cardinality of link 'related_to': it is defined as 'multi' in the base object type 'default::Issue'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine the cardinality of link 'related_to': it is defined as 'multi' in the base object type 'default::Issue'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_08", () => {
@@ -3036,9 +3112,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     owner := (SELECT User LIMIT 1)
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly an empty set returned by an expression for a computed link 'owner' declared as 'required'"));
+    }).toThrow(
+      new RegExp(
+        "possibly an empty set returned by an expression for a computed link 'owner' declared as 'required'",
+      ),
+    );
   });
 
   it("test_edgeql_select_tvariant_bad_09", () => {
@@ -3048,9 +3128,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     optional status := (SELECT Status FILTER .name = "Open")
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("cannot redefine link 'status' as optional: it is defined as required in the base object type 'default::Issue'"));
+    }).toThrow(
+      new RegExp(
+        "cannot redefine link 'status' as optional: it is defined as required in the base object type 'default::Issue'",
+      ),
+    );
   });
 
   it("test_edgeql_select_instance_01", () => {
@@ -3063,10 +3147,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+      ],
     );
   });
 
@@ -3080,10 +3164,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -3097,10 +3181,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Text.body;
             `,
       [
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-          ]
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+      ],
     );
   });
 
@@ -3115,26 +3199,26 @@ describe("TestEdgeQLSelect", () => {
                 };
             `,
       unorderedBag([
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-              "name": "Regression.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-              "name": "Release EdgeDB",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-              "name": "Repl tweak.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-          ])
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+          name: "Regression.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+          name: "Release EdgeDB",
+        },
+        {
+          body: "Minor lexer tweaks.",
+          name: "Repl tweak.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+          name: "Improve EdgeDB repl output rendering.",
+        },
+      ]),
     );
   });
 
@@ -3150,22 +3234,22 @@ describe("TestEdgeQLSelect", () => {
             };
             `,
       unorderedBag([
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ])
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "Minor lexer tweaks.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -3178,22 +3262,22 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Obj[IS Text].body;
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-            },
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "Minor lexer tweaks.",
+        },
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+      ],
     );
   });
 
@@ -3214,23 +3298,23 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "open": "yes",
-            },
-            {
-              "number": "2",
-              "open": "yes",
-            },
-            {
-              "number": "3",
-              "open": "no",
-            },
-            {
-              "number": "4",
-              "open": "no",
-            },
-          ]
+        {
+          number: "1",
+          open: "yes",
+        },
+        {
+          number: "2",
+          open: "yes",
+        },
+        {
+          number: "3",
+          open: "no",
+        },
+        {
+          number: "4",
+          open: "no",
+        },
+      ],
     );
   });
 
@@ -3252,10 +3336,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -3282,13 +3366,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3311,7 +3395,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER NOT EXISTS Issue.priority
             )));
             `,
-      [2]
+      [2],
     );
   });
 
@@ -3333,16 +3417,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3384,31 +3468,31 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-            {
-              "number": "4",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+        {
+          number: "4",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3451,13 +3535,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -3479,13 +3563,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -3501,13 +3585,13 @@ describe("TestEdgeQLSelect", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -3523,10 +3607,10 @@ describe("TestEdgeQLSelect", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -3542,22 +3626,22 @@ describe("TestEdgeQLSelect", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -3573,22 +3657,22 @@ describe("TestEdgeQLSelect", () => {
                 };
             `,
       [
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-          ]
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+      ],
     );
   });
 
@@ -3599,9 +3683,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT {
                     Issue{number := 'foo'}, Issue
                 }.number;
-                `
+                `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type union that causes a computed property 'number' to mix with other versions of the same property 'number'"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type union that causes a computed property 'number' to mix with other versions of the same property 'number'",
+      ),
+    );
   });
 
   it("test_edgeql_select_setops_15", () => {
@@ -3611,9 +3699,13 @@ describe("TestEdgeQLSelect", () => {
                 WITH
                     I := Issue{number := 'foo'}
                 SELECT {I, Issue}.number;
-                `
+                `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type union that causes a computed property 'number' to mix with other versions of the same property 'number'"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type union that causes a computed property 'number' to mix with other versions of the same property 'number'",
+      ),
+    );
   });
 
   it("test_edgeql_select_setops_16", () => {
@@ -3623,7 +3715,7 @@ describe("TestEdgeQLSelect", () => {
             # Named doesn't have a property number.
             SELECT Issue[IS Named].number;
             `,
-      unorderedSet(["1", "2", "3", "4"])
+      unorderedSet(["1", "2", "3", "4"]),
     );
   });
 
@@ -3634,7 +3726,7 @@ describe("TestEdgeQLSelect", () => {
                 # UNION between Issue and empty set Named should be
                 # duck-typed to be effectively equivalent to Issue[IS Named].
                 SELECT (Issue UNION <Named>{}).number;
-            `
+            `,
       );
     }).toThrow(new RegExp("has no link or property 'number'"));
   });
@@ -3647,7 +3739,12 @@ describe("TestEdgeQLSelect", () => {
             # duck-typed to be effectively equivalent to Issue[IS Named].
             SELECT (Issue UNION <Named>{}).name;
             `,
-      unorderedSet(["Improve EdgeDB repl output rendering.", "Regression.", "Release EdgeDB", "Repl tweak."])
+      unorderedSet([
+        "Improve EdgeDB repl output rendering.",
+        "Regression.",
+        "Release EdgeDB",
+        "Repl tweak.",
+      ]),
     );
   });
 
@@ -3660,37 +3757,51 @@ describe("TestEdgeQLSelect", () => {
             # Issue], which is just an Issue.
             SELECT (Issue UNION <Issue>{}).name;
             `,
-      unorderedSet(["Improve EdgeDB repl output rendering.", "Regression.", "Release EdgeDB", "Repl tweak."])
+      unorderedSet([
+        "Improve EdgeDB repl output rendering.",
+        "Regression.",
+        "Release EdgeDB",
+        "Repl tweak.",
+      ]),
     );
     assertQueryResult(
       h,
       `
             SELECT (Issue UNION <Issue>{}).number;
             `,
-      unorderedSet(["1", "2", "3", "4"])
+      unorderedSet(["1", "2", "3", "4"]),
     );
   });
 
   it("test_edgeql_select_setops_20", () => {
-    let res = queryRows<unknown[]>(h, "\n            SELECT (\n                {(SELECT Issue.time_spent_log.body FILTER false), 'asdf'},\n                Issue,\n            )\n        ");
-    expect((res).length).toEqual(4);
-    for (const row of (res as any)) {
+    let res = queryRows<unknown[]>(
+      h,
+      "\n            SELECT (\n                {(SELECT Issue.time_spent_log.body FILTER false), 'asdf'},\n                Issue,\n            )\n        ",
+    );
+    expect(res.length).toEqual(4);
+    for (const row of res as any) {
       expect(row[1].id).not.toEqual(null);
     }
   });
 
   it("test_edgeql_select_setops_21", () => {
-    let res = queryRows<unknown[]>(h, "\n            SELECT (\n                'oh no' ?? (SELECT Issue.time_spent_log.body FILTER false),\n                Issue,\n            )\n        ");
-    expect((res).length).toEqual(4);
-    for (const row of (res as any)) {
+    let res = queryRows<unknown[]>(
+      h,
+      "\n            SELECT (\n                'oh no' ?? (SELECT Issue.time_spent_log.body FILTER false),\n                Issue,\n            )\n        ",
+    );
+    expect(res.length).toEqual(4);
+    for (const row of res as any) {
       expect(row[1].id).not.toEqual(null);
     }
   });
 
   it("test_edgeql_select_setops_22", () => {
-    let res = queryRows<unknown[]>(h, "\n            SELECT (\n                (SELECT Issue.time_spent_log.body FILTER false)\n                 if false else 'asdf',\n                Issue,\n            )\n        ");
-    expect((res).length).toEqual(4);
-    for (const row of (res as any)) {
+    let res = queryRows<unknown[]>(
+      h,
+      "\n            SELECT (\n                (SELECT Issue.time_spent_log.body FILTER false)\n                 if false else 'asdf',\n                Issue,\n            )\n        ",
+    );
+    expect(res.length).toEqual(4);
+    for (const row of res as any) {
       expect(row[1].id).not.toEqual(null);
     }
   });
@@ -3705,13 +3816,13 @@ describe("TestEdgeQLSelect", () => {
             select foo { title1 };
             `,
       unorderedBag([
-            {
-              "title1": "x",
-            },
-            {
-              "title1": "y",
-            },
-          ])
+        {
+          title1: "x",
+        },
+        {
+          title1: "y",
+        },
+      ]),
     );
     assertQueryResult(
       h,
@@ -3722,20 +3833,20 @@ describe("TestEdgeQLSelect", () => {
             select foo { title1 };
             `,
       unorderedBag([
-            {
-              "title1": "x",
-            },
-            {
-              "title1": "y",
-            },
-          ])
+        {
+          title1: "x",
+        },
+        {
+          title1: "y",
+        },
+      ]),
     );
     assertQueryResult(
       h,
       `
             SELECT (Issue UNION <Issue>{}).number;
             `,
-      unorderedSet(["1", "2", "3", "4"])
+      unorderedSet(["1", "2", "3", "4"]),
     );
   });
 
@@ -3746,7 +3857,7 @@ describe("TestEdgeQLSelect", () => {
             with A := Owned except {LogEntry, Comment}
             select all(A in Issue) and all(Issue in A)
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
     assertQueryResult(
       h,
@@ -3754,7 +3865,7 @@ describe("TestEdgeQLSelect", () => {
             with A := Owned intersect Issue
             select all(A in Owned[is Issue]) and all(Owned[is Issue] in A)
             `,
-      unorderedSet([true])
+      unorderedSet([true]),
     );
   });
 
@@ -3768,10 +3879,10 @@ describe("TestEdgeQLSelect", () => {
             select (B except A) {name};
             `,
       [
-            {
-              "name": "Regression.",
-            },
-          ]
+        {
+          name: "Regression.",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3782,10 +3893,10 @@ describe("TestEdgeQLSelect", () => {
             select (B intersect A) {name};
             `,
       [
-            {
-              "name": "Release EdgeDB",
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+        },
+      ],
     );
   });
 
@@ -3795,14 +3906,14 @@ describe("TestEdgeQLSelect", () => {
       `
             select (Issue except Named);
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select (Issue intersect <Named>{});
             `,
-      []
+      [],
     );
   });
 
@@ -3818,7 +3929,7 @@ describe("TestEdgeQLSelect", () => {
                 {'minor', 'fix', 'lexer'}
             order by _
             `,
-      ["by", "introduced", "lexer", "regression", "tweak.", "tweaks."]
+      ["by", "introduced", "lexer", "regression", "tweak.", "tweaks."],
     );
     assertQueryResult(
       h,
@@ -3830,16 +3941,7 @@ describe("TestEdgeQLSelect", () => {
               str_lower(array_unpack(str_split(A.name, ' ')))
             order by _
             `,
-      [
-            "by",
-            "fix",
-            "introduced",
-            "lexer",
-            "lexer",
-            "minor",
-            "regression",
-            "tweaks.",
-          ]
+      ["by", "fix", "introduced", "lexer", "lexer", "minor", "regression", "tweaks."],
     );
   });
 
@@ -3852,17 +3954,7 @@ describe("TestEdgeQLSelect", () => {
               intersect {1, 2, 2, 3, 3, 3, 7, 7, 7, 7, 7, 7, 7}
             order by _
             `,
-      [
-            2,
-            2,
-            3,
-            7,
-            7,
-            7,
-            7,
-            7,
-            7,
-          ]
+      [2, 2, 3, 7, 7, 7, 7, 7, 7],
     );
     assertQueryResult(
       h,
@@ -3873,16 +3965,7 @@ describe("TestEdgeQLSelect", () => {
               str_lower(array_unpack(str_split(Issue.body, ' ')))
             order by _
             `,
-      [
-            "edgedb",
-            "edgedb",
-            "improve",
-            "output",
-            "regression.",
-            "rendering.",
-            "repl",
-            "repl",
-          ]
+      ["edgedb", "edgedb", "improve", "output", "regression.", "rendering.", "repl", "repl"],
     );
   });
 
@@ -3891,25 +3974,25 @@ describe("TestEdgeQLSelect", () => {
       `
             select std::BaseObject
                 UNION schema::Object UNION schema::TupleElement;
-        `
+        `,
     );
     h.query(
       `
             select std::BaseObject
                 EXCEPT schema::Object EXCEPT schema::TupleElement;
-        `
+        `,
     );
     h.query(
       `
             select std::BaseObject
                 EXCEPT schema::Object INTERSECT schema::TupleElement;
-        `
+        `,
     );
     h.query(
       `
             select std::BaseObject
                 INTERSECT schema::Object INTERSECT schema::TupleElement;
-        `
+        `,
     );
   });
 
@@ -3921,19 +4004,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.priority.name ASC EMPTY LAST THEN Issue.name;
             `,
       [
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-            {
-              "name": "Repl tweak.",
-            },
-            {
-              "name": "Regression.",
-            },
-            {
-              "name": "Release EdgeDB",
-            },
-          ]
+        {
+          name: "Improve EdgeDB repl output rendering.",
+        },
+        {
+          name: "Repl tweak.",
+        },
+        {
+          name: "Regression.",
+        },
+        {
+          name: "Release EdgeDB",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -3942,19 +4025,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.priority.name ASC EMPTY FIRST THEN Issue.name;
             `,
       [
-            {
-              "name": "Regression.",
-            },
-            {
-              "name": "Release EdgeDB",
-            },
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-            },
-            {
-              "name": "Repl tweak.",
-            },
-          ]
+        {
+          name: "Regression.",
+        },
+        {
+          name: "Release EdgeDB",
+        },
+        {
+          name: "Improve EdgeDB repl output rendering.",
+        },
+        {
+          name: "Repl tweak.",
+        },
+      ],
     );
   });
 
@@ -3966,25 +4049,25 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY len(Text.body) DESC;
             `,
       [
-            {
-              "body": "We need to be able to render data in tabular format.",
-            },
-            {
-              "body": "Fix regression introduced by lexer tweak.",
-            },
-            {
-              "body": "Initial public release of EdgeDB.",
-            },
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-            {
-              "body": "Rewriting everything.",
-            },
-            {
-              "body": "Minor lexer tweaks.",
-            },
-          ]
+        {
+          body: "We need to be able to render data in tabular format.",
+        },
+        {
+          body: "Fix regression introduced by lexer tweak.",
+        },
+        {
+          body: "Initial public release of EdgeDB.",
+        },
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+        {
+          body: "Rewriting everything.",
+        },
+        {
+          body: "Minor lexer tweaks.",
+        },
+      ],
     );
   });
 
@@ -3998,13 +4081,13 @@ describe("TestEdgeQLSelect", () => {
             );
             `,
       [
-            {
-              "name": "Yury",
-            },
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -4015,9 +4098,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT
                     User { name }
                 ORDER BY User.<owner[IS Issue].number;
-            `
+            `,
       );
-    }).toThrow(new RegExp("possibly more than one element returned by an expression where only singletons are allowed"));
+    }).toThrow(
+      new RegExp(
+        "possibly more than one element returned by an expression where only singletons are allowed",
+      ),
+    );
   });
 
   it("test_edgeql_select_where_01", () => {
@@ -4030,13 +4117,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4049,10 +4136,10 @@ describe("TestEdgeQLSelect", () => {
             FILTER Issue.owner.<owner[IS Comment].issue = Issue;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -4073,27 +4160,27 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "owner": {
-                "name": "Elvis",
-              },
-              "status": {
-                "name": "Open",
-              },
-              "name": "Release EdgeDB",
-              "number": "1",
-            },
-            {
-              "owner": {
-                "name": "Yury",
-              },
-              "status": {
-                "name": "Open",
-              },
-              "name": "Improve EdgeDB repl output rendering.",
-              "number": "2",
-            },
-          ]
+        {
+          owner: {
+            name: "Elvis",
+          },
+          status: {
+            name: "Open",
+          },
+          name: "Release EdgeDB",
+          number: "1",
+        },
+        {
+          owner: {
+            name: "Yury",
+          },
+          status: {
+            name: "Open",
+          },
+          name: "Improve EdgeDB repl output rendering.",
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -4103,7 +4190,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT std::len(User.name) ORDER BY User.name;
             `,
-      [5, 4]
+      [5, 4],
     );
   });
 
@@ -4113,7 +4200,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT std::sum(<std::int64>Issue.number);
             `,
-      [10]
+      [10],
     );
   });
 
@@ -4122,7 +4209,7 @@ describe("TestEdgeQLSelect", () => {
       `
             CREATE FUNCTION concat1(VARIADIC s: anytype) -> std::str
                 USING SQL FUNCTION 'concat';
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4138,28 +4225,26 @@ describe("TestEdgeQLSelect", () => {
             } FILTER schema::Function.name = 'default::concat1';
             `,
       [
+        {
+          params: [
             {
-              "params": [
-                {
-                  "num": 0,
-                  "kind": "VariadicParam",
-                  "type": {
-                    "name": "array<anytype>",
-                  },
-                },
-              ],
+              num: 0,
+              kind: "VariadicParam",
+              type: {
+                name: "array<anytype>",
+              },
             },
-          ]
+          ],
+        },
+      ],
     );
     expect(() => {
-      h.query(
-        `SELECT concat1('aaa', 'bbb', 2);`
-      );
+      h.query(`SELECT concat1('aaa', 'bbb', 2);`);
     }).toThrow(new RegExp("function .+ does not exist"));
     h.script(
       `
             DROP FUNCTION concat1(VARIADIC s: anytype);
-        `
+        `,
     );
   });
 
@@ -4170,12 +4255,10 @@ describe("TestEdgeQLSelect", () => {
                 SET impl_is_strict := false;
                 USING SQL FUNCTION 'concat';
             }
-        `
+        `,
     );
     expect(() => {
-      h.script(
-        `SELECT concat2(123);`
-      );
+      h.script(`SELECT concat2(123);`);
     }).toThrow(new RegExp("function .+ does not exist"));
   });
 
@@ -4191,7 +4274,7 @@ describe("TestEdgeQLSelect", () => {
                            (sep ?? '::') ++
                            (array_get(s, 1) ?? '')
                 $$;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -4216,68 +4299,62 @@ describe("TestEdgeQLSelect", () => {
             } FILTER schema::Function.name = 'default::concat3';
             `,
       [
+        {
+          params: [
             {
-              "params": [
-                {
-                  "num": 0,
-                  "name": "sep",
-                  "kind": "PositionalParam",
-                  "type": {
-                    "name": "std::str",
-                    "element_type": null,
-                  },
-                  "typemod": "OptionalType",
-                },
-                {
-                  "num": 1,
-                  "name": "s",
-                  "kind": "VariadicParam",
-                  "type": {
-                    "name": "array<std::str>",
-                    "element_type": {
-                      "name": "std::str",
-                    },
-                  },
-                  "typemod": "SingletonType",
-                },
-              ],
-              "return_type": {
-                "name": "std::str",
+              num: 0,
+              name: "sep",
+              kind: "PositionalParam",
+              type: {
+                name: "std::str",
+                element_type: null,
               },
-              "return_typemod": "SingletonType",
+              typemod: "OptionalType",
             },
-          ]
+            {
+              num: 1,
+              name: "s",
+              kind: "VariadicParam",
+              type: {
+                name: "array<std::str>",
+                element_type: {
+                  name: "std::str",
+                },
+              },
+              typemod: "SingletonType",
+            },
+          ],
+          return_type: {
+            name: "std::str",
+          },
+          return_typemod: "SingletonType",
+        },
+      ],
     );
     expect(() => {
-      h.query(
-        `SELECT concat3(123);`
-      );
+      h.query(`SELECT concat3(123);`);
     }).toThrow(new RegExp("function .+ does not exist"));
     expect(() => {
-      h.query(
-        `SELECT concat3("a", 123);`
-      );
+      h.query(`SELECT concat3("a", 123);`);
     }).toThrow(new RegExp("function .+ does not exist"));
     assertQueryResult(
       h,
       `
             SELECT concat3('|', '1', '2');
             `,
-      ["1|2"]
+      ["1|2"],
     );
     h.script(
       `
             DROP FUNCTION concat3(sep: std::str, VARIADIC s: std::str);
-        `
+        `,
     );
   });
 
   it("test_edgeql_select_func_08", () => {
     expect(() => {
-      h.query(
-        `with x := 'a', select sum(x);`
-      );
-    }).toThrow(new RegExp("function \"sum\\(arg0: std::str\\)\" does not exist"));
+      h.query(`with x := 'a', select sum(x);`);
+    }).toThrow(new RegExp('function "sum\\(arg0: std::str\\)" does not exist'));
   });
 
   it("test_edgeql_select_exists_01", () => {
@@ -4294,16 +4371,16 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -4318,10 +4395,10 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -4339,16 +4416,16 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4366,16 +4443,16 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4393,10 +4470,10 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -4410,13 +4487,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -4430,13 +4507,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -4450,10 +4527,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -4467,10 +4544,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -4484,13 +4561,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4504,13 +4581,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4524,16 +4601,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4547,16 +4624,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4570,13 +4647,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4598,10 +4675,10 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -4624,10 +4701,10 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4650,10 +4727,10 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4676,10 +4753,10 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4692,7 +4769,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.status.name = 'Open'
             );
             `,
-      [true]
+      [true],
     );
   });
 
@@ -4706,19 +4783,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "kind": "Open",
-            },
-            {
-              "kind": "High",
-            },
-            {
-              "kind": "Low",
-            },
-            {
-              "kind": "Closed",
-            },
-          ]
+        {
+          kind: "Open",
+        },
+        {
+          kind: "High",
+        },
+        {
+          kind: "Low",
+        },
+        {
+          kind: "Closed",
+        },
+      ],
     );
   });
 
@@ -4729,14 +4806,18 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue{
                     kind := Issue.priority.name ?? 1
                 };
-            `
+            `,
       );
     }).toThrow(new RegExp("operator '\\?\\?' cannot.*'std::str' and 'std::int64'"));
   });
 
   it("test_edgeql_select_coalesce_03", () => {
-    let issues_h = h.query("\n            SELECT Issue{number}\n            FILTER\n                Issue.priority.name = 'High'\n            ORDER BY Issue.number;\n        ");
-    let issues_n = h.query("\n            SELECT Issue{number}\n            FILTER\n                NOT EXISTS Issue.priority\n            ORDER BY Issue.number;\n        ");
+    let issues_h = h.query(
+      "\n            SELECT Issue{number}\n            FILTER\n                Issue.priority.name = 'High'\n            ORDER BY Issue.number;\n        ",
+    );
+    let issues_n = h.query(
+      "\n            SELECT Issue{number}\n            FILTER\n                NOT EXISTS Issue.priority\n            ORDER BY Issue.number;\n        ",
+    );
     assertQueryResult(
       h,
       `
@@ -4746,7 +4827,7 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY
                 Issue.priority.name EMPTY LAST THEN Issue.number;
             `,
-      undefined
+      undefined,
     );
   });
 
@@ -4764,35 +4845,35 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "h1": null,
-              "h2": false,
-              "l1": null,
-              "l2": true,
-            },
-            {
-              "number": "2",
-              "h1": true,
-              "h2": true,
-              "l1": false,
-              "l2": false,
-            },
-            {
-              "number": "3",
-              "h1": false,
-              "h2": false,
-              "l1": true,
-              "l2": true,
-            },
-            {
-              "number": "4",
-              "h1": null,
-              "h2": false,
-              "l1": null,
-              "l2": true,
-            },
-          ]
+        {
+          number: "1",
+          h1: null,
+          h2: false,
+          l1: null,
+          l2: true,
+        },
+        {
+          number: "2",
+          h1: true,
+          h2: true,
+          l1: false,
+          l2: false,
+        },
+        {
+          number: "3",
+          h1: false,
+          h2: false,
+          l1: true,
+          l2: true,
+        },
+        {
+          number: "4",
+          h1: null,
+          h2: false,
+          l1: null,
+          l2: true,
+        },
+      ],
     );
   });
 
@@ -4813,13 +4894,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4842,13 +4923,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4863,13 +4944,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4884,13 +4965,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4900,7 +4981,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT (SELECT T := Text[IS Issue] ORDER BY T.body).number;
             `,
-      ["4", "1", "3", "2"]
+      ["4", "1", "3", "2"],
     );
   });
 
@@ -4914,7 +4995,7 @@ describe("TestEdgeQLSelect", () => {
                 ORDER BY T.name
             ).name;
             `,
-      ["Release EdgeDB"]
+      ["Release EdgeDB"],
     );
   });
 
@@ -4929,7 +5010,7 @@ describe("TestEdgeQLSelect", () => {
                 EXISTS Issue.<issue             # has Comment [1]
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -4944,7 +5025,7 @@ describe("TestEdgeQLSelect", () => {
                 EXISTS Issue.<issue             # has Comment [1]
             ORDER BY Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -4960,10 +5041,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4979,10 +5060,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -4998,10 +5079,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -5017,10 +5098,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -5036,13 +5117,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5058,13 +5139,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5079,32 +5160,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": false,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": true,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": false,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: false,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: true,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: false,
+        },
+      ],
     );
   });
 
@@ -5119,32 +5200,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": true,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": false,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": true,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: true,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: false,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: true,
+        },
+      ],
     );
   });
 
@@ -5161,32 +5242,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, false],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [true],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, false],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [true],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
   });
 
@@ -5204,38 +5285,42 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [true, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [false],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [true, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [false],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_or_01", () => {
-    let issues_h = h.query("\n            SELECT Issue{number}\n            FILTER\n                Issue.priority.name = 'High'\n            ORDER BY Issue.number;\n        ");
-    let issues_l = h.query("\n            SELECT Issue{number}\n            FILTER\n                Issue.priority.name = 'Low'\n            ORDER BY Issue.number;\n        ");
+    let issues_h = h.query(
+      "\n            SELECT Issue{number}\n            FILTER\n                Issue.priority.name = 'High'\n            ORDER BY Issue.number;\n        ",
+    );
+    let issues_l = h.query(
+      "\n            SELECT Issue{number}\n            FILTER\n                Issue.priority.name = 'Low'\n            ORDER BY Issue.number;\n        ",
+    );
     assertQueryResult(
       h,
       `
@@ -5246,7 +5331,7 @@ describe("TestEdgeQLSelect", () => {
                 Issue.priority.name = 'Low'
             ORDER BY Issue.priority.name THEN Issue.number;
             `,
-      undefined
+      undefined,
     );
   });
 
@@ -5262,13 +5347,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5283,13 +5368,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5302,13 +5387,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5324,16 +5409,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5347,16 +5432,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5372,16 +5457,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5397,16 +5482,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5422,19 +5507,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5450,19 +5535,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5478,13 +5563,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5500,13 +5585,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5522,16 +5607,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5547,16 +5632,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5576,16 +5661,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -5613,13 +5698,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5634,32 +5719,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": true,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": true,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": false,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: true,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: true,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: false,
+        },
+      ],
     );
   });
 
@@ -5674,32 +5759,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": false,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": false,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": true,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: false,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: false,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: true,
+        },
+      ],
     );
   });
 
@@ -5716,32 +5801,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [true],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [true, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [true],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [true, true],
+        },
+      ],
     );
   });
 
@@ -5759,32 +5844,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [false],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, false],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [false],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, false],
+        },
+      ],
     );
   });
 
@@ -5797,10 +5882,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5810,10 +5895,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5826,10 +5911,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5839,10 +5924,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5860,13 +5945,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -5881,32 +5966,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": false,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": false,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": true,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: false,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: false,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: true,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5918,32 +6003,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": true,
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": true,
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": false,
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: true,
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: true,
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: false,
+        },
+      ],
     );
   });
 
@@ -5958,32 +6043,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [false],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [false],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -5995,32 +6080,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "tags": unorderedSet(["black", "red"]),
-              "x": [false, true],
-            },
-            {
-              "name": "hexagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "pentagon",
-              "tags": [],
-              "x": [],
-            },
-            {
-              "name": "square",
-              "tags": unorderedSet(["red"]),
-              "x": [true],
-            },
-            {
-              "name": "triangle",
-              "tags": unorderedSet(["green", "red"]),
-              "x": [false, true],
-            },
-          ]
+        {
+          name: "circle",
+          tags: unorderedSet(["black", "red"]),
+          x: [false, true],
+        },
+        {
+          name: "hexagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "pentagon",
+          tags: [],
+          x: [],
+        },
+        {
+          name: "square",
+          tags: unorderedSet(["red"]),
+          x: [true],
+        },
+        {
+          name: "triangle",
+          tags: unorderedSet(["green", "red"]),
+          x: [false, true],
+        },
+      ],
     );
   });
 
@@ -6034,7 +6119,7 @@ describe("TestEdgeQLSelect", () => {
             # empty set is empty.
             SELECT Issue.number = <str>{};
             `,
-      []
+      [],
     );
   });
 
@@ -6045,28 +6130,28 @@ describe("TestEdgeQLSelect", () => {
             # Test short-circuiting operations with empty
             SELECT Issue.number = '1' OR <bool>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             SELECT Issue.number = 'X' OR <bool>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             SELECT Issue.number = '1' AND <bool>{};
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             SELECT Issue.number = 'X' AND <bool>{};
             `,
-      []
+      [],
     );
   });
 
@@ -6077,28 +6162,28 @@ describe("TestEdgeQLSelect", () => {
             # Test short-circuiting operations with empty
             SELECT count(Issue.number = '1' OR <bool>{});
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
       `
             SELECT count(Issue.number = 'X' OR <bool>{});
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
       `
             SELECT count(Issue.number = '1' AND <bool>{});
             `,
-      [0]
+      [0],
     );
     assertQueryResult(
       h,
       `
             SELECT count(Issue.number = 'X' AND <bool>{});
             `,
-      [0]
+      [0],
     );
   });
 
@@ -6113,23 +6198,23 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY .number;
             `,
       [
-            {
-              "number": "1",
-              "time_estimate": null,
-            },
-            {
-              "number": "2",
-              "time_estimate": null,
-            },
-            {
-              "number": "3",
-              "time_estimate": null,
-            },
-            {
-              "number": "4",
-              "time_estimate": null,
-            },
-          ]
+        {
+          number: "1",
+          time_estimate: null,
+        },
+        {
+          number: "2",
+          time_estimate: null,
+        },
+        {
+          number: "3",
+          time_estimate: null,
+        },
+        {
+          number: "4",
+          time_estimate: null,
+        },
+      ],
     );
   });
 
@@ -6144,23 +6229,23 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY .number;
             `,
       [
-            {
-              "number": "1",
-              "time_estimate": null,
-            },
-            {
-              "number": "2",
-              "time_estimate": null,
-            },
-            {
-              "number": "3",
-              "time_estimate": null,
-            },
-            {
-              "number": "4",
-              "time_estimate": null,
-            },
-          ]
+        {
+          number: "1",
+          time_estimate: null,
+        },
+        {
+          number: "2",
+          time_estimate: null,
+        },
+        {
+          number: "3",
+          time_estimate: null,
+        },
+        {
+          number: "4",
+          time_estimate: null,
+        },
+      ],
     );
   });
 
@@ -6170,7 +6255,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT <Issue>{}
             `,
-      []
+      [],
     );
   });
 
@@ -6180,7 +6265,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT NOT EXISTS (<Issue>{})
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6190,7 +6275,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT ((SELECT Issue FILTER false) ?= <Issue>{})
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6200,7 +6285,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT count(<Issue>{}) = 0
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6212,7 +6297,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT Status.name ++ Priority.name
             ORDER BY Status.name THEN Priority.name;
             `,
-      ["ClosedHigh", "ClosedLow", "OpenHigh", "OpenLow"]
+      ["ClosedHigh", "ClosedLow", "OpenHigh", "OpenLow"],
     );
   });
 
@@ -6224,7 +6309,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT Issue.status.name ++ Issue.priority.name
             ORDER BY Issue.number;
             `,
-      ["OpenHigh", "ClosedLow"]
+      ["OpenHigh", "ClosedLow"],
     );
   });
 
@@ -6236,16 +6321,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT User.name ++ Issue.number
             ORDER BY User.name THEN Issue.number;
             `,
-      [
-            "Elvis1",
-            "Elvis2",
-            "Elvis3",
-            "Elvis4",
-            "Yury1",
-            "Yury2",
-            "Yury3",
-            "Yury4",
-          ]
+      ["Elvis1", "Elvis2", "Elvis3", "Elvis4", "Yury1", "Yury2", "Yury3", "Yury4"],
     );
   });
 
@@ -6257,7 +6333,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT User.name ++ User.<owner[IS Issue].number
             ORDER BY User.name THEN User.<owner[IS Issue].number;
             `,
-      ["Elvis1", "Elvis4", "Yury2", "Yury3"]
+      ["Elvis1", "Elvis4", "Yury2", "Yury3"],
     );
   });
 
@@ -6270,10 +6346,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _;
             `,
       [
-            ["Elvis", "Yury"],
-            ["Yury", "Elvis"],
-            ["Yury", "Elvis"],
-          ]
+        ["Elvis", "Yury"],
+        ["Yury", "Elvis"],
+        ["Yury", "Elvis"],
+      ],
     );
   });
 
@@ -6285,7 +6361,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := Issue.owner.name ++ Issue.watchers.name
             ORDER BY _;
             `,
-      ["ElvisYury", "YuryElvis", "YuryElvis"]
+      ["ElvisYury", "YuryElvis", "YuryElvis"],
     );
   });
 
@@ -6295,7 +6371,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT _ := count(Issue.owner.name ++ Issue.watchers.name);
             `,
-      [3]
+      [3],
     );
     assertQueryResult(
       h,
@@ -6303,7 +6379,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := count(DISTINCT (
                 Issue.owner.name ++ Issue.watchers.name));
             `,
-      [2]
+      [2],
     );
   });
 
@@ -6314,7 +6390,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := Issue.owner.name ++ <str>count(Issue.watchers.name)
             ORDER BY _;
             `,
-      ["Elvis0", "Elvis1", "Yury1", "Yury1"]
+      ["Elvis0", "Elvis1", "Yury1", "Yury1"],
     );
   });
 
@@ -6325,7 +6401,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := count(
                 Issue.owner.name ++ <str>count(Issue.watchers.name));
             `,
-      [4]
+      [4],
     );
   });
 
@@ -6341,7 +6417,7 @@ describe("TestEdgeQLSelect", () => {
                 })
             SELECT count(x.name ++ <str>x.w);
             `,
-      [4]
+      [4],
     );
   });
 
@@ -6355,7 +6431,7 @@ describe("TestEdgeQLSelect", () => {
                 <str>Issue.time_estimate ?? '0'
             );
             `,
-      [4]
+      [4],
     );
   });
 
@@ -6369,7 +6445,7 @@ describe("TestEdgeQLSelect", () => {
                 <str>Issue.time_estimate
             );
             `,
-      [1]
+      [1],
     );
   });
 
@@ -6379,7 +6455,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT count(count(Issue.watchers));
             `,
-      [1]
+      [1],
     );
     assertQueryResult(
       h,
@@ -6388,7 +6464,7 @@ describe("TestEdgeQLSelect", () => {
                 (Issue, count(Issue.watchers))
             );
             `,
-      [4]
+      [4],
     );
   });
 
@@ -6403,23 +6479,23 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number ++ Issue2.number;
             `,
       [
-            "11",
-            "12",
-            "13",
-            "14",
-            "21",
-            "22",
-            "23",
-            "24",
-            "31",
-            "32",
-            "33",
-            "34",
-            "41",
-            "42",
-            "43",
-            "44",
-          ]
+        "11",
+        "12",
+        "13",
+        "14",
+        "21",
+        "22",
+        "23",
+        "24",
+        "31",
+        "32",
+        "33",
+        "34",
+        "41",
+        "42",
+        "43",
+        "44",
+      ],
     );
   });
 
@@ -6438,7 +6514,7 @@ describe("TestEdgeQLSelect", () => {
                     SELECT Issue FILTER Issue.number IN {'1', '6'}
                 );
             `,
-      []
+      [],
     );
   });
 
@@ -6458,7 +6534,7 @@ describe("TestEdgeQLSelect", () => {
                     (SELECT sub FILTER sub = Issue)
                 );
             `,
-      []
+      [],
     );
   });
 
@@ -6483,16 +6559,16 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -6517,7 +6593,7 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY
                 Issue.number;
             `,
-      []
+      [],
     );
   });
 
@@ -6540,13 +6616,13 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -6572,13 +6648,13 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -6605,13 +6681,13 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -6621,7 +6697,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT Issue.number ++ (SELECT Issue.number);
             `,
-      unorderedSet(["11", "22", "33", "44"])
+      unorderedSet(["11", "22", "33", "44"]),
     );
   });
 
@@ -6635,23 +6711,23 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number ++ sub;
             `,
       unorderedSet([
-            "11",
-            "12",
-            "13",
-            "14",
-            "21",
-            "22",
-            "23",
-            "24",
-            "31",
-            "32",
-            "33",
-            "34",
-            "41",
-            "42",
-            "43",
-            "44",
-          ])
+        "11",
+        "12",
+        "13",
+        "14",
+        "21",
+        "22",
+        "23",
+        "24",
+        "31",
+        "32",
+        "33",
+        "34",
+        "41",
+        "42",
+        "43",
+        "44",
+      ]),
     );
   });
 
@@ -6665,31 +6741,31 @@ describe("TestEdgeQLSelect", () => {
             } ORDER BY len(Text.body);
             `,
       [
-            {
-              "number": "3",
-              "body_length": 19,
-            },
-            {
-              "number": null,
-              "body_length": 21,
-            },
-            {
-              "number": null,
-              "body_length": 28,
-            },
-            {
-              "number": "1",
-              "body_length": 33,
-            },
-            {
-              "number": "4",
-              "body_length": 41,
-            },
-            {
-              "number": "2",
-              "body_length": 52,
-            },
-          ]
+        {
+          number: "3",
+          body_length: 19,
+        },
+        {
+          number: null,
+          body_length: 21,
+        },
+        {
+          number: null,
+          body_length: 28,
+        },
+        {
+          number: "1",
+          body_length: 33,
+        },
+        {
+          number: "4",
+          body_length: 41,
+        },
+        {
+          number: "2",
+          body_length: 52,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -6710,13 +6786,13 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -6740,15 +6816,15 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "body_length": 33,
-            },
-            {
-              "number": "3",
-              "body_length": 19,
-            },
-          ]
+        {
+          number: "1",
+          body_length: 33,
+        },
+        {
+          number: "3",
+          body_length: 19,
+        },
+      ],
     );
   });
 
@@ -6765,10 +6841,10 @@ describe("TestEdgeQLSelect", () => {
                 );
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -6787,10 +6863,10 @@ describe("TestEdgeQLSelect", () => {
                 ).owner;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -6823,13 +6899,13 @@ describe("TestEdgeQLSelect", () => {
                 Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-            {
-              "number": "3",
-            },
-          ]
+        {
+          number: "2",
+        },
+        {
+          number: "3",
+        },
+      ],
     );
   });
 
@@ -6847,10 +6923,10 @@ describe("TestEdgeQLSelect", () => {
                 );
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+      ],
     );
   });
 
@@ -6872,10 +6948,10 @@ describe("TestEdgeQLSelect", () => {
                 );
             `,
       [
-            {
-              "body": "EdgeDB needs to happen soon.",
-            },
-          ]
+        {
+          body: "EdgeDB needs to happen soon.",
+        },
+      ],
     );
   });
 
@@ -6889,7 +6965,7 @@ describe("TestEdgeQLSelect", () => {
                 U2 := DETACHED User
             SELECT U2.name ++ U2.name;
             `,
-      unorderedSet(["ElvisElvis", "YuryYury"])
+      unorderedSet(["ElvisElvis", "YuryYury"]),
     );
     assertQueryResult(
       h,
@@ -6897,7 +6973,7 @@ describe("TestEdgeQLSelect", () => {
             # DETACHED is reused on both sides of '+' directly
             SELECT (DETACHED User).name ++ (DETACHED User).name;
             `,
-      unorderedSet(["ElvisElvis", "ElvisYury", "YuryElvis", "YuryYury"])
+      unorderedSet(["ElvisElvis", "ElvisYury", "YuryElvis", "YuryYury"]),
     );
   });
 
@@ -6913,7 +6989,7 @@ describe("TestEdgeQLSelect", () => {
                     } FILTER .name = 'Elvis'
                 ).num_issues;
             `,
-      [2]
+      [2],
     );
   });
 
@@ -6931,7 +7007,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 U.num_issues;
             `,
-      [2]
+      [2],
     );
   });
 
@@ -6951,13 +7027,16 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 U.friend.name;
             `,
-      ["Yury"]
+      ["Yury"],
     );
   });
 
   it("test_edgeql_select_alias_indirection_04", () => {
-    let result = queryRows(h, "\n            # Reference a constant expression in an alias.\n            WITH U := (\n                    SELECT User {\n                        issues := (\n                            SELECT Issue {\n                                foo := 1 + random()\n                            } FILTER Issue.owner = User\n                        )\n                    } FILTER .name = 'Elvis'\n                )\n            SELECT\n                U.issues.foo;\n            ");
-    expect((result).length).toEqual(2);
+    let result = queryRows(
+      h,
+      "\n            # Reference a constant expression in an alias.\n            WITH U := (\n                    SELECT User {\n                        issues := (\n                            SELECT Issue {\n                                foo := 1 + random()\n                            } FILTER Issue.owner = User\n                        )\n                    } FILTER .name = 'Elvis'\n                )\n            SELECT\n                U.issues.foo;\n            ",
+    );
+    expect(result.length).toEqual(2);
   });
 
   it("test_edgeql_select_alias_indirection_05", () => {
@@ -6974,7 +7053,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 I.owner = U;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -6994,7 +7073,7 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY
                 I.number;
             `,
-      ["1", "4"]
+      ["1", "4"],
     );
   });
 
@@ -7016,7 +7095,7 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY
                 I.number;
             `,
-      []
+      [],
     );
   });
 
@@ -7048,12 +7127,12 @@ describe("TestEdgeQLSelect", () => {
                  };
             `,
       [
-            {
-              "my_issues": ["1", "4"],
-              "friends_foos": "Yury!",
-              "friends_issues": ["2", "3"],
-            },
-          ]
+        {
+          my_issues: ["1", "4"],
+          friends_foos: "Yury!",
+          friends_issues: ["2", "3"],
+        },
+      ],
     );
   });
 
@@ -7082,14 +7161,14 @@ describe("TestEdgeQLSelect", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text_shape": {
-                "body": "Minor lexer tweaks.",
-                "foo": "Minor lexer tweaks.!",
-              },
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text_shape: {
+            body: "Minor lexer tweaks.",
+            foo: "Minor lexer tweaks.!",
+          },
+        },
+      ],
     );
   });
 
@@ -7115,11 +7194,11 @@ describe("TestEdgeQLSelect", () => {
             FILTER User.name = 'Elvis';
             `,
       [
-            {
-              "name": "Elvis",
-              "shortest_text_foo": "Minor lexer tweaks.!",
-            },
-          ]
+        {
+          name: "Elvis",
+          shortest_text_foo: "Minor lexer tweaks.!",
+        },
+      ],
     );
   });
 
@@ -7159,33 +7238,33 @@ describe("TestEdgeQLSelect", () => {
                 Developers.name;
             `,
       [
+        {
+          name: "Elvis",
+          open_issues: [
             {
-              "name": "Elvis",
-              "open_issues": [
-                {
-                  "number": "1",
-                  "spent_time": 50000,
-                },
-                {
-                  "number": "4",
-                  "spent_time": 0,
-                },
-              ],
+              number: "1",
+              spent_time: 50000,
             },
             {
-              "name": "Yury",
-              "open_issues": [
-                {
-                  "number": "2",
-                  "spent_time": 0,
-                },
-                {
-                  "number": "3",
-                  "spent_time": 0,
-                },
-              ],
+              number: "4",
+              spent_time: 0,
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          open_issues: [
+            {
+              number: "2",
+              spent_time: 0,
+            },
+            {
+              number: "3",
+              spent_time: 0,
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -7199,7 +7278,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[2];
             `,
-      ["l"]
+      ["l"],
     );
     assertQueryResult(
       h,
@@ -7209,7 +7288,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[-2];
             `,
-      ["D"]
+      ["D"],
     );
     assertQueryResult(
       h,
@@ -7219,7 +7298,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[2:4];
             `,
-      ["le"]
+      ["le"],
     );
     assertQueryResult(
       h,
@@ -7229,7 +7308,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[2:];
             `,
-      ["lease EdgeDB"]
+      ["lease EdgeDB"],
     );
     assertQueryResult(
       h,
@@ -7239,7 +7318,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[:2];
             `,
-      ["Re"]
+      ["Re"],
     );
     assertQueryResult(
       h,
@@ -7249,7 +7328,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[2:-1];
             `,
-      ["lease EdgeD"]
+      ["lease EdgeD"],
     );
     assertQueryResult(
       h,
@@ -7259,7 +7338,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[-2:];
             `,
-      ["DB"]
+      ["DB"],
     );
     assertQueryResult(
       h,
@@ -7269,7 +7348,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).name[:-2];
             `,
-      ["Release Edge"]
+      ["Release Edge"],
     );
   });
 
@@ -7282,7 +7361,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name;
             `,
-      ["default::Issue"]
+      ["default::Issue"],
     );
     assertQueryResult(
       h,
@@ -7292,7 +7371,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[2];
             `,
-      ["f"]
+      ["f"],
     );
     assertQueryResult(
       h,
@@ -7302,7 +7381,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[-2];
             `,
-      ["u"]
+      ["u"],
     );
     assertQueryResult(
       h,
@@ -7312,7 +7391,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[2:4];
             `,
-      ["fa"]
+      ["fa"],
     );
     assertQueryResult(
       h,
@@ -7322,7 +7401,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[2:];
             `,
-      ["fault::Issue"]
+      ["fault::Issue"],
     );
     assertQueryResult(
       h,
@@ -7332,7 +7411,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[:2];
             `,
-      ["de"]
+      ["de"],
     );
     assertQueryResult(
       h,
@@ -7342,7 +7421,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[2:-1];
             `,
-      ["fault::Issu"]
+      ["fault::Issu"],
     );
     assertQueryResult(
       h,
@@ -7352,7 +7431,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[-2:];
             `,
-      ["ue"]
+      ["ue"],
     );
     assertQueryResult(
       h,
@@ -7362,7 +7441,7 @@ describe("TestEdgeQLSelect", () => {
                 FILTER Issue.number = '1'
             ).__type__.name[:-2];
             `,
-      ["default::Iss"]
+      ["default::Iss"],
     );
   });
 
@@ -7380,14 +7459,14 @@ describe("TestEdgeQLSelect", () => {
             FILTER Issue.number = '1';
             `,
       [
-            {
-              "name": "Release EdgeDB",
-              "type_name": "default::Issue",
-              "a": "l",
-              "b": "lease EdgeD",
-              "c": "fault::Issu",
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+          type_name: "default::Issue",
+          a: "l",
+          b: "lease EdgeD",
+          c: "fault::Issu",
+        },
+      ],
     );
   });
 
@@ -7397,305 +7476,185 @@ describe("TestEdgeQLSelect", () => {
       `
             select [1,2,3,4,5][1:];
             `,
-      [
-            [2, 3, 4, 5],
-          ]
+      [[2, 3, 4, 5]],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3,4,5][:3];
             `,
-      [
-            [1, 2, 3],
-          ]
+      [[1, 2, 3]],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][1:<int64>{}];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][1:<optional int64>$0];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][<optional int64>$0:2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
             select [1,2,3][<optional int64>$0:<optional int64>$1];
             `,
-      []
+      [],
     );
-    assertQueryResult(h, "\n                select to_json('[true, 3, 4, null]')[1:];\n                ", ["[3, 4, null]"]);
-    assertQueryResult(h, "\n                select to_json('[true, 3, 4, null]')[:2];\n                ", ["[true, 3]"]);
+    assertQueryResult(
+      h,
+      "\n                select to_json('[true, 3, 4, null]')[1:];\n                ",
+      ["[3, 4, null]"],
+    );
+    assertQueryResult(
+      h,
+      "\n                select to_json('[true, 3, 4, null]')[:2];\n                ",
+      ["[true, 3]"],
+    );
     assertQueryResult(
       h,
       `
             select (<optional json>$0)[2:];
             `,
-      []
+      [],
     );
-    assertQueryResult(h, "\n                select to_json('\"hello world\"')[2:];\n                ", ["\"llo world\""]);
-    assertQueryResult(h, "\n                select to_json('\"hello world\"')[:4];\n                ", ["\"hell\""]);
+    assertQueryResult(
+      h,
+      "\n                select to_json('\"hello world\"')[2:];\n                ",
+      ['"llo world"'],
+    );
+    assertQueryResult(
+      h,
+      "\n                select to_json('\"hello world\"')[:4];\n                ",
+      ['"hell"'],
+    );
     assertQueryResult(
       h,
       `
             select (<array<str>>[])[0:];
             `,
-      [
-            [],
-          ]
+      [[]],
     );
-    assertQueryResult(
-      h,
-      `select to_json('[]')[0:];`,
+    assertQueryResult(h, `select to_json('[]')[0:];`, [[]]);
+    assertQueryResult(h, `select [(1,'foo'), (2,'bar'), (3,'baz')][1:];`, [
       [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [(1,'foo'), (2,'bar'), (3,'baz')][1:];`,
+        [2, "bar"],
+        [3, "baz"],
+      ],
+    ]);
+    assertQueryResult(h, `select [(1,'foo'), (2,'bar'), (3,'baz')][:2];`, [
       [
-            [
-              [2, "bar"],
-              [3, "baz"],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [(1,'foo'), (2,'bar'), (3,'baz')][:2];`,
-      [
-            [
-              [1, "foo"],
-              [2, "bar"],
-            ],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [(1,'foo'), (2,'bar'), (3,'baz')][1:2];`,
-      [
-            [
-              [2, "bar"],
-            ],
-          ]
-    );
+        [1, "foo"],
+        [2, "bar"],
+      ],
+    ]);
+    assertQueryResult(h, `select [(1,'foo'), (2,'bar'), (3,'baz')][1:2];`, [[[2, "bar"]]]);
     assertQueryResult(
       h,
       `
                 select [(1,'foo'), (2,'bar'), (3,'baz')][<optional int32>$0:];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional array<int32>>$0)[2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional str>$0)[2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select to_json(<optional str>$0)[2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional array<int32>>$0)[1:2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select (<optional str>$0)[1:2];
             `,
-      []
+      [],
     );
     assertQueryResult(
       h,
       `
                 select to_json(<optional str>$0)[1:2];
             `,
-      []
+      [],
     );
   });
 
   it("test_edgeql_select_bigint_index_01", () => {
     expect(() => {
-      h.query(
-        `select [1, 2, 3][1099511627776];`
-      );
+      h.query(`select [1, 2, 3][1099511627776];`);
     }).toThrow(new RegExp("array index 1099511627776 is out of bounds"));
     expect(() => {
-      h.query(
-        `select [1, 2, 3][-1099511627776];`
-      );
+      h.query(`select [1, 2, 3][-1099511627776];`);
     }).toThrow(new RegExp("array index -1099511627776 is out of bounds"));
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][0:1099511627776];`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][0:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][-1099511627776:1099511627776];`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][-1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select [1, 2, 3][1099511627776:1099511627776];`,
-      [
-            [],
-          ]
-    );
+    assertQueryResult(h, `select [1, 2, 3][0:1099511627776];`, [[1, 2, 3]]);
+    assertQueryResult(h, `select [1, 2, 3][0:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select [1, 2, 3][-1099511627776:1099511627776];`, [[1, 2, 3]]);
+    assertQueryResult(h, `select [1, 2, 3][1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select [1, 2, 3][-1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select [1, 2, 3][1099511627776:1099511627776];`, [[]]);
   });
 
   it("test_edgeql_select_bigint_index_02", () => {
     expect(() => {
-      h.query(
-        `select "Hello world!"[1099511627776];`
-      );
+      h.query(`select "Hello world!"[1099511627776];`);
     }).toThrow(new RegExp("string index 1099511627776 is out of bounds"));
     expect(() => {
-      h.query(
-        `select "Hello world!"[-1099511627776];`
-      );
+      h.query(`select "Hello world!"[-1099511627776];`);
     }).toThrow(new RegExp("string index -1099511627776 is out of bounds"));
-    assertQueryResult(
-      h,
-      `select "Hello world!"[6:1099511627776];`,
-      ["world!"]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[6:-1099511627776];`,
-      [""]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[-1099511627776:1099511627776];`,
-      ["Hello world!"]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[1099511627776:-1099511627776];`,
-      [""]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[-1099511627776:-1099511627776];`,
-      [""]
-    );
-    assertQueryResult(
-      h,
-      `select "Hello world!"[1099511627776:1099511627776];`,
-      [""]
-    );
+    assertQueryResult(h, `select "Hello world!"[6:1099511627776];`, ["world!"]);
+    assertQueryResult(h, `select "Hello world!"[6:-1099511627776];`, [""]);
+    assertQueryResult(h, `select "Hello world!"[-1099511627776:1099511627776];`, ["Hello world!"]);
+    assertQueryResult(h, `select "Hello world!"[1099511627776:-1099511627776];`, [""]);
+    assertQueryResult(h, `select "Hello world!"[-1099511627776:-1099511627776];`, [""]);
+    assertQueryResult(h, `select "Hello world!"[1099511627776:1099511627776];`, [""]);
   });
 
   it("test_edgeql_select_bigint_index_03", () => {
     expect(() => {
-      h.query(
-        `select to_json("[1, 2, 3]")[1099511627776];`
-      );
+      h.query(`select to_json("[1, 2, 3]")[1099511627776];`);
     }).toThrow(new RegExp("JSON index 1099511627776 is out of bounds"));
     expect(() => {
-      h.query(
-        `select to_json("[1, 2, 3]")[-1099511627776];`
-      );
+      h.query(`select to_json("[1, 2, 3]")[-1099511627776];`);
     }).toThrow(new RegExp("JSON index -1099511627776 is out of bounds"));
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1:1099511627776];`,
-      [
-            [2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[-1099511627776:1099511627776];`,
-      [
-            [1, 2, 3],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[-1099511627776:-1099511627776];`,
-      [
-            [],
-          ]
-    );
-    assertQueryResult(
-      h,
-      `select to_json("[1, 2, 3]")[1099511627776:1099511627776];`,
-      [
-            [],
-          ]
-    );
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1:1099511627776];`, [[2, 3]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[-1099511627776:1099511627776];`, [[1, 2, 3]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[-1099511627776:-1099511627776];`, [[]]);
+    assertQueryResult(h, `select to_json("[1, 2, 3]")[1099511627776:1099511627776];`, [[]]);
   });
 
   it("test_edgeql_select_multi_property_shape_01", () => {
@@ -7704,7 +7663,7 @@ describe("TestEdgeQLSelect", () => {
       `
             select (BooleanTest { tags }).tags
             `,
-      unorderedBag(["red", "black", "red", "green", "red"])
+      unorderedBag(["red", "black", "red", "green", "red"]),
     );
   });
 
@@ -7717,9 +7676,9 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Status.name;
             `,
       [
-            ["Closed", 2],
-            ["Open", 2],
-          ]
+        ["Closed", 2],
+        ["Open", 2],
+      ],
     );
   });
 
@@ -7742,23 +7701,11 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY _.0 THEN _.1;
             `,
       [
-            [
-              "Elvis",
-              ["Closed", 1],
-            ],
-            [
-              "Elvis",
-              ["Open", 1],
-            ],
-            [
-              "Yury",
-              ["Closed", 1],
-            ],
-            [
-              "Yury",
-              ["Open", 1],
-            ],
-          ]
+        ["Elvis", ["Closed", 1]],
+        ["Elvis", ["Open", 1]],
+        ["Yury", ["Closed", 1]],
+        ["Yury", ["Open", 1]],
+      ],
     );
   });
 
@@ -7778,13 +7725,13 @@ describe("TestEdgeQLSelect", () => {
                 User.name;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -7802,13 +7749,13 @@ describe("TestEdgeQLSelect", () => {
                 User.name;
             `,
       [
-            {
-              "t": [
-                [1, 2],
-                [3, 4],
-              ],
-            },
-          ]
+        {
+          t: [
+            [1, 2],
+            [3, 4],
+          ],
+        },
+      ],
     );
   });
 
@@ -7822,11 +7769,11 @@ describe("TestEdgeQLSelect", () => {
                 );
             `,
       [
-            {
-              "statuses": 2,
-              "issues": 4,
-            },
-          ]
+        {
+          statuses: 2,
+          issues: 4,
+        },
+      ],
     );
   });
 
@@ -7842,7 +7789,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT
                 counts.statuses + counts.issues;
             `,
-      [6]
+      [6],
     );
   });
 
@@ -7863,7 +7810,7 @@ describe("TestEdgeQLSelect", () => {
                     AND Issue.status = criteria.status
             ).number;
             `,
-      ["2"]
+      ["2"],
     );
   });
 
@@ -7877,12 +7824,12 @@ describe("TestEdgeQLSelect", () => {
                 );
             `,
       [
-            {
-              "user": {
-                "name": "Yury",
-              },
-            },
-          ]
+        {
+          user: {
+            name: "Yury",
+          },
+        },
+      ],
     );
   });
 
@@ -7895,7 +7842,7 @@ describe("TestEdgeQLSelect", () => {
                     user := (SELECT User{name} FILTER User.name = 'Yury')
                 ).user.name;
             `,
-      ["Yury"]
+      ["Yury"],
     );
   });
 
@@ -7911,7 +7858,7 @@ describe("TestEdgeQLSelect", () => {
                     =
                 (user := (SELECT U2{name} FILTER U2.name = 'Yury'));
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -7925,7 +7872,7 @@ describe("TestEdgeQLSelect", () => {
                 (user := (SELECT U2{name} FILTER U2.name = 'Elvis'));
 
             `,
-      [false]
+      [false],
     );
   });
 
@@ -7936,7 +7883,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT User.todo@rank + <int64>User.todo.number
             ORDER BY User.todo.number;
             `,
-      [43, 44, 45, 46]
+      [43, 44, 45, 46],
     );
   });
 
@@ -7947,7 +7894,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT Issue.<todo[IS User]@rank + <int64>Issue.number
             ORDER BY Issue.number;
             `,
-      [43, 44, 45, 46]
+      [43, 44, 45, 46],
     );
   });
 
@@ -7965,33 +7912,33 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY User.name;
             `,
       [
+        {
+          name: "Elvis",
+          todo: [
             {
-              "name": "Elvis",
-              "todo": [
-                {
-                  "number": "1",
-                  "@rank": 42,
-                },
-                {
-                  "number": "2",
-                  "@rank": 42,
-                },
-              ],
+              number: "1",
+              "@rank": 42,
             },
             {
-              "name": "Yury",
-              "todo": [
-                {
-                  "number": "3",
-                  "@rank": 42,
-                },
-                {
-                  "number": "4",
-                  "@rank": 42,
-                },
-              ],
+              number: "2",
+              "@rank": 42,
             },
-          ]
+          ],
+        },
+        {
+          name: "Yury",
+          todo: [
+            {
+              number: "3",
+              "@rank": 42,
+            },
+            {
+              number: "4",
+              "@rank": 42,
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -8001,9 +7948,11 @@ describe("TestEdgeQLSelect", () => {
         `
                 SELECT
                     Issue { since := (SELECT .owner)@since }
-                `
+                `,
       );
-    }).toThrow(new RegExp("unexpected reference to link property 'since' outside of a path expression"));
+    }).toThrow(
+      new RegExp("unexpected reference to link property 'since' outside of a path expression"),
+    );
   });
 
   it("test_edgeql_select_linkproperty_05", () => {
@@ -8012,9 +7961,11 @@ describe("TestEdgeQLSelect", () => {
         `
                 SELECT
                     Issue { since := [.owner]@since }
-                `
+                `,
       );
-    }).toThrow(new RegExp("unexpected reference to link property 'since' outside of a path expression"));
+    }).toThrow(
+      new RegExp("unexpected reference to link property 'since' outside of a path expression"),
+    );
   });
 
   it("test_edgeql_select_linkproperty_06", () => {
@@ -8037,14 +7988,14 @@ describe("TestEdgeQLSelect", () => {
                 .name = "Elvis"
             `,
       [
+        {
+          todo: [
             {
-              "todo": [
-                {
-                  "@rank": 10,
-                },
-              ],
+              "@rank": 10,
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -8059,23 +8010,23 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "open": "yes",
-            },
-            {
-              "number": "2",
-              "open": "yes",
-            },
-            {
-              "number": "3",
-              "open": "no",
-            },
-            {
-              "number": "4",
-              "open": "no",
-            },
-          ]
+        {
+          number: "1",
+          open: "yes",
+        },
+        {
+          number: "2",
+          open: "yes",
+        },
+        {
+          number: "3",
+          open: "no",
+        },
+        {
+          number: "4",
+          open: "no",
+        },
+      ],
     );
   });
 
@@ -8091,23 +8042,23 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-              "foo": "bar",
-            },
-            {
-              "number": "2",
-              "foo": "Open",
-            },
-            {
-              "number": "3",
-              "foo": "Closed",
-            },
-            {
-              "number": "4",
-              "foo": "Closed",
-            },
-          ]
+        {
+          number: "1",
+          foo: "bar",
+        },
+        {
+          number: "2",
+          foo: "Open",
+        },
+        {
+          number: "3",
+          foo: "Closed",
+        },
+        {
+          number: "4",
+          foo: "Closed",
+        },
+      ],
     );
   });
 
@@ -8118,7 +8069,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue {
                     foo := 'bar' IF Issue.number = '1' ELSE 123
                 };
-                `
+                `,
       );
     }).toThrow(new RegExp("operator.*IF.*cannot be applied"));
   });
@@ -8135,19 +8086,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "kind": "Open",
-            },
-            {
-              "kind": "High",
-            },
-            {
-              "kind": "Low",
-            },
-            {
-              "kind": "Closed",
-            },
-          ]
+        {
+          kind: "Open",
+        },
+        {
+          kind: "High",
+        },
+        {
+          kind: "Low",
+        },
+        {
+          kind: "Closed",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -8159,19 +8110,19 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "kind": "Open",
-            },
-            {
-              "kind": "High",
-            },
-            {
-              "kind": "Low",
-            },
-            {
-              "kind": "Closed",
-            },
-          ]
+        {
+          kind: "Open",
+        },
+        {
+          kind: "High",
+        },
+        {
+          kind: "Low",
+        },
+        {
+          kind: "Closed",
+        },
+      ],
     );
   });
 
@@ -8187,10 +8138,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -8202,10 +8153,10 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -8221,16 +8172,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -8242,16 +8193,16 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY Issue.number;
             `,
       [
-            {
-              "number": "1",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "4",
-            },
-          ]
+        {
+          number: "1",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -8263,7 +8214,7 @@ describe("TestEdgeQLSelect", () => {
                  b := (SELECT Issue FILTER .number = '1'),
             SELECT a.number IF a.time_estimate < b.time_estimate ELSE b.number;
             `,
-      []
+      [],
     );
   });
 
@@ -8275,7 +8226,7 @@ describe("TestEdgeQLSelect", () => {
                  b := (SELECT Issue FILTER .number = '1'),
             SELECT (a IF a.time_estimate < b.time_estimate ELSE b).number;
             `,
-      []
+      [],
     );
   });
 
@@ -8291,10 +8242,10 @@ describe("TestEdgeQLSelect", () => {
                 .number = '1';
             `,
       [
-            {
-              "number": "1",
-            },
-          ]
+        {
+          number: "1",
+        },
+      ],
     );
   });
 
@@ -8310,10 +8261,10 @@ describe("TestEdgeQLSelect", () => {
                 .name = 'Yury';
             `,
       [
-            {
-              "name": "Yury",
-            },
-          ]
+        {
+          name: "Yury",
+        },
+      ],
     );
   });
 
@@ -8330,16 +8281,16 @@ describe("TestEdgeQLSelect", () => {
             } FILTER .status.name = 'Open' AND .owner.name = 'Elvis';
             `,
       [
+        {
+          number: "1",
+          watchers: [
             {
-              "number": "1",
-              "watchers": [
-                {
-                  "name": "Yury",
-                  "name_upper": "YURY",
-                },
-              ],
+              name: "Yury",
+              name_upper: "YURY",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -8353,16 +8304,16 @@ describe("TestEdgeQLSelect", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "4",
-            },
-            {
-              "number": "3",
-            },
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "4",
+        },
+        {
+          number: "3",
+        },
+        {
+          number: "2",
+        },
+      ],
     );
   });
 
@@ -8377,10 +8328,10 @@ describe("TestEdgeQLSelect", () => {
             FILTER .number = '1';
         `,
       [
-            {
-              "sub": "1",
-            },
-          ]
+        {
+          sub: "1",
+        },
+      ],
     );
   });
 
@@ -8389,9 +8340,13 @@ describe("TestEdgeQLSelect", () => {
       h.script(
         `
                 SELECT Issue.number FILTER .number > '1';
-            `
+            `,
       );
-    }).toThrow(new RegExp("invalid property reference on an expression of primitive type 'default::issue_num_t'"));
+    }).toThrow(
+      new RegExp(
+        "invalid property reference on an expression of primitive type 'default::issue_num_t'",
+      ),
+    );
   });
 
   it("test_edgeql_union_target_01", () => {
@@ -8404,10 +8359,10 @@ describe("TestEdgeQLSelect", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -8418,10 +8373,10 @@ describe("TestEdgeQLSelect", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -8432,10 +8387,10 @@ describe("TestEdgeQLSelect", () => {
               ORDER BY .number DESC;
             `,
       [
-            {
-              "number": "2",
-            },
-          ]
+        {
+          number: "2",
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -8453,24 +8408,24 @@ describe("TestEdgeQLSelect", () => {
               ORDER BY .number DESC;
             `,
       [
+        {
+          number: "2",
+          references: [
             {
-              "number": "2",
-              "references": [
-                {
-                  "name": "edgedb.com",
-                  "__type__": {
-                    "name": "default::URL",
-                  },
-                },
-                {
-                  "name": "screenshot.png",
-                  "__type__": {
-                    "name": "default::File",
-                  },
-                },
-              ],
+              name: "edgedb.com",
+              __type__: {
+                name: "default::URL",
+              },
             },
-          ]
+            {
+              name: "screenshot.png",
+              __type__: {
+                name: "default::File",
+              },
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -8492,13 +8447,13 @@ describe("TestEdgeQLSelect", () => {
                 .number;
             `,
       [
-            {
-              "name": "Release EdgeDB",
-            },
-            {
-              "name": "Regression.",
-            },
-          ]
+        {
+          name: "Release EdgeDB",
+        },
+        {
+          name: "Regression.",
+        },
+      ],
     );
   });
 
@@ -8520,23 +8475,23 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY .number;
             `,
       [
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-              "number": "2",
-            },
-            {
-              "name": "Repl tweak.",
-              "number": "3",
-            },
-            {
-              "name": "Regression.",
-              "number": "4",
-            },
-            {
-              "name": "Regression.",
-              "number": "4",
-            },
-          ]
+        {
+          name: "Improve EdgeDB repl output rendering.",
+          number: "2",
+        },
+        {
+          name: "Repl tweak.",
+          number: "3",
+        },
+        {
+          name: "Regression.",
+          number: "4",
+        },
+        {
+          name: "Regression.",
+          number: "4",
+        },
+      ],
     );
   });
 
@@ -8558,19 +8513,19 @@ describe("TestEdgeQLSelect", () => {
             );
             `,
       unorderedBag([
-            {
-              "name": "Improve EdgeDB repl output rendering.",
-              "number": "2",
-            },
-            {
-              "name": "Repl tweak.",
-              "number": "3",
-            },
-            {
-              "name": "Regression.",
-              "number": "4",
-            },
-          ])
+        {
+          name: "Improve EdgeDB repl output rendering.",
+          number: "2",
+        },
+        {
+          name: "Repl tweak.",
+          number: "3",
+        },
+        {
+          name: "Regression.",
+          number: "4",
+        },
+      ]),
     );
   });
 
@@ -8586,10 +8541,10 @@ describe("TestEdgeQLSelect", () => {
                 FILTER .name = 'Release EdgeDB';
             `,
       [
-            {
-              "asdf": null,
-            },
-          ]
+        {
+          asdf: null,
+        },
+      ],
     );
   });
 
@@ -8605,7 +8560,7 @@ describe("TestEdgeQLSelect", () => {
                 } FILTER Issue.number = '1'
             ) = to_json('{"number": "1", "time_estimate": 3000}');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -8617,7 +8572,7 @@ describe("TestEdgeQLSelect", () => {
                 } FILTER Issue.number = '2'
             ) = to_json('{"number": "2", "time_estimate": null}');
             `,
-      [true]
+      [true],
     );
   });
 
@@ -8633,7 +8588,7 @@ describe("TestEdgeQLSelect", () => {
                 } FILTER Issue.number = '1'
             ) = to_json('{"number": "1", "time_estimate": 3000}');
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -8645,12 +8600,15 @@ describe("TestEdgeQLSelect", () => {
                 } FILTER Issue.number = '2'
             ) = to_json('{"number": "2", "time_estimate": null}');
             `,
-      [true]
+      [true],
     );
   });
 
   it("test_edgeql_select_json_02", () => {
-    let [json_res] = queryRows<string>(h, "\n            SELECT <json>array_agg(Issue)\n            ");
+    let [json_res] = queryRows<string>(
+      h,
+      "\n            SELECT <json>array_agg(Issue)\n            ",
+    );
     expect(json_res as any).not.toContain("__tname__");
   });
 
@@ -8659,7 +8617,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT Usr;
-            `
+            `,
       );
     }).toThrow(new RegExp("object type or alias 'default::Usr' does not exist"));
   });
@@ -8669,7 +8627,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT User.nam;
-            `
+            `,
       );
     }).toThrow(new RegExp("'default::User' has no link or property 'nam'"));
   });
@@ -8679,7 +8637,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 select Issue filter number = '4418';
-            `
+            `,
       );
     }).toThrow(new RegExp("object type or alias 'default::number' does not exist"));
   });
@@ -8689,7 +8647,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 select Issue filter referrnce = '#4418';
-            `
+            `,
       );
     }).toThrow(new RegExp("object type or alias 'default::referrnce' does not exist"));
   });
@@ -8699,7 +8657,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
             select Issue filter .referrnce = '#4418';
-            `
+            `,
       );
     }).toThrow(new RegExp("object type 'default::Issue' has no link or property 'referrnce'"));
   });
@@ -8710,7 +8668,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 # index access is higher precedence than cast
                 SELECT <str>1[0];
-            `
+            `,
       );
     }).toThrow(new RegExp("index indirection cannot.*int64.*"));
   });
@@ -8721,7 +8679,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 # index access is higher precedence than cast
                 SELECT <str>Issue.time_estimate[0];
-            `
+            `,
       );
     }).toThrow(new RegExp("index indirection cannot.*int64.*"));
   });
@@ -8732,14 +8690,14 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT (<str>1)[0];
             `,
-      ["1"]
+      ["1"],
     );
     assertQueryResult(
       h,
       `
             SELECT (<str>Issue.time_estimate)[0];
             `,
-      ["3"]
+      ["3"],
     );
   });
 
@@ -8749,14 +8707,14 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT EXISTS Issue{number};
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `
             SELECT EXISTS Issue;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -8766,248 +8724,68 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT EXISTS Issue{number};
             `,
-      [true]
+      [true],
     );
   });
 
   it("test_edgeql_select_is_01", () => {
-    assertQueryResult(
-      h,
-      `SELECT 5 IS int64;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyint;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyreal;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyscalar;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS int16;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS float64;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS anyfloat;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS str;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5 IS Object;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT 5 IS int64;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS anyint;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS anyreal;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS anyscalar;`, [true]);
+    assertQueryResult(h, `SELECT 5 IS int16;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS float64;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS anyfloat;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS str;`, [false]);
+    assertQueryResult(h, `SELECT 5 IS Object;`, [false]);
   });
 
   it("test_edgeql_select_is_02", () => {
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS int64;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyint;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyreal;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyscalar;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS int16;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS float64;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS anyfloat;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS str;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 5.5 IS Object;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT 5.5 IS int64;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS anyint;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS anyreal;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS anyscalar;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS int16;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS float64;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS anyfloat;`, [true]);
+    assertQueryResult(h, `SELECT 5.5 IS str;`, [false]);
+    assertQueryResult(h, `SELECT 5.5 IS Object;`, [false]);
   });
 
   it("test_edgeql_select_is_03", () => {
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS int64 LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyint LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyreal LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyscalar LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS int16 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS float64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS anyfloat LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS str LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.time_estimate IS Object LIMIT 1;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT Issue.time_estimate IS int64 LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyint LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyreal LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyscalar LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS int16 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS float64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS anyfloat LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS str LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.time_estimate IS Object LIMIT 1;`, [false]);
   });
 
   it("test_edgeql_select_is_04", () => {
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS int64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyint LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyreal LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyscalar LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS int16 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS float64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS anyfloat LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS str LIMIT 1;`,
-      [true]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.number IS Object LIMIT 1;`,
-      [false]
-    );
+    assertQueryResult(h, `SELECT Issue.number IS int64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyint LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyreal LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyscalar LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.number IS int16 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS float64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS anyfloat LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.number IS str LIMIT 1;`, [true]);
+    assertQueryResult(h, `SELECT Issue.number IS Object LIMIT 1;`, [false]);
   });
 
   it("test_edgeql_select_is_05", () => {
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS int64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyint LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyreal LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyscalar LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS int16 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS float64 LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS anyfloat LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS str LIMIT 1;`,
-      [false]
-    );
-    assertQueryResult(
-      h,
-      `SELECT Issue.status IS Object LIMIT 1;`,
-      [true]
-    );
+    assertQueryResult(h, `SELECT Issue.status IS int64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyint LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyreal LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyscalar LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS int16 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS float64 LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS anyfloat LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS str LIMIT 1;`, [false]);
+    assertQueryResult(h, `SELECT Issue.status IS Object LIMIT 1;`, [true]);
   });
 
   it("test_edgeql_select_is_06", () => {
@@ -9016,7 +8794,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT 5 IS anytype;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9026,7 +8804,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT 5 IS anyint;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9036,7 +8814,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT 5.5 IS anyfloat;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9046,7 +8824,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT Issue.time_estimate IS anytype LIMIT 1;
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9056,7 +8834,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT [5] IS (array<anytype>);
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9066,7 +8844,7 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT (5, 'hello') IS (tuple<anytype, str>);
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9076,14 +8854,14 @@ describe("TestEdgeQLSelect", () => {
       `
             SELECT [5] IS (array<int64>);
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
       `
             SELECT (5, 'hello') IS (tuple<int64, str>);
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9095,7 +8873,7 @@ describe("TestEdgeQLSelect", () => {
                 NOT all([Text] IS (array<Issue>))
                 AND any([Text] IS (array<Issue>));
             `,
-      [true]
+      [true],
     );
   });
 
@@ -9108,15 +8886,19 @@ describe("TestEdgeQLSelect", () => {
             CREATE TYPE Dummy2 {
                 CREATE PROPERTY foo -> str;
             };
-        `
+        `,
     );
     expect(() => {
       h.query(
         `
                     SELECT Object is Dummy1 | Dummy2;
-                `
+                `,
       );
-    }).toThrow(new RegExp("cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with property 'foo' using incompatible types std::int64, std::str"));
+    }).toThrow(
+      new RegExp(
+        "cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with property 'foo' using incompatible types std::int64, std::str",
+      ),
+    );
   });
 
   it("test_edgeql_select_duplicate_definition_01", () => {
@@ -9127,9 +8909,11 @@ describe("TestEdgeQLSelect", () => {
                     name,
                     name
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("duplicate definition of property 'name' of object type 'default::User'"));
+    }).toThrow(
+      new RegExp("duplicate definition of property 'name' of object type 'default::User'"),
+    );
   });
 
   it("test_edgeql_select_duplicate_definition_02", () => {
@@ -9140,9 +8924,11 @@ describe("TestEdgeQLSelect", () => {
                     name,
                     name := "new_name"
                 }
-            `
+            `,
       );
-    }).toThrow(new RegExp("duplicate definition of property 'name' of object type 'default::User'"));
+    }).toThrow(
+      new RegExp("duplicate definition of property 'name' of object type 'default::User'"),
+    );
   });
 
   it("test_edgeql_select_duplicate_definition_03", () => {
@@ -9153,7 +8939,7 @@ describe("TestEdgeQLSelect", () => {
                     todo,
                     todo
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("duplicate definition of link 'todo' of object type 'default::User'"));
   });
@@ -9165,135 +8951,47 @@ describe("TestEdgeQLSelect", () => {
                 SELECT User {
                     missing,
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("has no link or property"));
   });
 
   it("test_edgeql_select_big_set_literal", () => {
-    let res = queryRows(h, "\n            SELECT {\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n            };\n        ");
-    expect(((res).length === 100)).toBeTruthy();
+    let res = queryRows(
+      h,
+      "\n            SELECT {\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n                 (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,),\n            };\n        ",
+    );
+    expect(res.length === 100).toBeTruthy();
   });
 
   it("test_edgeql_select_big_unions", () => {
-    let res = queryRows(h, "\n            SELECT (\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,)\n            );\n        ");
-    expect(((res).length === 100)).toBeTruthy();
+    let res = queryRows(
+      h,
+      "\n            SELECT (\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,) union\n                 (1,) union (1,) union (1,) union (1,) union (1,)\n            );\n        ",
+    );
+    expect(res.length === 100).toBeTruthy();
   });
 
   it("test_edgeql_select_set_literal_in_order", () => {
-    assertQueryResult(
-      h,
-      `SELECT {0, 1}`,
-      [0, 1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 0 union 1`,
-      [0, 1]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {0, 1, 2, 3}`,
-      [0, 1, 2, 3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT 0 union 1 union 2 union 3`,
-      [0, 1, 2, 3]
-    );
-    assertQueryResult(
-      h,
-      `SELECT {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-          ]
-    );
+    assertQueryResult(h, `SELECT {0, 1}`, [0, 1]);
+    assertQueryResult(h, `SELECT 0 union 1`, [0, 1]);
+    assertQueryResult(h, `SELECT {0, 1, 2, 3}`, [0, 1, 2, 3]);
+    assertQueryResult(h, `SELECT 0 union 1 union 2 union 3`, [0, 1, 2, 3]);
+    assertQueryResult(h, `SELECT {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}`, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     assertQueryResult(
       h,
       `SELECT 0 union 1 union 2 union 3 union 4 union 5 union 6 union 7 union 8 union 9`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-          ]
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     );
     assertQueryResult(
       h,
       `SELECT {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            20,
-            21,
-            22,
-            23,
-            24,
-          ]
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
     );
     assertQueryResult(
       h,
       `SELECT 0 union 1 union 2 union 3 union 4 union 5 union 6 union 7 union 8 union 9 union 10 union 11 union 12 union 13 union 14 union 15 union 16 union 17 union 18 union 19 union 20 union 21 union 22 union 23 union 24`,
-      [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            11,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            20,
-            21,
-            22,
-            23,
-            24,
-          ]
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
     );
   });
 
@@ -9304,7 +9002,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT User {
                     todo: { name: {bogus} }
                 }
-            `
+            `,
       );
     }).toThrow(new RegExp("shapes cannot be applied to scalar type 'std::str'"));
   });
@@ -9326,15 +9024,15 @@ describe("TestEdgeQLSelect", () => {
                     .name = 'screenshot.png'
             `,
       [
+        {
+          referrers: [
             {
-              "referrers": [
-                {
-                  "name": "Improve EdgeDB repl output rendering.",
-                  "number": "2",
-                },
-              ],
+              name: "Improve EdgeDB repl output rendering.",
+              number: "2",
             },
-          ]
+          ],
+        },
+      ],
     );
   });
 
@@ -9344,7 +9042,7 @@ describe("TestEdgeQLSelect", () => {
       `
                 SELECT array_agg(Issue ORDER BY .body)[0].owner.name;
             `,
-      ["Elvis"]
+      ["Elvis"],
     );
   });
 
@@ -9355,7 +9053,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT _ := array_unpack(array_agg(Issue)).owner.name
                 ORDER BY _;
             `,
-      ["Elvis", "Yury"]
+      ["Elvis", "Yury"],
     );
   });
 
@@ -9364,14 +9062,14 @@ describe("TestEdgeQLSelect", () => {
       `
                 CREATE FUNCTION issues() -> SET OF Issue
                 USING (Issue);
-            `
+            `,
     );
     assertQueryResult(
       h,
       `
                 SELECT _ := issues().owner.name ORDER BY _;
             `,
-      ["Elvis", "Yury"]
+      ["Elvis", "Yury"],
     );
   });
 
@@ -9382,7 +9080,7 @@ describe("TestEdgeQLSelect", () => {
                 WITH items := array_agg((SELECT Named ORDER BY .name))
                 SELECT items[0] IS Status;
             `,
-      [true]
+      [true],
     );
     assertQueryResult(
       h,
@@ -9392,16 +9090,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT (items, items[0], items[0].name,
                         items[0] IS Status);
             `,
-      [
-            [
-              [
-                {},
-              ],
-              {},
-              "Closed",
-              true,
-            ],
-          ]
+      [[[{}], {}, "Closed", true]],
     );
   });
 
@@ -9413,23 +9102,9 @@ describe("TestEdgeQLSelect", () => {
                 SELECT _ := (items.0, items.1, items.1[0].name) ORDER BY _.0;
             `,
       [
-            [
-              "Elvis",
-              [
-                {},
-                {},
-              ],
-              "Improve EdgeDB repl output rendering.",
-            ],
-            [
-              "Yury",
-              [
-                {},
-                {},
-              ],
-              "Regression.",
-            ],
-          ]
+        ["Elvis", [{}, {}], "Improve EdgeDB repl output rendering."],
+        ["Yury", [{}, {}], "Regression."],
+      ],
     );
   });
 
@@ -9442,27 +9117,15 @@ describe("TestEdgeQLSelect", () => {
             SELECT (L, L);
             `,
       [
-            [
-              [
-                "x",
-                {},
-              ],
-              [
-                "x",
-                {},
-              ],
-            ],
-            [
-              [
-                "x",
-                {},
-              ],
-              [
-                "x",
-                {},
-              ],
-            ],
-          ]
+        [
+          ["x", {}],
+          ["x", {}],
+        ],
+        [
+          ["x", {}],
+          ["x", {}],
+        ],
+      ],
     );
   });
 
@@ -9473,26 +9136,26 @@ describe("TestEdgeQLSelect", () => {
             SELECT (User, User {name}) ORDER BY .1.name;
             `,
       [
-            [
-              {},
-              {
-                "name": "Elvis",
-              },
-            ],
-            [
-              {},
-              {
-                "name": "Yury",
-              },
-            ],
-          ]
+        [
+          {},
+          {
+            name: "Elvis",
+          },
+        ],
+        [
+          {},
+          {
+            name: "Yury",
+          },
+        ],
+      ],
     );
   });
 
   it("test_edgeql_select_expr_objects_07", () => {
     let res = queryRows<{ name: string; id: string }>(
       h,
-      "\n            SELECT User {\n                name,\n                id\n            }\n            ORDER BY User.name;\n        "
+      "\n            SELECT User {\n                name,\n                id\n            }\n            ORDER BY User.name;\n        ",
     );
     assertQueryResult(
       h,
@@ -9502,7 +9165,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := (L, L.1 {name})
             ORDER BY _.1.name;
             `,
-      res.map((user) => [["x", { id: String(user.id) }], { name: user.name }])
+      res.map((user) => [["x", { id: String(user.id) }], { name: user.name }]),
     );
     assertQueryResult(
       h,
@@ -9512,7 +9175,7 @@ describe("TestEdgeQLSelect", () => {
             SELECT _ := (L.1 {name}, L)
             ORDER BY _.0.name;
             `,
-      res.map((user) => [{ name: user.name }, ["x", { id: String(user.id) }]])
+      res.map((user) => [{ name: user.name }, ["x", { id: String(user.id) }]]),
     );
   });
 
@@ -9524,13 +9187,13 @@ describe("TestEdgeQLSelect", () => {
                 [(SELECT Issue {number, name} FILTER .number = "1")];
             `,
       [
-            [
-              {
-                "number": "1",
-                "name": "Release EdgeDB",
-              },
-            ],
-          ]
+        [
+          {
+            number: "1",
+            name: "Release EdgeDB",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -9540,14 +9203,14 @@ describe("TestEdgeQLSelect", () => {
                  Issue.status.name);
             `,
       [
-            [
-              {
-                "number": "1",
-                "name": "Release EdgeDB",
-              },
-              "Open",
-            ],
-          ]
+        [
+          {
+            number: "1",
+            name: "Release EdgeDB",
+          },
+          "Open",
+        ],
+      ],
     );
   });
 
@@ -9556,28 +9219,38 @@ describe("TestEdgeQLSelect", () => {
       h.script(
         `
                 SELECT DISTINCT {{ z := 1 }, { z := 2 }};
-            `
+            `,
       );
-    }).toThrow(new RegExp("it is illegal to create a type union that causes a computed property 'z' to mix with other versions of the same property 'z'"));
+    }).toThrow(
+      new RegExp(
+        "it is illegal to create a type union that causes a computed property 'z' to mix with other versions of the same property 'z'",
+      ),
+    );
     expect(() => {
       h.script(
         `
                 SELECT DISTINCT { z := 1 } = { z := 2 };
-            `
+            `,
       );
     }).toThrow(new RegExp("cannot use DISTINCT on free shape"));
   });
 
   it("test_edgeql_select_array_common_type_01", () => {
-    let res = queryRows<Array<{ __tname__: string }>>(h, "\n            SELECT [User, Issue];\n        ");
-    for (const row of (res as any)) {
+    let res = queryRows<Array<{ __tname__: string }>>(
+      h,
+      "\n            SELECT [User, Issue];\n        ",
+    );
+    for (const row of res as any) {
       expect(row[0].__tname__).toEqual("default::User");
       expect(row[1].__tname__).toEqual("default::Issue");
     }
   });
 
   it("test_edgeql_select_array_common_type_02", () => {
-    let res = queryRows<Array<{ __tname__: string }>>(h, "\n            SELECT [Object];\n        ");
+    let res = queryRows<Array<{ __tname__: string }>>(
+      h,
+      "\n            SELECT [Object];\n        ",
+    );
     for (const row of res) {
       expect(row[0].__tname__.startsWith("default::")).toBeTruthy();
     }
@@ -9595,13 +9268,13 @@ describe("TestEdgeQLSelect", () => {
                 SELECT _ := (User { tag := User.name }) ORDER BY _.name;
             `,
       [
-            {
-              "tag": "Elvis",
-            },
-            {
-              "tag": "Yury",
-            },
-          ]
+        {
+          tag: "Elvis",
+        },
+        {
+          tag: "Yury",
+        },
+      ],
     );
   });
 
@@ -9610,7 +9283,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT _ := (User { tag := _.name });
-            `
+            `,
       );
     }).toThrow(new RegExp("object type or alias 'default::_' does not exist"));
   });
@@ -9621,7 +9294,7 @@ describe("TestEdgeQLSelect", () => {
             CREATE TYPE Dummy {
                 CREATE LINK owner -> User;
             }
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -9632,17 +9305,17 @@ describe("TestEdgeQLSelect", () => {
                 } FILTER .name = 'Elvis';
             `,
       [
+        {
+          z: [
             {
-              "z": [
-                {
-                  "name": "Regression.",
-                },
-                {
-                  "name": "Release EdgeDB",
-                },
-              ],
+              name: "Regression.",
             },
-          ]
+            {
+              name: "Release EdgeDB",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -9655,7 +9328,7 @@ describe("TestEdgeQLSelect", () => {
             CREATE TYPE Dummy2 {
                 CREATE SINGLE LINK owner -> User;
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -9666,17 +9339,17 @@ describe("TestEdgeQLSelect", () => {
                 } FILTER .name = 'Elvis';
             `,
       [
+        {
+          z: [
             {
-              "z": [
-                {
-                  "name": "Regression.",
-                },
-                {
-                  "name": "Release EdgeDB",
-                },
-              ],
+              name: "Regression.",
             },
-          ]
+            {
+              name: "Release EdgeDB",
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -9692,14 +9365,14 @@ describe("TestEdgeQLSelect", () => {
             ALTER TYPE Thing {
                 CREATE LINK posts := (.<thing);
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                  SELECT Thing { posts: {id} };
             `,
-      []
+      [],
     );
   });
 
@@ -9713,24 +9386,26 @@ describe("TestEdgeQLSelect", () => {
                 CREATE LINK whatever := (SELECT User FILTER .name = 'Elvis');
             };
             INSERT Dummy1 { whatever := (SELECT User FILTER .name = 'Yury') };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
                 SELECT User.<whatever[IS Dummy1];
             `,
-      [
-            {},
-          ]
+      [{}],
     );
     expect(() => {
       h.query(
         `
                     SELECT User.<whatever
-                `
+                `,
       );
-    }).toThrow(new RegExp("cannot follow backlink 'whatever' because link 'whatever' of object type 'default::Dummy2' is computed"));
+    }).toThrow(
+      new RegExp(
+        "cannot follow backlink 'whatever' because link 'whatever' of object type 'default::Dummy2' is computed",
+      ),
+    );
   });
 
   it("test_edgeql_select_incompatible_union_01", () => {
@@ -9742,15 +9417,19 @@ describe("TestEdgeQLSelect", () => {
             CREATE TYPE Dummy2 {
                 CREATE PROPERTY foo -> str;
             };
-        `
+        `,
     );
     expect(() => {
       h.query(
         `
                     SELECT Dummy1 union Dummy2;
-                `
+                `,
       );
-    }).toThrow(new RegExp("cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with property 'foo' using incompatible types std::int64, std::str"));
+    }).toThrow(
+      new RegExp(
+        "cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with property 'foo' using incompatible types std::int64, std::str",
+      ),
+    );
   });
 
   it("test_edgeql_select_incompatible_union_02", () => {
@@ -9763,15 +9442,19 @@ describe("TestEdgeQLSelect", () => {
             CREATE TYPE Dummy2 {
                 CREATE LINK foo -> Bar;
             };
-        `
+        `,
     );
     expect(() => {
       h.query(
         `
                     SELECT Dummy1 union Dummy2;
-                `
+                `,
       );
-    }).toThrow(new RegExp("cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with link 'foo' using incompatible types default::Bar, std::int64"));
+    }).toThrow(
+      new RegExp(
+        "cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with link 'foo' using incompatible types default::Bar, std::int64",
+      ),
+    );
   });
 
   it("test_edgeql_select_incompatible_union_03", () => {
@@ -9788,15 +9471,19 @@ describe("TestEdgeQLSelect", () => {
                     CREATE PROPERTY baz -> str
                 }
             };
-        `
+        `,
     );
     expect(() => {
       h.query(
         `
                     SELECT Dummy1 union Dummy2;
-                `
+                `,
       );
-    }).toThrow(new RegExp("cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with link 'foo' with property 'baz' using incompatible types std::int64, std::str"));
+    }).toThrow(
+      new RegExp(
+        "cannot create union \\(default::Dummy1 \\| default::Dummy2\\) with link 'foo' with property 'baz' using incompatible types std::int64, std::str",
+      ),
+    );
   });
 
   it("test_edgeql_function_source_01a", () => {
@@ -9808,10 +9495,10 @@ describe("TestEdgeQLSelect", () => {
                 )]);
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9824,10 +9511,10 @@ describe("TestEdgeQLSelect", () => {
                 )])) { name };
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9840,10 +9527,10 @@ describe("TestEdgeQLSelect", () => {
                 )).1;
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9856,10 +9543,10 @@ describe("TestEdgeQLSelect", () => {
                 )])) {name};
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9872,10 +9559,10 @@ describe("TestEdgeQLSelect", () => {
                 )])) {name} ;
            `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9888,10 +9575,10 @@ describe("TestEdgeQLSelect", () => {
                 )])) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9904,13 +9591,13 @@ describe("TestEdgeQLSelect", () => {
                 )]) {name});
             `,
       [
-            [
-              0,
-              {
-                "name": "Elvis",
-              },
-            ],
-          ]
+        [
+          0,
+          {
+            name: "Elvis",
+          },
+        ],
+      ],
     );
   });
 
@@ -9923,10 +9610,10 @@ describe("TestEdgeQLSelect", () => {
                 )).1 UNION (SELECT User FILTER false)) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9939,10 +9626,10 @@ describe("TestEdgeQLSelect", () => {
                 )).1 ?? (SELECT User FILTER false)) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9955,10 +9642,10 @@ describe("TestEdgeQLSelect", () => {
                 )).1 if 1 = 1 ELSE (SELECT User FILTER false)) {name};
             `,
       [
-            {
-              "name": "Elvis",
-            },
-          ]
+        {
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -9969,17 +9656,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <array<User>>{} UNION [User]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -9987,17 +9674,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <array<User>>{} ?? [User]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10005,17 +9692,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <array<User>>{} IF false ELSE [User]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10023,17 +9710,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT assert_exists([User])
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -10044,15 +9731,15 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <array<User>>{} UNION array_agg(User)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10060,15 +9747,15 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <array<User>>{} ?? array_agg(User)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10076,15 +9763,15 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <array<User>>{} IF false ELSE array_agg(User)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10092,15 +9779,15 @@ describe("TestEdgeQLSelect", () => {
                 SELECT assert_exists(array_agg(User))
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -10111,19 +9798,19 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <tuple<User, int64>>{} UNION (User, 2)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10131,19 +9818,19 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <tuple<User, int64>>{} ?? (User, 2)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10151,19 +9838,19 @@ describe("TestEdgeQLSelect", () => {
                 SELECT <tuple<User, int64>>{} IF false ELSE (User, 2)
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10171,19 +9858,19 @@ describe("TestEdgeQLSelect", () => {
                 SELECT assert_exists((User, 2))
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-            [
-              {
-                "id": "str",
-              },
-              2,
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+        [
+          {
+            id: "str",
+          },
+          2,
+        ],
+      ],
     );
   });
 
@@ -10194,17 +9881,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT [(User,)][0]
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10212,17 +9899,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT [((SELECT User {name} ORDER BY .name),)][0]
             `,
       [
-            [
-              {
-                "name": "Elvis",
-              },
-            ],
-            [
-              {
-                "name": "Yury",
-              },
-            ],
-          ]
+        [
+          {
+            name: "Elvis",
+          },
+        ],
+        [
+          {
+            name: "Yury",
+          },
+        ],
+      ],
     );
   });
 
@@ -10233,17 +9920,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT ([User],).0
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10251,17 +9938,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT ([(SELECT User {name} ORDER BY .name)],).0
             `,
       [
-            [
-              {
-                "name": "Elvis",
-              },
-            ],
-            [
-              {
-                "name": "Yury",
-              },
-            ],
-          ]
+        [
+          {
+            name: "Elvis",
+          },
+        ],
+        [
+          {
+            name: "Yury",
+          },
+        ],
+      ],
     );
   });
 
@@ -10272,21 +9959,21 @@ describe("TestEdgeQLSelect", () => {
                 SELECT { z := ([User],).0 }
             `,
       [
-            {
-              "z": [
-                [
-                  {
-                    "id": "str",
-                  },
-                ],
-                [
-                  {
-                    "id": "str",
-                  },
-                ],
-              ],
-            },
-          ]
+        {
+          z: [
+            [
+              {
+                id: "str",
+              },
+            ],
+            [
+              {
+                id: "str",
+              },
+            ],
+          ],
+        },
+      ],
     );
   });
 
@@ -10298,17 +9985,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT (Z, array_agg(array_unpack(Z))).1;
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10317,17 +10004,17 @@ describe("TestEdgeQLSelect", () => {
                 SELECT (Z, array_agg(array_unpack(Z))).1;
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -10338,15 +10025,15 @@ describe("TestEdgeQLSelect", () => {
                 SELECT X := array_agg(User) FILTER X[0].name != 'Sully';
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
     assertQueryResult(
       h,
@@ -10354,12 +10041,12 @@ describe("TestEdgeQLSelect", () => {
             SELECT X := [User] FILTER X[0].name = 'Elvis';
             `,
       [
-            [
-              {
-                "id": "str",
-              },
-            ],
-          ]
+        [
+          {
+            id: "str",
+          },
+        ],
+      ],
     );
   });
 
@@ -10368,21 +10055,21 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT assert_exists((SELECT User {m := 10} FILTER false)).m;
-            `
+            `,
       );
     }).toThrow(new RegExp("assert_exists violation"));
     expect(() => {
       h.query(
         `
                 SELECT array_agg((SELECT User {m := Issue}))[{1000}].m;
-            `
+            `,
       );
     }).toThrow(new RegExp("array index 1000 is out of bounds"));
     expect(() => {
       h.query(
         `
                 SELECT array_agg((SELECT User {m := 10}))[{1000}].m;
-            `
+            `,
       );
     }).toThrow(new RegExp("array index 1000 is out of bounds"));
   });
@@ -10392,7 +10079,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT array_agg((SELECT User {m := Publication}))[{1000}].m;
-            `
+            `,
       );
     }).toThrow(new RegExp("array index 1000 is out of bounds"));
   });
@@ -10401,7 +10088,7 @@ describe("TestEdgeQLSelect", () => {
     h.script(
       `
             create function foo(x: str, y: int64) -> str USING (x);
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -10413,32 +10100,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": "circle",
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": "hexagon",
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": "triangle",
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: "circle",
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: "hexagon",
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: "triangle",
+        },
+      ],
     );
   });
 
@@ -10448,7 +10135,7 @@ describe("TestEdgeQLSelect", () => {
             create function foo(x: OPTIONAL str, y: int64) -> str USING (
                 x ?? "test"
             );
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -10460,32 +10147,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": "circle",
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": "hexagon",
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": "triangle",
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: "circle",
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: "hexagon",
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: "triangle",
+        },
+      ],
     );
   });
 
@@ -10500,32 +10187,32 @@ describe("TestEdgeQLSelect", () => {
             } order by .name;
             `,
       [
-            {
-              "name": "circle",
-              "val": 2,
-              "x": [2, 0],
-            },
-            {
-              "name": "hexagon",
-              "val": 4,
-              "x": [4, 0],
-            },
-            {
-              "name": "pentagon",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "square",
-              "val": null,
-              "x": null,
-            },
-            {
-              "name": "triangle",
-              "val": 10,
-              "x": [10, 0],
-            },
-          ]
+        {
+          name: "circle",
+          val: 2,
+          x: [2, 0],
+        },
+        {
+          name: "hexagon",
+          val: 4,
+          x: [4, 0],
+        },
+        {
+          name: "pentagon",
+          val: null,
+          x: null,
+        },
+        {
+          name: "square",
+          val: null,
+          x: null,
+        },
+        {
+          name: "triangle",
+          val: 10,
+          x: [10, 0],
+        },
+      ],
     );
   });
 
@@ -10534,7 +10221,7 @@ describe("TestEdgeQLSelect", () => {
       h.query(
         `
                 SELECT Comment { owner: { name } FILTER false }
-                `
+                `,
       );
     }).toThrow(new RegExp("possibly an empty set returned"));
   });
@@ -10547,7 +10234,7 @@ describe("TestEdgeQLSelect", () => {
                 CREATE PROPERTY z -> tuple<x: int64, y: str>;
             };
             insert Foo;
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -10555,11 +10242,11 @@ describe("TestEdgeQLSelect", () => {
             select Foo { y, z }
             `,
       [
-            {
-              "y": null,
-              "z": null,
-            },
-          ]
+        {
+          y: null,
+          z: null,
+        },
+      ],
     );
   });
 
@@ -10570,10 +10257,10 @@ describe("TestEdgeQLSelect", () => {
             SELECT { lol := array_get([(1, '2')], 1) }
             `,
       [
-            {
-              "lol": null,
-            },
-          ]
+        {
+          lol: null,
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -10581,10 +10268,10 @@ describe("TestEdgeQLSelect", () => {
             SELECT { lol := array_get([(a := 1, b := '2')], 1) }
             `,
       [
-            {
-              "lol": null,
-            },
-          ]
+        {
+          lol: null,
+        },
+      ],
     );
   });
 
@@ -10600,27 +10287,27 @@ describe("TestEdgeQLSelect", () => {
                 ORDER BY .key.name;
             `,
       [
-            {
-              "key": {
-                "name": "Improve EdgeDB repl output rendering.",
-              },
-            },
-            {
-              "key": {
-                "name": "Regression.",
-              },
-            },
-            {
-              "key": {
-                "name": "Release EdgeDB",
-              },
-            },
-            {
-              "key": {
-                "name": "Repl tweak.",
-              },
-            },
-          ]
+        {
+          key: {
+            name: "Improve EdgeDB repl output rendering.",
+          },
+        },
+        {
+          key: {
+            name: "Regression.",
+          },
+        },
+        {
+          key: {
+            name: "Release EdgeDB",
+          },
+        },
+        {
+          key: {
+            name: "Repl tweak.",
+          },
+        },
+      ],
     );
   });
 
@@ -10636,31 +10323,31 @@ describe("TestEdgeQLSelect", () => {
                 ORDER BY .key.number THEN .key.name;
             `,
       [
-            {
-              "key": {
-                "name": "Release EdgeDB",
-                "number": "1",
-              },
-            },
-            {
-              "key": {
-                "name": "Improve EdgeDB repl output rendering.",
-                "number": "2",
-              },
-            },
-            {
-              "key": {
-                "name": "Repl tweak.",
-                "number": "3",
-              },
-            },
-            {
-              "key": {
-                "name": "Regression.",
-                "number": "4",
-              },
-            },
-          ]
+        {
+          key: {
+            name: "Release EdgeDB",
+            number: "1",
+          },
+        },
+        {
+          key: {
+            name: "Improve EdgeDB repl output rendering.",
+            number: "2",
+          },
+        },
+        {
+          key: {
+            name: "Repl tweak.",
+            number: "3",
+          },
+        },
+        {
+          key: {
+            name: "Regression.",
+            number: "4",
+          },
+        },
+      ],
     );
   });
 
@@ -10692,7 +10379,7 @@ describe("TestEdgeQLSelect", () => {
                 (insert Pair { word1 := tup.1, word2 := tup.0,
                                similarity := tup.2 }),
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
@@ -10707,7 +10394,7 @@ describe("TestEdgeQLSelect", () => {
                 select count(opt_pair) = count(distinct opt_pair.similarity)
             );
             `,
-      ["balkanize"]
+      ["balkanize"],
     );
   });
 
@@ -10717,7 +10404,7 @@ describe("TestEdgeQLSelect", () => {
       `
             select (select {1,2} filter random() > 0) filter random() > 0
             `,
-      unorderedSet([1, 2])
+      unorderedSet([1, 2]),
     );
   });
 
@@ -10727,7 +10414,7 @@ describe("TestEdgeQLSelect", () => {
       `
             select {1,2,3,4+0} filter random() > 0
             `,
-      unorderedSet([1, 2, 3, 4])
+      unorderedSet([1, 2, 3, 4]),
     );
   });
 
@@ -10737,7 +10424,7 @@ describe("TestEdgeQLSelect", () => {
       `
             for x in 2 union (select {1,x} filter random() > 0)
             `,
-      unorderedSet([1, 2])
+      unorderedSet([1, 2]),
     );
   });
 
@@ -10749,18 +10436,21 @@ describe("TestEdgeQLSelect", () => {
             SELECT Z
             `,
       [
-            {
-              "id": "str",
-            },
-            {
-              "id": "str",
-            },
-          ]
+        {
+          id: "str",
+        },
+        {
+          id: "str",
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_free_object_distinct_01", () => {
-    let foo = querySingle<Record<string, unknown>>(h, "\n            select {foo := \"test\"}\n        ");
+    let foo = querySingle<Record<string, unknown>>(
+      h,
+      '\n            select {foo := "test"}\n        ',
+    );
     expect(Object.prototype.hasOwnProperty.call(foo, "id")).toBeFalsy();
   });
 
@@ -10773,20 +10463,20 @@ describe("TestEdgeQLSelect", () => {
             };
             `,
       [
+        {
+          lol: [
             {
-              "lol": [
-                {
-                  "x": 1,
-                },
-                {
-                  "x": 2,
-                },
-                {
-                  "x": 3,
-                },
-              ],
+              x: 1,
             },
-          ]
+            {
+              x: 2,
+            },
+            {
+              x: 3,
+            },
+          ],
+        },
+      ],
     );
     assertQueryResult(
       h,
@@ -10796,20 +10486,20 @@ describe("TestEdgeQLSelect", () => {
             };
             `,
       [
+        {
+          lol: [
             {
-              "lol": [
-                {
-                  "x": 1,
-                },
-                {
-                  "x": 2,
-                },
-                {
-                  "x": 3,
-                },
-              ],
+              x: 1,
             },
-          ]
+            {
+              x: 2,
+            },
+            {
+              x: 3,
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -10821,20 +10511,20 @@ describe("TestEdgeQLSelect", () => {
             select X {lol: { x }};
             `,
       [
+        {
+          lol: [
             {
-              "lol": [
-                {
-                  "x": 1,
-                },
-                {
-                  "x": 2,
-                },
-                {
-                  "x": 3,
-                },
-              ],
+              x: 1,
             },
-          ]
+            {
+              x: 2,
+            },
+            {
+              x: 3,
+            },
+          ],
+        },
+      ],
     );
   });
 
@@ -10846,15 +10536,15 @@ describe("TestEdgeQLSelect", () => {
             ORDER BY User.is_elvis
             `,
       [
-            {
-              "is_elvis": false,
-              "name": "Yury",
-            },
-            {
-              "is_elvis": true,
-              "name": "Elvis",
-            },
-          ]
+        {
+          is_elvis: false,
+          name: "Yury",
+        },
+        {
+          is_elvis: true,
+          name: "Elvis",
+        },
+      ],
     );
   });
 
@@ -10873,7 +10563,7 @@ describe("TestEdgeQLSelect", () => {
             status8 := ( .status { a := .__type__.name, b := .__type__.id } )
           })),
         };
-        `
+        `,
     );
   });
 
@@ -10884,16 +10574,16 @@ describe("TestEdgeQLSelect", () => {
             select schema::Type {is_abstract} filter .name = 'std::Object';
             `,
       [
-            {
-              "is_abstract": true,
-            },
-          ]
+        {
+          is_abstract: true,
+        },
+      ],
     );
   });
 
   it("test_edgeql_select_tname_overriden_type_01", () => {
     let res = h.query("\n            SELECT User { __type__ := introspect Issue }\n        ");
-    for (const row of (res as any)) {
+    for (const row of res as any) {
       expect(row.__tname__).toEqual("default::User");
     }
   });
@@ -10904,26 +10594,35 @@ describe("TestEdgeQLSelect", () => {
   // query but assert different orderings). Blocked until the Client facade's
   // codec exposes typed result descriptors. See tests/KNOWN_BLOCKED.md.
   it.skip("test_edgeql_select_tid_position_01", () => {
-    let res = queryRows<Record<string, any>>(h, `
+    let res = queryRows<Record<string, any>>(
+      h,
+      `
       SELECT Issue {
         *,
         lol := 1,
         sigh := 2,
-      };`);
+      };`,
+    );
     let val = res[0];
     let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
   it.skip("test_edgeql_select_tid_position_02", () => {
-    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(
+      h,
+      "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ",
+    );
     let val = res[0];
     let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tid__");
   });
 
   it.skip("test_edgeql_select_tid_position_03", () => {
-    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(
+      h,
+      "\n            FOR issue IN Issue SELECT issue {\n              *, lol := 1, sigh := 2,\n            };\n        ",
+    );
     let val = res[0];
     let ptrs = Object.keys(val.__dataclass_fields__);
     expect(ptrs[0]).toEqual("__tname__");
@@ -10931,7 +10630,10 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_tid_position_04", () => {
-    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := issue.owner { *, test := 3 },\n              lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(
+      h,
+      "\n            FOR issue IN Issue SELECT issue {\n              *,\n              owner := issue.owner { *, test := 3 },\n              lol := 1, sigh := 2,\n            };\n        ",
+    );
     let val = res[0];
     let owner = val.owner;
     let ptrs = Object.keys(owner.__dataclass_fields__);
@@ -10941,7 +10643,10 @@ describe("TestEdgeQLSelect", () => {
   });
 
   it("test_edgeql_select_tid_position_05", () => {
-    let res = queryRows<Record<string, any>>(h, "\n            FOR issue IN Issue SELECT issue {\n              **,\n              lol := 1, sigh := 2,\n            };\n        ");
+    let res = queryRows<Record<string, any>>(
+      h,
+      "\n            FOR issue IN Issue SELECT issue {\n              **,\n              lol := 1, sigh := 2,\n            };\n        ",
+    );
     let val = res[0];
     let owner = val.owner;
     let ptrs = Object.keys(owner.__dataclass_fields__);
@@ -10962,13 +10667,15 @@ describe("TestEdgeQLSelect", () => {
        field `owner2` we get a \"has no property\" error!!
   */
   it("test_edgeql_select_tid_position_06", () => {
-    let res = queryRows<Record<string, any>>(h, 
+    let res = queryRows<Record<string, any>>(
+      h,
       `FOR issue IN Issue SELECT issue {
         *,
         owner := (for owner in issue.owner select owner { * }),
         lol := 1,
         sigh := 2,            
-      };`);
+      };`,
+    );
     let val = res[0];
     let owner = val.owner;
     let ptrs = Object.keys(owner.__dataclass_fields__);
@@ -10984,7 +10691,7 @@ describe("TestEdgeQLSelect", () => {
                 SELECT Issue.name
                 FILTER Issue.number > '2';
             `,
-      unorderedBag(["Repl tweak.", "Regression."])
+      unorderedBag(["Repl tweak.", "Regression."]),
     );
   });
 
@@ -10996,7 +10703,7 @@ describe("TestEdgeQLSelect", () => {
                         (INSERT User {
                             name := 't1'
                         })
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT statements cannot be used in a FILTER clause"));
     expect(() => {
@@ -11006,7 +10713,7 @@ describe("TestEdgeQLSelect", () => {
                         (UPDATE User set {
                             name := 't1'
                         })
-            `
+            `,
       );
     }).toThrow(new RegExp("UPDATE statements cannot be used in a FILTER clause"));
     expect(() => {
@@ -11014,7 +10721,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 select { foo := 1 } filter
                         (DELETE User filter .name = 't1')
-            `
+            `,
       );
     }).toThrow(new RegExp("DELETE statements cannot be used in a FILTER clause"));
     expect(() => {
@@ -11024,7 +10731,7 @@ describe("TestEdgeQLSelect", () => {
                         (INSERT User {
                             name := 't1'
                         })
-            `
+            `,
       );
     }).toThrow(new RegExp("INSERT statements cannot be used in an ORDER BY clause"));
     expect(() => {
@@ -11034,7 +10741,7 @@ describe("TestEdgeQLSelect", () => {
                         (UPDATE User set {
                             name := 't1'
                         })
-            `
+            `,
       );
     }).toThrow(new RegExp("UPDATE statements cannot be used in an ORDER BY clause"));
     expect(() => {
@@ -11042,7 +10749,7 @@ describe("TestEdgeQLSelect", () => {
         `
                 select { foo := 1 } order by
                         (DELETE User filter .name = 't1')
-            `
+            `,
       );
     }).toThrow(new RegExp("DELETE statements cannot be used in an ORDER BY clause"));
   });
@@ -11054,12 +10761,19 @@ describe("TestEdgeQLSelect", () => {
             SELECT <array<array<int64>>>$0
             `,
       [
-            [
-              [1, 2],
-              [3, 4],
-            ],
+        [
+          [1, 2],
+          [3, 4],
+        ],
+      ],
+      {
+        variables: [
+          [
+            [1, 2],
+            [3, 4],
           ],
-      { variables: [[[1, 2], [3, 4]]] }
+        ],
+      },
     );
     assertQueryResult(
       h,
@@ -11067,12 +10781,19 @@ describe("TestEdgeQLSelect", () => {
             SELECT <array<array<int64>>>$foo
             `,
       [
-            [
-              [1, 2],
-              [3, 4],
-            ],
+        [
+          [1, 2],
+          [3, 4],
+        ],
+      ],
+      {
+        variables: {
+          foo: [
+            [1, 2],
+            [3, 4],
           ],
-      { variables: { foo: [[1, 2], [3, 4]] } }
+        },
+      },
     );
     assertQueryResult(
       h,
@@ -11080,18 +10801,31 @@ describe("TestEdgeQLSelect", () => {
             SELECT <tuple<array<array<int64>>, array<array<str>>>>$foo
             `,
       [
+        [
+          [
+            [1, 2],
+            [3, 4],
+          ],
+          [
+            ["A", "B"],
+            ["C", "D"],
+          ],
+        ],
+      ],
+      {
+        variables: {
+          foo: [
             [
-              [
-                [1, 2],
-                [3, 4],
-              ],
-              [
-                ["A", "B"],
-                ["C", "D"],
-              ],
+              [1, 2],
+              [3, 4],
+            ],
+            [
+              ["A", "B"],
+              ["C", "D"],
             ],
           ],
-      { variables: { foo: [[[1, 2], [3, 4]], [["A", "B"], ["C", "D"]]] } }
+        },
+      },
     );
     assertQueryResult(
       h,
@@ -11099,50 +10833,55 @@ describe("TestEdgeQLSelect", () => {
             SELECT <array<array<tuple<int64, str>>>>$foo
             `,
       [
+        [
+          [
+            [1, "A"],
+            [1, "B"],
+          ],
+          [
+            [2, "A"],
+            [2, "B"],
+          ],
+        ],
+      ],
+      {
+        variables: {
+          foo: [
             [
-              [
-                [1, "A"],
-                [1, "B"],
-              ],
-              [
-                [2, "A"],
-                [2, "B"],
-              ],
+              [1, "A"],
+              [1, "B"],
+            ],
+            [
+              [2, "A"],
+              [2, "B"],
             ],
           ],
-      { variables: { foo: [[[1, "A"], [1, "B"]], [[2, "A"], [2, "B"]]] } }
+        },
+      },
     );
   });
 
   it("test_edgeql_select_params_01", () => {
     expect(() => {
-      h.query(
-        `select ($0, $1)`
-      );
+      h.query(`select ($0, $1)`);
     }).toThrow(new RegExp("missing a type cast"));
   });
 
   it("test_edgeql_select_params_02", () => {
     expect(() => {
-      h.query(
-        `select ($0, 5)`
-      );
+      h.query(`select ($0, 5)`);
     }).toThrow(new RegExp("missing a type cast"));
   });
 
   it("test_edgeql_select_params_03", () => {
     expect(() => {
-      h.query(
-        `select ($0, <std::int64>$0)`
-      );
+      h.query(`select ($0, <std::int64>$0)`);
     }).toThrow(new RegExp("missing a type cast"));
   });
 
   it("test_edgeql_select_params_04", () => {
     expect(() => {
-      h.query(
-        `select <std::int64>$0 { id }`
-      );
+      h.query(`select <std::int64>$0 { id }`);
     }).toThrow(new RegExp("cannot apply a shape to the parameter"));
   });
 
@@ -11159,7 +10898,7 @@ describe("TestEdgeQLSelect", () => {
                 )
             )
             select items;
-            `
+            `,
     );
   });
 
@@ -11171,7 +10910,7 @@ describe("TestEdgeQLSelect", () => {
               pointers := object_type.pointers,
               pointers_2 := (select pointers limit 1),
             select pointers_2;
-            `
+            `,
     );
   });
 
@@ -11183,14 +10922,14 @@ describe("TestEdgeQLSelect", () => {
                 create required property e -> int64;
                 create access policy lol allow all using (contains(.r, .e));
             };
-        `
+        `,
     );
     assertQueryResult(
       h,
       `
             select XR
             `,
-      []
+      [],
     );
   });
 
@@ -11198,7 +10937,7 @@ describe("TestEdgeQLSelect", () => {
     h.query(
       `
             select schema::Type {name, refs := .<target[is schema::Pointer]};
-            `
+            `,
     );
   });
 });
