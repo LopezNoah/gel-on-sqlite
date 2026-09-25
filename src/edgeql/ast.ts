@@ -421,6 +421,7 @@ export interface SelectStatement {
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
   typeName: string;
+  resultAlias?: string;
   typeFilterExprs?: TypeExpr[];
   /**
    * Per-branch type filter expressions arising from a set-expression like
@@ -561,7 +562,13 @@ export type FreeObjectExpr =
     }
   | {
       kind: "free_object_constructor";
-      entries: Array<{ name: string; expr: FreeObjectExpr }>;
+      entries: Array<{
+        name: string;
+        expr: FreeObjectExpr;
+        cardinality?: "one" | "many";
+        required?: boolean;
+      }>;
+      detached?: boolean;
       // Set when the source used `(name := …, …)` rather than `{name := …, …}`.
       // The paren form is a *named tuple* (cardinality is the cartesian
       // product of entries); the brace form is a free object (cardinality is
@@ -680,6 +687,7 @@ export type FreeObjectExpr =
   | {
       kind: "select_expr_subquery";
       alias?: string;
+      detached?: boolean;
       expr: FreeObjectExpr;
       clauses?: ClauseChain;
       filter?: FreeObjectExpr;
@@ -729,6 +737,7 @@ export interface SelectFreeStatement {
   with?: WithBinding[];
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
+  resultAlias?: string;
   entries: Array<{
     name: string;
     expr: FreeObjectExpr;
@@ -753,6 +762,7 @@ export interface SelectExprStatement {
   with?: WithBinding[];
   withModule?: string;
   withModuleAliases?: WithModuleAlias[];
+  resultAlias?: string;
   expr: FreeObjectExpr;
   orderBy?: OrderExprChain;
   pos: SourcePos;

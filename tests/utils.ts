@@ -16,6 +16,8 @@ import { SchemaSnapshot } from "../src/schema/schema.js";
 import { expect } from "vitest";
 import { loadSchema } from "../src/schema/load.js";
 import { expectLike } from "./python_query_test_helpers.js";
+import { acceptsGelGrammarBlock } from "../src/edgeql/gel_lr_parser.js";
+import { parseEdgeQLGrammarScript } from "../src/edgeql/grammar_parser.js";
 
 // Each test gets its own snapshot so test-time DDL (create function/type/…)
 // doesn't leak across tests. `cloneShared` makes that cheap: it shares the
@@ -194,6 +196,26 @@ export class QueryHarness {
     }
   }
 
+  private preflightGrammar(source: string): void {
+    if (process.env.SQLITE_TS_GRAMMAR_PREFLIGHT !== "1" || acceptsGelGrammarBlock(source)) return;
+    try {
+      // The generated table is authoritative for Gel syntax. The explicit
+      // TypeScript grammar is a test-only compatibility overlay for the small
+      // set of suite forms this repository accepts that upstream Gel rejects.
+      parseEdgeQLGrammarScript(source, this.defaultModule);
+    } catch (error) {
+      const example = source.replace(/\s+/g, " ").trim().slice(0, 160);
+      const detail = error instanceof Error ? `: ${error.message}` : "";
+      throw new Error(`Both Gel-generated and suite-compatibility grammars rejected ${example}${detail}`);
+    }
+  }
+
+  private runSetupScript(source: string) {
+    // Schema/data bootstrapping is fixture setup, not a test query. Keep the
+    // opt-in query-grammar gate on the actual query/script calls under test.
+    return this.client.scriptSyncEnvelope(source);
+  }
+
   /**
    * Factory method to create a fresh test database with schema/data.
    *
@@ -263,14 +285,14 @@ export class QueryHarness {
     if (shouldRunSetup && options.setup) {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
       const rawSource = fs.readFileSync(p, "utf-8");
-      harness.script(rawSource);
+      harness.runSetupScript(rawSource);
     }
 
     if (shouldRunSetup && options.extraSetups) {
       for (const extra of options.extraSetups) {
         const p = path.join(__dirname, "schemas", `${extra.setup}.edgeql`);
         const rawSource = fs.readFileSync(p, "utf-8");
-        harness.script(`SET MODULE ${extra.module};\n${rawSource}`);
+        harness.runSetupScript(`SET MODULE ${extra.module};\n${rawSource}`);
       }
     }
 
@@ -317,14 +339,14 @@ export class QueryHarness {
     if (options.setup) {
       const p = path.join(__dirname, "schemas", `${options.setup}.edgeql`);
       const rawSource = fs.readFileSync(p, "utf-8");
-      harness.script(rawSource);
+      harness.runSetupScript(rawSource);
     }
 
     if (options.extraSetups) {
       for (const extra of options.extraSetups) {
         const p = path.join(__dirname, "schemas", `${extra.setup}.edgeql`);
         const rawSource = fs.readFileSync(p, "utf-8");
-        harness.script(`SET MODULE ${extra.module};\n${rawSource}`);
+        harness.runSetupScript(`SET MODULE ${extra.module};\n${rawSource}`);
       }
     }
 
@@ -344,6 +366,7 @@ export class QueryHarness {
   }
 
   query(q: string, variables?: QueryVariables) {
+    this.preflightGrammar(q);
     return this.client.querySyncEnvelope(q, variables);
   }
 
@@ -351,6 +374,7 @@ export class QueryHarness {
    * Execute a multi-statement script (semicolon-separated)
    */
   script(s: string, variables?: QueryVariables) {
+    this.preflightGrammar(s);
     return this.client.scriptSyncEnvelope(s, variables);
   }
 

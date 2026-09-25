@@ -8,102 +8,60 @@ executable with `GEL_PYTHON`). It does not change the production parser.
 
 `scripts/grammar-spike.py` calls Gel's real `parse_block`: Rust tokenization and
 grammar-table parsing (`edb/edgeql/grammar.bc`), then Python grammar reductions
-that construct Gel's AST. A deliberately strict bridge converts just arithmetic
-SELECT expressions and simple object shapes with a scalar field filter to
-sqlite-ts's *working* AST. `scripts/grammar-spike.ts` compares this output with
-`parseEdgeQLScript`, including acceptance/rejection for unmapped statements.
+that construct Gel's AST. A deliberately strict bridge maps a small AST subset
+to sqlite-ts's working AST for arithmetic and introspection SELECTs, shapes,
+function calls, and nested INSERT conflict alternatives. `scripts/grammar-spike.ts`
+checks grammar-parser acceptance against Gel and compares the mapped subset
+directly with Gel's AST; the handwritten parser is not the syntax or AST target.
 
-On the 14-case sample: 5 mapped ASTs matched sqlite-ts (including precedence,
-parentheses, shapes, and a filter); 7 other syntax verdicts agreed; 2 differed:
+On the 27-case sample, all Gel accept/reject verdicts agree with the grammar
+parser and all 15 mapped ASTs match Gel. The remaining cases cover syntax
+acceptance outside the bridge and malformed expressions, shapes, literals, and
+bare statement forms. This is a hand-picked oracle sample, not full-language
+coverage.
 
-| Input | Gel | sqlite-ts |
-| --- | --- | --- |
-| `CREATE TYPE Foo { BLARG; };` | Rejects `BLARG` | Accepts, with an empty `createTypeBody` |
-| `DESCRIBE nonsense;` | Rejects the target | Accepts as a placeholder `describe` |
+## Generated syntax recognizer and AST reduction
 
-The cases also include valid statements outside the bridge (paths, Unicode
-identifier, bytes literal) and malformed expression, shape, literal, and bare
-statement forms. These numbers characterize only this hand-picked sample, not
-overall parser parity.
+Gel's build already compiles its Python grammar definitions into LR
+action/goto tables. `npm run codegen:edgeql-lr` exports those tables into the
+checked-in `src/edgeql/generated_gel_lr_spec.ts` artifact. The TypeScript
+recognizer in `src/edgeql/gel_lr_parser.ts` runs the generated tables against
+the existing tokenizer, with no Python or Rust dependency at runtime. The
+generated artifact is about 2.7 MB uncompressed.
 
-## TypeScript grammar follow-on
+The generated table is syntax recognition only: Gel's Python grammar reductions
+are not in the table. `src/edgeql/grammar_parser.ts` remains a TypeScript working-
+AST reducer for the syntax implemented so far. That AST is the seam consumed by
+the compiler; the outstanding work is reducing the generated CST into it.
 
-`src/edgeql/grammar_parser.ts` is a runnable, TypeScript-only second parser,
-using Chevrotain's self-validating grammar DSL over the **existing tokenizer**.
-It emits the existing working `Statement` AST (the seam the compiler already
-accepts), with no Python or Rust dependency at runtime. Bend-Gel's distinction
-between surface parsing and core interpretation guided the placement: syntax
-and AST construction live here; schema resolution and lowering stay downstream.
+`tests/grammar_parser.test.ts` checks syntax acceptance/rejection, script
+boundaries, Gel AST goldens, compiler artifacts and grammar-backed GROUP
+execution. The static coverage command extracts literal expected-success queries
+from conformance assertion helpers using TypeScript's parser, so string escapes
+are evaluated before parsing. On 7,409 extracted queries, the manual working-AST
+parser accepts **7,323 (98.8%)**; the generated Gel LR recognizer accepts
+**7,389 (99.7%)**. Thirty-one interpolated templates are excluded from this
+static count. A direct 13-case Gel syntax/AST probe agrees with the generated
+recognizer on every case. The larger corpus has 20 unique expected-success inputs
+that Gel itself rejects; those need a small suite-compatibility extension if the
+goal is to parse every local test input.
 
-The TypeScript grammar now parses SELECT expressions (arithmetic, booleans,
-casts, sets, arrays, conditionals, nested SELECT, paths, function calls and
-indexing), simple shapes and filters, ORDER BY/OFFSET/LIMIT, expression-valued
-WITH bindings, basic INSERT/UPDATE/DELETE and FOR. It can also split scripts
-with `parseEdgeQLGrammarScript`; module-state changes within scripts are not
-supported. Unsupported forms fail explicitly: the module **does not fall
-back** to the handwritten parser or affect its production routing. Call
-`parseEdgeQLGrammar(query)` directly, or use the built ESM module. The Python
-script remains an *optional, offline* Gel syntax oracle.
+`SQLITE_TS_GRAMMAR_PREFLIGHT=1 npm test` runs the generated recognizer over
+actual `QueryHarness.query()` and `script()` inputs, including interpolated
+strings. The preflight occurs before the existing execution pipeline; it does
+not yet execute grammar-produced ASTs. Its latest full run reports 688 failed,
+3,916 passed and 593 skipped. Those failures include existing
+runtime/expected-value failures and the remaining local syntax mismatches, so
+the count is not itself a parse-coverage metric. The generated parser is still
+not routed into production.
 
-Verification: `tests/grammar_parser.test.ts` checks the working AST, invalid
-input, script boundaries and SQL-artifact parity through `CompilerService`.
-`npx tsx scripts/grammar-spike.ts` additionally compared 26 examples' syntax
-verdicts with Gel (and accepted ASTs with sqlite-ts): 26/26 matched. `npm run
-build` and importing the resulting ESM module work. A *before-expansion*
-five-query microbenchmark took ~10.8 µs/query vs ~5.6 µs/query for the old
-parser; remeasure on realistic queries before switching.
+## Initial feasibility context
 
-`npx tsx scripts/grammar-coverage.ts` extracts literal single-statement
-queries from ported integration tests, ignores interpolated/multi-statement
-examples, and compares ASTs against the existing parser. On this **heuristic,
-duplicate-heavy sample** it found 7,294 queries the old parser accepted:
-the new grammar parsed 3,326 and produced equivalent ASTs for 3,247 (~44.5%
-of the sample), with **79 AST differences** to investigate. The breakdown is
-2,992/5,474 SELECT, 130/1,424 WITH, 76/157 FOR, 15/22 INSERT, 1/1 DELETE,
-and 0/16 GROUP AST-equal, plus 33 queries beginning with comments. UPDATE and
-DDL/SDL are underrepresented by this extraction. None of these numbers proves
-Gel syntax parity; the old parser can itself accept invalid syntax.
-
-**This is not a full-language parser yet.** Next coverage clusters: type
-intersections and advanced shape syntax, richer WITH and nested statements,
-FOR/GROUP, DML conflict/assignment forms, session/transaction statements,
-DDL bodies, SDL and script module state. Existing syntax tests alone aren't a
-coverage gate: many test only rejection, and the handwritten parser's
-passthroughs can accept invalid input. For a full-language replacement, measure
-the accepted and rejected Gel syntax corpus, pin the AST and SQL artifacts,
-resolve the 79 current AST differences, and benchmark realistic queries and
-bundle size. It may be worth generating TypeScript-consumable grammar tables
-from Gel's grammar *at build time*, rather than manually maintaining every
-upstream production in the Chevrotain DSL; that approach still needs a
-TypeScript AST reduction layer and remains unproven. Do not route production
-queries to the grammar by catching its errors and retrying the old parser:
-that would let the old permissive parser accept the malformed input the grammar
-is meant to reject.
-
-## Original feasibility decision
-
-**Worth pursuing as a syntax-parity effort, but not yet as a parser rewrite.**
-The existing `parseEdgeQL` interface can remain the seam: the small AST mapping
-demonstrates a grammar-backed implementation can feed its callers without
-changing the compiler. Gel's grammar also catches real over-acceptance in the
-current DDL/admin passthrough paths.
-
-The difficult part is not specifying productions. Gel's source grammar lives
-in Python (`edb/edgeql/parser/grammar/`); `grammar.bc` is consumed by its Rust
-parser, whose concrete syntax tree is reduced to the Gel AST by Python methods.
-Neither the grammar table nor the Rust parser alone produces sqlite-ts's AST.
-Even `SELECT User.name` is outside this tiny bridge: it needs path-to-select
-normalization and default shape construction. Shaped/computed paths, bindings,
-DDL, positions and error translation would each add rules. The generated
-`src/edgeql/qlast.ts` mirrors Gel's AST but the compiler consumes `ast.ts`, so
-using qlast directly would move the mapping task downstream. The Python process
-in this spike is a development oracle, not a viable TS/browser runtime seam.
-
-Next: use Gel's parser as an **offline differential oracle** over the existing
-syntax corpus, prioritizing accepted-invalid cases that could execute
-incorrectly (especially skipped DDL bodies). Before selecting a production
-parser architecture, prototype one more *substantial* vertical slice with a
-JS/WASM-deliverable parser and full AST mapping (paths, shapes, WITH bindings,
-errors, locations); measure coverage, build size and parse time against
-`scripts/bench-parser.ts`. Only replace the current parser if that mapping
-stays local and brings a substantial parity gain.
+Gel's source grammar lives in Python (`edb/edgeql/parser/grammar/`), while the
+generated LR table is reduced to Gel's `qlast` by Python methods in
+`edb/edgeql/parser/__init__.py`. The generated recognizer proves grammar
+production code can remove manual syntax production maintenance. It does not
+remove the need for a TypeScript reducer: Gel `qlast` is not the compiler's
+working `ast.ts` representation. The active gate is test-suite syntax
+acceptance—not handwritten-parser AST equality—followed by expected-value
+execution using ASTs produced by the new path.

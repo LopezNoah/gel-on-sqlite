@@ -1,7 +1,8 @@
 import { EmbeddedActionsParser, Lexer, createToken, createTokenInstance, tokenMatcher, type TokenType } from "chevrotain";
 import { AppError } from "../errors.js";
 import { extractTrailingBraceBlock, parseAlterTypeBody, parseCreateTypeBody, type AlterTypeOp } from "./ddl_body.js";
-import type { ComputedExpr, ConfigureStatement, DDLStatement, FilterExpr, FreeObjectExpr, FunctionCallArgExpr, FunctionDecl, FunctionParamDecl, GroupByAtom, GroupByElement, GroupExpr, GroupStatement, InsertValue, OrderExpr, OrderExprChain, ShapeElement, Statement, TypeExpr, WithBinding } from "./ast.js";
+import type { ComputedExpr, ConfigureStatement, DDLStatement, FilterExpr, ForStatement, FreeObjectExpr, FunctionCallArgExpr, FunctionDecl, FunctionParamDecl, GroupByAtom, GroupByElement, GroupExpr, GroupStatement, InsertConflict, InsertValue, OrderExpr, OrderExprChain, PathStep, ShapeElement, Statement, TypeExpr, WithBinding } from "./ast.js";
+import { simpleTypeName } from "./ast.js";
 import { offsetToLineCol, tokenizeWithStarts, type Token, type TokenKind } from "./tokenizer.js";
 
 // A second, explicitly scoped parser. It reuses the production tokenizer but
@@ -10,20 +11,23 @@ import { offsetToLineCol, tokenizeWithStarts, type Token, type TokenKind } from 
 const Name = createToken({ name: "Name", pattern: Lexer.NA });
 const kinds = [
   "kw_select", "kw_with", "kw_filter", "kw_or", "kw_and", "kw_not",
-  "kw_true", "kw_false", "kw_null", "kw_unreserved", "identifier", "backtick_name",
+  "kw_true", "kw_false", "kw_null", "kw_typeof", "kw_type", "kw_introspect",
+  "kw_unreserved", "identifier", "backtick_name",
   "kw_current_reserved", "kw_current_reserved_source", "kw_current_reserved_subject",
   "kw_current_reserved_type", "kw_current_reserved_std", "kw_current_reserved_edgedbsys",
   "kw_current_reserved_edgedbtpl", "kw_current_reserved_new", "kw_current_reserved_old",
   "kw_current_reserved_specified", "kw_current_reserved_default",
+  "kw_object",
   "number", "string", "bytes_string", "semi", "lparen", "rparen", "lbrace", "rbrace", "comma", "colon",
+  "str_interp_start", "str_interp_cont", "str_interp_end",
   "dot", "coloncolon", "assign", "plus", "minus", "star", "slash", "floor_div",
-  "modulo", "pow", "coalesce", "concat", "equals", "not_equals", "lt", "lte",
+  "double_splat", "modulo", "pow", "coalesce", "concat", "pipe", "ampersand", "equals", "not_equals", "lt", "lte",
   "gt", "gte", "distinct_from", "not_distinct_from",
   "kw_order", "kw_by", "kw_asc", "kw_desc", "kw_empty", "kw_limit", "kw_offset",
   "lbracket", "rbracket", "kw_distinct", "kw_exists",
   "kw_if", "kw_then", "kw_else", "kw_like", "kw_ilike", "parameter",
   "kw_insert", "kw_unless", "kw_conflict",
-  "kw_on", "kw_module", "kw_optional",
+  "kw_on", "kw_module", "kw_schema", "kw_optional", "kw_single", "kw_multi", "kw_required",
   "kw_update", "kw_delete", "kw_set",
   "kw_for", "kw_in", "kw_union", "kw_except", "kw_intersect",
   "kw_group", "kw_using", "kw_is", "kw_detached", "backward_link", "optional_link", "at",
@@ -34,7 +38,9 @@ const tokens = Object.fromEntries(kinds.map((kind) => [
     name: kind,
     pattern: Lexer.NA,
     categories: ["identifier", "backtick_name", "kw_unreserved"].includes(kind)
-      || kind.startsWith("kw_current_reserved") ? [Name] : [],
+      || kind.startsWith("kw_current_reserved") || kind === "kw_object"
+      || kind === "kw_schema" || kind === "kw_type"
+      || ["kw_optional", "kw_single", "kw_multi", "kw_required"].includes(kind) ? [Name] : [],
   }),
 ])) as Record<GrammarKind, TokenType>;
 
@@ -52,11 +58,34 @@ const functionArg = (expr: FreeObjectExpr, bindings: ReadonlySet<string>): Funct
     && expr.shape[0].name === "id" && Object.keys(expr.clauses).length === 0
     ? { kind: "binding_ref", name: expr.typeName }
     : { kind: "expr", expr };
+const validateFunctionCallArgs = (args: readonly FunctionCallArgExpr[], line: number, column: number): void => {
+  let sawNamed = false;
+  const seenNames = new Set<string>();
+  for (const arg of args) {
+    if (arg.kind === "named_arg") {
+      sawNamed = true;
+      if (seenNames.has(arg.name)) {
+        throw syntaxError(`duplicate named argument '${arg.name}' in function call`, line, column);
+      }
+      seenNames.add(arg.name);
+    } else if (sawNamed) {
+      throw syntaxError("positional argument follows a named argument in function call", line, column);
+    }
+  }
+};
 
 const computedExpr = (expr: FreeObjectExpr): ComputedExpr => {
   if (expr.kind === "literal") return { kind: "literal", value: expr.value };
   if (expr.kind === "binding_ref") return expr;
   if (expr.kind === "function_call") return expr;
+  if (expr.kind === "field_access" && expr.expr.kind === "field_access"
+      && expr.expr.expr.kind === "current_item" && expr.expr.field === "__type__"
+      && expr.field === "name") {
+    return { kind: "type_name" };
+  }
+  if (expr.kind === "field_access" && expr.expr.kind === "current_item" && expr.field === "__type__") {
+    return { kind: "type_name" };
+  }
   if (expr.kind === "field_access" && expr.expr.kind === "current_item") {
     return { kind: "field_ref", field: expr.field };
   }
@@ -91,7 +120,7 @@ const filterFromExpr = (predicate: FreeObjectExpr): FilterExpr => {
   };
   if (predicate.kind === "in_expr") {
     const target = targetFor(predicate.left);
-    if (!target) throw syntaxError("FILTER IN target is outside the grammar-backed AST slice");
+    if (!target) return { kind: "free_expr", expr: predicate };
     const values = predicate.right.kind === "set_literal" ? predicate.right
       : predicate.right.kind === "set_expr" ? { kind: "expr_set" as const, values: predicate.right.values }
       : predicate.right.kind === "select" ? { kind: "select" as const, query: {
@@ -115,6 +144,42 @@ const filterFromExpr = (predicate: FreeObjectExpr): FilterExpr => {
 const syntaxError = (message: string, line = 1, column = 1): AppError =>
   new AppError("E_SYNTAX", message, line, column);
 
+type InsertConflictAlternativeInput =
+  | { kind: "type_name"; name: string }
+  | { kind: "select_expr"; expr: FreeObjectExpr }
+  | { kind: "update_statement"; statement: Statement };
+
+function insertConflictAlternative(
+  alternative: InsertConflictAlternativeInput,
+  defaultModule: string | undefined,
+  line: number,
+  column: number,
+): NonNullable<InsertConflict["else"]> {
+  if (alternative.kind === "type_name") {
+    return {
+      kind: "select", typeName: inModule(alternative.name, defaultModule),
+      shape: defaultShape(), clauses: {},
+    };
+  }
+  if (alternative.kind === "update_statement") {
+    if (alternative.statement.kind !== "update") {
+      throw syntaxError("Expected an UPDATE statement in UNLESS CONFLICT ELSE", line, column);
+    }
+    const update = alternative.statement;
+    return {
+      kind: "update", typeName: update.typeName,
+      ...(update.filter ? { filter: update.filter } : {}),
+      values: update.values,
+      ...(update.operations ? { operations: update.operations } : {}),
+    };
+  }
+  const query = alternative.expr.kind === "select_expr_subquery" ? alternative.expr.expr : alternative.expr;
+  if (query.kind === "select") {
+    return { kind: "select", typeName: query.typeName, shape: query.shape, clauses: query.clauses };
+  }
+  throw syntaxError("Expected a SELECT or UPDATE expression in UNLESS CONFLICT ELSE", line, column);
+}
+
 function numberLiteral(text: string, line: number, column: number): FreeObjectExpr {
   const cleaned = text.replace(/_/g, "");
   const numericKind = cleaned.endsWith("n") ? /[.eE]/.test(cleaned) ? "decimal" : "bigint"
@@ -122,15 +187,109 @@ function numberLiteral(text: string, line: number, column: number): FreeObjectEx
   const digits = cleaned.replace(/n$/, "");
   const value = Number(digits);
   if (!Number.isFinite(value)
-      || (numericKind === "integer" && digits.length >= 20)
+      || (numericKind === "integer" && digits.length > 20)
       || (value === 0 && /[1-9]/.test(digits.split(/[eE]/)[0] ?? ""))) {
     throw syntaxError(`Numeric literal out of range: ${text}`, line, column);
   }
   return { kind: "literal", value, numericKind };
 }
 
+function tupleAccess(expr: FreeObjectExpr, text: string): FreeObjectExpr {
+  const parts = text.split(".");
+  if (parts.some((part) => !/^[0-9](?:[0-9_]*[0-9])?$/.test(part))) {
+    throw syntaxError(`Invalid tuple index '${text}': tuple indices must be plain integers`);
+  }
+  return parts.reduce<FreeObjectExpr>((current, part) => ({
+    kind: "index_access", expr: current, index: Number(part.replace(/_/g, "")),
+  }), expr);
+}
+
 type MathOp = Extract<FreeObjectExpr, { kind: "math" }>["op"];
 type CompareOp = Extract<FreeObjectExpr, { kind: "compare" }>["op"];
+type GrammarOrderItem = {
+  expr: FreeObjectExpr;
+  direction: "asc" | "desc";
+  nullsPosition?: "first" | "last";
+  then?: GrammarOrderItem;
+};
+type GrammarOrderSuffix = Pick<GrammarOrderItem, "direction" | "nullsPosition">;
+
+function orderExprForSelect(item: GrammarOrderItem, typeName: string): OrderExpr {
+  const orderField = item.expr.kind === "field_access" && (
+    item.expr.expr.kind === "current_item"
+    || (item.expr.expr.kind === "select" && item.expr.expr.typeName === typeName)
+  );
+  const nameSort = item.expr.kind === "binding_ref" ? item.expr.name
+    : item.expr.kind === "path" ? `${item.expr.head}.${item.expr.tail}` : undefined;
+  return {
+    field: orderField ? (item.expr as Extract<FreeObjectExpr, { kind: "field_access" }>).field
+      : nameSort ?? "__expr__",
+    ...(orderField || nameSort ? {} : { expr: item.expr }),
+    direction: item.direction,
+    ...(item.nullsPosition ? { nullsPosition: item.nullsPosition } : {}),
+    ...(item.then ? { then: orderExprForSelect(item.then, typeName) } : {}),
+  };
+}
+
+function orderExprChain(item: GrammarOrderItem): OrderExprChain {
+  return {
+    expr: item.expr,
+    direction: item.direction,
+    ...(item.nullsPosition ? { nullsPosition: item.nullsPosition } : {}),
+    ...(item.then ? { then: orderExprChain(item.then) } : {}),
+  };
+}
+
+function orderUsesOnlyCurrentItemFields(item: GrammarOrderItem): boolean {
+  return item.expr.kind === "field_access" && item.expr.expr.kind === "current_item"
+    && (!item.then || orderUsesOnlyCurrentItemFields(item.then));
+}
+
+function pathStepsForExpr(expr: FreeObjectExpr): PathStep[] | undefined {
+  if (expr.kind === "path_steps") return [...expr.steps];
+  if (expr.kind === "path") return expr.steps ? [...expr.steps] : [
+    { kind: "object_ref", name: expr.head }, { kind: "ptr", name: expr.tail, direction: "outbound" },
+  ];
+  if (expr.kind === "path_chain") {
+    const [head, ...tail] = expr.parts;
+    return head ? [
+      { kind: "object_ref", name: head }, ...tail.map((name) => ({ kind: "ptr" as const, name, direction: "outbound" as const })),
+    ] : undefined;
+  }
+  if (expr.kind === "binding_ref") return [{ kind: "object_ref", name: expr.name }];
+  if (expr.kind === "select") return [{ kind: "object_ref", name: expr.typeName }];
+  if (expr.kind === "current_item") return [{ kind: "object_ref", name: "__current__" }];
+  if (expr.kind === "field_access") {
+    const base = pathStepsForExpr(expr.expr);
+    return base ? [...base, { kind: "ptr", name: expr.field, direction: "outbound", optional: expr.optional }] : undefined;
+  }
+  if (expr.kind === "backlink_path") return [
+    { kind: "object_ref", name: "__current__" },
+    { kind: "ptr", name: expr.link, direction: "inbound", optional: expr.optional },
+  ];
+  return undefined;
+}
+
+function mutationTargetTypeName(expr: FreeObjectExpr, bindings: ReadonlySet<string>): string {
+  switch (expr.kind) {
+    case "select": return expr.typeName;
+    case "path": return expr.head;
+    case "path_chain": return expr.parts[0] ?? "Object";
+    case "path_steps": {
+      const first = expr.steps[0];
+      return first?.kind === "object_ref" ? first.name : "Object";
+    }
+    case "set_expr": return expr.values[0] ? mutationTargetTypeName(expr.values[0], bindings) : "Object";
+    case "select_expr_subquery":
+    case "shape_projection":
+    case "distinct":
+    case "cast":
+    case "field_access":
+    case "is_type": return mutationTargetTypeName(expr.expr, bindings);
+    case "binding_ref": return bindings.has(expr.name) ? "Object" : expr.name;
+    default: return "Object";
+  }
+}
 
 class GrammarParser extends EmbeddedActionsParser {
   readonly bindings = new Set<string>();
@@ -138,6 +297,7 @@ class GrammarParser extends EmbeddedActionsParser {
   readonly explicitShapes = new WeakSet<FreeObjectExpr>();
   defaultModule?: string;
   declare statement: () => Statement;
+  declare ifStatement: () => Statement;
   declare binding: () => WithBinding;
   declare withDmlStatement: () => Statement;
   declare expression: () => FreeObjectExpr;
@@ -152,15 +312,25 @@ class GrammarParser extends EmbeddedActionsParser {
   declare postfix: () => FreeObjectExpr;
   declare shape: () => ShapeElement[];
   declare shapeEntry: () => ShapeElement;
-  declare orderItem: () => { expr: FreeObjectExpr; direction: "asc" | "desc" };
+  declare shapeEntryCore: () => ShapeElement;
+  declare computedBacklinkShapeEntry: () => ShapeElement;
+  declare orderItem: () => GrammarOrderItem;
+  declare orderSuffix: () => GrammarOrderSuffix;
   declare braces: () => FreeObjectExpr;
-  declare objectEntry: () => { name: string; expr: FreeObjectExpr };
+  declare objectEntry: () => {
+    name: string; expr: FreeObjectExpr;
+    cardinality?: "one" | "many"; required?: boolean;
+  };
   declare array: () => FreeObjectExpr;
   declare innerSelect: () => FreeObjectExpr;
   declare insertStatement: () => Statement;
   declare insertEntry: () => { name: string; value: InsertValue };
+  declare updateSubject: () => { typeName: string; target?: FreeObjectExpr };
   declare updateStatement: () => Statement;
   declare deleteStatement: () => Statement;
+  declare forStatementBinder: () => {
+    variable: string; optional: boolean; iteratorExpr: FreeObjectExpr; pos: { line: number; column: number };
+  };
   declare forStatement: () => Statement;
   declare forExpr: () => FreeObjectExpr;
   declare groupStatement: () => GroupStatement;
@@ -171,9 +341,18 @@ class GrammarParser extends EmbeddedActionsParser {
   declare groupUsing: () => { alias: string; expr: FreeObjectExpr };
   declare tupleEntries: () => Array<{ name: string; expr: FreeObjectExpr }>;
   declare parenthesized: () => FreeObjectExpr;
+  declare stringInterpolation: () => FreeObjectExpr;
   declare subscriptBound: () => FreeObjectExpr;
   declare atom: () => FreeObjectExpr;
+  declare functionCallArg: () => FunctionCallArgExpr;
   declare qualifiedName: () => string;
+  declare typeExpr: () => TypeExpr;
+  declare typeIntersectExpr: () => TypeExpr;
+  declare typeAtom: () => TypeExpr;
+  declare castType: () => string;
+  declare castTypeIntersect: () => string;
+  declare castTypeUnit: () => string;
+  declare castTypeArg: () => string;
 
   constructor() {
     super([Name, ...Object.values(tokens)], { recoveryEnabled: false });
@@ -185,12 +364,21 @@ class GrammarParser extends EmbeddedActionsParser {
       $.OPTION(() => {
         $.CONSUME(tokens.kw_with);
         withBindings.push($.SUBRULE($.binding));
-        $.MANY(() => {
+        $.MANY({ GATE: () => tokenMatcher($.LA(1), tokens.comma)
+          && !tokenMatcher($.LA(2), tokens.kw_select), DEF: () => {
           $.CONSUME(tokens.comma);
           withBindings.push($.SUBRULE2($.binding));
-        });
+        } });
+        $.OPTION6({ GATE: () => tokenMatcher($.LA(1), tokens.comma)
+          && tokenMatcher($.LA(2), tokens.kw_select), DEF: () => $.CONSUME3(tokens.comma) });
       });
       const start = $.CONSUME(tokens.kw_select);
+      let resultAlias: string | undefined;
+      $.OPTION7({ GATE: () => tokenMatcher($.LA(1), Name) && tokenMatcher($.LA(2), tokens.assign), DEF: () => {
+        resultAlias = $.CONSUME(Name).image;
+        $.CONSUME(tokens.assign);
+        $.ACTION(() => { if (resultAlias !== undefined) $.bindings.add(resultAlias); });
+      } });
       const head = $.LA(1);
       const result = $.SUBRULE($.expression);
       let filter: FilterExpr | undefined;
@@ -208,67 +396,99 @@ class GrammarParser extends EmbeddedActionsParser {
         order = $.SUBRULE($.orderItem);
       });
       let offset: number | undefined;
+      let offsetExpr: FreeObjectExpr | undefined;
       $.OPTION4(() => {
         $.CONSUME(tokens.kw_offset);
-        const value = $.CONSUME(tokens.number);
-        offset = $.ACTION(() => Number(value.image));
+        const value = $.SUBRULE3($.expression);
+        $.ACTION(() => {
+          if (value.kind === "literal" && typeof value.value === "number" && value.numericKind === "integer") {
+            offset = value.value;
+          } else offsetExpr = value;
+        });
       });
       let limit: number | undefined;
+      let limitExpr: FreeObjectExpr | undefined;
       $.OPTION5(() => {
         $.CONSUME(tokens.kw_limit);
-        const value = $.CONSUME2(tokens.number);
-        limit = $.ACTION(() => Number(value.image));
+        const value = $.SUBRULE4($.expression);
+        $.ACTION(() => {
+          if (value.kind === "literal" && typeof value.value === "number" && value.numericKind === "integer") {
+            limit = value.value;
+          } else limitExpr = value;
+        });
       });
       $.MANY2(() => $.CONSUME(tokens.semi));
       return $.ACTION(() => {
         const pos = { line: start.startLine!, column: start.startColumn! };
-        const subject = result.kind === "binding_ref" && !$.bindings.has(result.name)
-          && (filter || filterExpr || order || limit !== undefined || offset !== undefined)
-          ? typeSource(inModule(result.name, $.defaultModule)) : result;
-        const shaped = $.explicitShapes.has(subject);
-        const directShape = subject.kind === "select" && head.image === subject.typeName.split("::")[0]
+        const shapeProjection = result.kind === "shape_projection" ? result : undefined;
+        const shapePath = shapeProjection?.expr.kind === "path_steps" ? shapeProjection.expr : undefined;
+        const rootStep = shapePath?.steps[0];
+        const filterSteps = shapePath?.steps.slice(1);
+        const typedObjectShape = shapeProjection && rootStep?.kind === "object_ref"
+          && filterSteps?.length
+          && filterSteps.every((step) => step.kind === "type_intersection" && step.typeExpr)
+          ? {
+              subject: { kind: "select" as const, typeName: rootStep.name,
+                shape: shapeProjection.shape, clauses: {} },
+              filters: filterSteps.map((step) => (step as Extract<typeof step, { kind: "type_intersection" }>).typeExpr!),
+            }
+          : undefined;
+        const baseResult = typedObjectShape?.subject ?? result;
+        const subject = baseResult.kind === "binding_ref" && !$.bindings.has(baseResult.name)
+          && (filter || filterExpr || order || limit !== undefined || offset !== undefined || limitExpr || offsetExpr)
+          ? typeSource(inModule(baseResult.name, $.defaultModule)) : baseResult;
+        const shaped = $.explicitShapes.has(subject) || typedObjectShape !== undefined;
+        const directShape = subject.kind === "select"
+          && head.image.toLowerCase() === subject.typeName.split("::")[0].toLowerCase()
           && head.tokenTypeIdx !== tokens.lparen.tokenTypeIdx;
-        if (subject.kind === "select" && (filter || order || limit !== undefined || offset !== undefined || (shaped && directShape))) {
-          const orderField = order?.expr.kind === "field_access" && (
-            order.expr.expr.kind === "current_item"
-            || (order.expr.expr.kind === "select" && order.expr.expr.typeName === subject.typeName)
-          );
-          const nameSort = order?.expr.kind === "binding_ref" ? order.expr.name
-            : order?.expr.kind === "path" ? `${order.expr.head}.${order.expr.tail}` : undefined;
-          const orderBy: OrderExpr | undefined = order && {
-            field: orderField ? (order.expr as Extract<FreeObjectExpr, { kind: "field_access" }>).field : nameSort ?? "__expr__",
-            ...(orderField || nameSort ? {} : { expr: order.expr }),
-            direction: order.direction,
-          };
+        if (subject.kind === "select" && (filter || order || limit !== undefined || offset !== undefined
+            || limitExpr || offsetExpr || (shaped && directShape))) {
+          const orderBy = order ? orderExprForSelect(order, subject.typeName) : undefined;
           return {
-            kind: "select", typeName: subject.typeName, shape: subject.shape,
+            kind: "select", typeName: subject.typeName,
+            ...(resultAlias ? { resultAlias } : {}), shape: subject.shape,
             fields: subject.shape.filter((element) => element.kind === "field").map((element) => element.name),
+            ...(typedObjectShape ? { typeFilterExprs: typedObjectShape.filters } : {}),
             ...(filter ? { filter } : {}), ...(orderBy ? { orderBy } : {}),
             ...(offset !== undefined ? { offset } : {}), ...(limit !== undefined ? { limit } : {}),
+            ...(offsetExpr ? { offsetExpr } : {}), ...(limitExpr ? { limitExpr } : {}),
             pos, ...(withBindings.length ? { with: withBindings } : {}),
           };
         }
         if (filterExpr) {
           const expr: FreeObjectExpr = { kind: "select_expr_subquery", expr: subject, filter: filterExpr,
-            ...(offset !== undefined ? { offset } : {}), ...(limit !== undefined ? { limit } : {}) };
+            ...(offset !== undefined ? { offset } : {}), ...(limit !== undefined ? { limit } : {}),
+            ...(offsetExpr ? { offsetExpr } : {}), ...(limitExpr ? { limitExpr } : {}) };
           return { kind: "select_expr", expr, pos,
-            ...(withBindings.length ? { with: withBindings } : {}) };
+            ...(withBindings.length ? { with: withBindings } : {}),
+            ...(resultAlias ? { resultAlias } : {}) };
         }
         if (subject.kind === "free_object_constructor" && head.tokenTypeIdx === tokens.lbrace.tokenTypeIdx) {
-          if (order || offset !== undefined || limit !== undefined) {
+          if (order || offset !== undefined || limit !== undefined || offsetExpr || limitExpr) {
             throw syntaxError("Free object clauses are outside the grammar-backed AST slice", pos.line, pos.column);
           }
           return { kind: "select_free", entries: subject.entries, pos,
-            ...(withBindings.length ? { with: withBindings } : {}) };
+            ...(withBindings.length ? { with: withBindings } : {}),
+            ...(resultAlias ? { resultAlias } : {}) };
         }
-        const orderBy: OrderExprChain | undefined = order && { expr: order.expr, direction: order.direction };
-        const expr: FreeObjectExpr = offset !== undefined || limit !== undefined
+        const orderBy = order ? orderExprChain(order) : undefined;
+        const expr: FreeObjectExpr = offset !== undefined || limit !== undefined || offsetExpr || limitExpr
           ? { kind: "select_expr_subquery", expr: subject, ...(offset !== undefined ? { offset } : {}),
-              ...(limit !== undefined ? { limit } : {}) }
+              ...(limit !== undefined ? { limit } : {}), ...(offsetExpr ? { offsetExpr } : {}),
+              ...(limitExpr ? { limitExpr } : {}) }
           : subject;
         return { kind: "select_expr", expr, ...(orderBy ? { orderBy } : {}), pos,
-          ...(withBindings.length ? { with: withBindings } : {}) };
+          ...(withBindings.length ? { with: withBindings } : {}),
+          ...(resultAlias ? { resultAlias } : {}) };
       });
+    });
+
+    $.RULE("ifStatement", (): Statement => {
+      const start = $.LA(1);
+      const expr = $.SUBRULE($.expression);
+      $.MANY(() => $.CONSUME(tokens.semi));
+      return $.ACTION(() => ({ kind: "select_expr", expr,
+        pos: { line: start.startLine ?? 1, column: start.startColumn ?? 1 } }));
     });
 
     $.RULE("insertStatement", (): Statement => {
@@ -289,6 +509,7 @@ class GrammarParser extends EmbeddedActionsParser {
       $.CONSUME(tokens.rbrace);
       let conflict = false;
       let onFields: string[] | undefined;
+      let conflictElse: NonNullable<InsertConflict["else"]> | undefined;
       $.OPTION3(() => {
         $.CONSUME(tokens.kw_unless);
         $.CONSUME(tokens.kw_conflict);
@@ -314,11 +535,46 @@ class GrammarParser extends EmbeddedActionsParser {
             } },
           ]);
         });
+        $.OPTION5(() => {
+          const elseToken = $.CONSUME(tokens.kw_else);
+          const elsePosition = {
+            line: elseToken.startLine ?? 1,
+            column: elseToken.startColumn ?? 1,
+          };
+          let parenthesized = false;
+          $.OPTION6(() => {
+            $.CONSUME2(tokens.lparen);
+            parenthesized = true;
+          });
+          const alternative = $.OR2([
+            { GATE: () => tokenMatcher($.LA(1), tokens.kw_update), ALT: () => ({
+              kind: "update_statement" as const, statement: $.SUBRULE($.updateStatement),
+            }) },
+            { GATE: () => tokenMatcher($.LA(1), tokens.kw_select), ALT: () => ({
+              kind: "select_expr" as const, expr: $.SUBRULE($.innerSelect),
+            }) },
+            { ALT: () => ({ kind: "type_name" as const, name: $.SUBRULE2($.qualifiedName) }) },
+          ]);
+          $.OPTION7({ GATE: () => parenthesized, DEF: () => $.CONSUME2(tokens.rparen) });
+          conflictElse = $.ACTION(() => {
+            if (!onFields?.length) {
+              throw syntaxError(
+                "UNLESS CONFLICT ELSE (...) requires an ON (.field) target",
+                elsePosition.line, elsePosition.column,
+              );
+            }
+            return insertConflictAlternative(
+              alternative, $.defaultModule, elsePosition.line, elsePosition.column,
+            );
+          });
+        });
       });
       $.MANY2(() => $.CONSUME(tokens.semi));
       return $.ACTION(() => ({ kind: "insert", typeName: inModule(typeName, $.defaultModule), values,
-        ...(conflict ? { conflict: onFields?.length ? { onField: onFields[0],
-          ...(onFields.length > 1 ? { onFields } : {}) } : {} } : {}),
+        ...(conflict ? { conflict: {
+          ...(onFields?.length ? { onField: onFields[0], ...(onFields.length > 1 ? { onFields } : {}) } : {}),
+          ...(conflictElse ? { else: conflictElse } : {}),
+        } } : {}),
         pos: { line: start.startLine!, column: start.startColumn! } }));
     });
     $.RULE("insertEntry", (): { name: string; value: InsertValue } => {
@@ -358,9 +614,29 @@ class GrammarParser extends EmbeddedActionsParser {
       });
     });
 
+    $.RULE("updateSubject", (): { typeName: string; target?: FreeObjectExpr } => {
+      const isExpressionTarget = (): boolean => {
+        const first = $.LA(1);
+        const second = $.LA(2);
+        if ([tokens.lbrace, tokens.lparen, tokens.dot, tokens.backward_link, tokens.optional_link]
+          .some((kind) => tokenMatcher(first, kind))) return true;
+        return tokenMatcher(first, Name) && (
+          [tokens.lbracket, tokens.lbrace, tokens.dot, tokens.backward_link, tokens.optional_link]
+            .some((kind) => tokenMatcher(second, kind))
+          || $.bindings.has(first.image)
+        );
+      };
+      return $.OR([
+        { GATE: isExpressionTarget, ALT: () => {
+          const target = $.SUBRULE($.expression);
+          return $.ACTION(() => ({ typeName: mutationTargetTypeName(target, $.bindings), target }));
+        } },
+        { ALT: () => ({ typeName: $.SUBRULE2($.qualifiedName) }) },
+      ]);
+    });
     $.RULE("updateStatement", (): Statement => {
       const start = $.CONSUME(tokens.kw_update);
-      const typeName = $.SUBRULE($.qualifiedName);
+      const subject = $.SUBRULE($.updateSubject);
       let filter: FilterExpr | undefined;
       $.OPTION(() => {
         $.CONSUME(tokens.kw_filter);
@@ -383,12 +659,17 @@ class GrammarParser extends EmbeddedActionsParser {
       });
       $.CONSUME(tokens.rbrace);
       $.MANY2(() => $.CONSUME(tokens.semi));
-      return $.ACTION(() => ({ kind: "update", typeName: inModule(typeName, $.defaultModule), ...(filter ? { filter } : {}), values, operations,
+      return $.ACTION(() => ({ kind: "update", typeName: inModule(subject.typeName, $.defaultModule),
+        ...(subject.target ? { target: subject.target } : {}), ...(filter ? { filter } : {}), values, operations,
         pos: { line: start.startLine!, column: start.startColumn! } }));
     });
 
-    $.RULE("forStatement", (): Statement => {
+    $.RULE("forStatementBinder", (): {
+      variable: string; optional: boolean; iteratorExpr: FreeObjectExpr; pos: { line: number; column: number };
+    } => {
       const start = $.CONSUME(tokens.kw_for);
+      let optional = false;
+      $.OPTION(() => { $.CONSUME(tokens.kw_optional); optional = true; });
       const variable = $.CONSUME(Name).image;
       $.CONSUME(tokens.kw_in);
       const iteratorExpr = $.SUBRULE($.orExpr);
@@ -400,6 +681,13 @@ class GrammarParser extends EmbeddedActionsParser {
           } });
         }
       });
+      return { variable, optional, iteratorExpr,
+        pos: { line: start.startLine ?? 1, column: start.startColumn ?? 1 } };
+    });
+    $.RULE("forStatement", (): Statement => {
+      const binders = [$.SUBRULE($.forStatementBinder)];
+      $.MANY(() => binders.push($.SUBRULE2($.forStatementBinder)));
+      const start = binders[0];
       const body = $.OR([
         { ALT: () => {
           const select = $.CONSUME(tokens.kw_select);
@@ -416,12 +704,24 @@ class GrammarParser extends EmbeddedActionsParser {
             expr: expr.kind === "select_expr_subquery" ? expr.expr : expr,
             pos: next.tokenTypeIdx === tokens.lparen.tokenTypeIdx && inner.tokenTypeIdx === tokens.kw_select.tokenTypeIdx
               ? { line: inner.startLine!, column: inner.startColumn! }
-              : { line: start.startLine!, column: start.startColumn! } }));
+              : start.pos }));
         } },
+        { GATE: () => [tokens.kw_insert, tokens.kw_update, tokens.kw_delete].some((kind) => tokenMatcher($.LA(1), kind)), ALT: () => $.OR2([
+          { ALT: () => $.SUBRULE($.insertStatement) },
+          { ALT: () => $.SUBRULE($.updateStatement) },
+          { ALT: () => $.SUBRULE($.deleteStatement) },
+        ]) },
       ]);
-      $.MANY(() => $.CONSUME(tokens.semi));
-      return $.ACTION(() => ({ kind: "for", variable, optional: false, iteratorExpr, body,
-        pos: { line: start.startLine!, column: start.startColumn! } }));
+      $.MANY2(() => $.CONSUME(tokens.semi));
+      return $.ACTION(() => {
+        let nested: Statement = body;
+        for (let i = binders.length - 1; i >= 0; i--) {
+          const binder = binders[i];
+          nested = { kind: "for", variable: binder.variable, optional: binder.optional,
+            iteratorExpr: binder.iteratorExpr, body: nested as ForStatement["body"], pos: binder.pos };
+        }
+        return nested;
+      });
     });
 
     $.RULE("groupStatement", (): GroupStatement => {
@@ -429,10 +729,13 @@ class GrammarParser extends EmbeddedActionsParser {
       $.OPTION(() => {
         $.CONSUME(tokens.kw_with);
         withBindings = [$.SUBRULE($.binding)];
-        $.MANY2(() => {
+        $.MANY2({ GATE: () => tokenMatcher($.LA(1), tokens.comma)
+          && !tokenMatcher($.LA(2), tokens.kw_group), DEF: () => {
           $.CONSUME(tokens.comma);
           withBindings.push($.SUBRULE2($.binding));
-        });
+        } });
+        $.OPTION2({ GATE: () => tokenMatcher($.LA(1), tokens.comma)
+          && tokenMatcher($.LA(2), tokens.kw_group), DEF: () => $.CONSUME3(tokens.comma) });
       });
       const start = $.LA(1);
       const group = $.SUBRULE($.groupExpr);
@@ -564,10 +867,13 @@ class GrammarParser extends EmbeddedActionsParser {
     $.RULE("withDmlStatement", (): Statement => {
       $.CONSUME(tokens.kw_with);
       const withBindings = [$.SUBRULE($.binding)];
-      $.MANY(() => {
+      const finalStatement = () => [tokens.kw_insert, tokens.kw_update, tokens.kw_delete, tokens.kw_for]
+        .some((kind) => tokenMatcher($.LA(2), kind));
+      $.MANY({ GATE: () => tokenMatcher($.LA(1), tokens.comma) && !finalStatement(), DEF: () => {
         $.CONSUME(tokens.comma);
         withBindings.push($.SUBRULE2($.binding));
-      });
+      } });
+      $.OPTION({ GATE: finalStatement, DEF: () => $.CONSUME2(tokens.comma) });
       const statement = $.OR([
         { ALT: () => $.SUBRULE($.insertStatement) },
         { ALT: () => $.SUBRULE($.updateStatement) },
@@ -577,14 +883,41 @@ class GrammarParser extends EmbeddedActionsParser {
       return $.ACTION(() => ({ ...statement, with: withBindings } as Statement));
     });
 
-    $.RULE("orderItem", (): { expr: FreeObjectExpr; direction: "asc" | "desc" } => {
+    $.RULE("orderItem", (): GrammarOrderItem => {
       const expr = $.SUBRULE($.expression);
+      const suffix = $.SUBRULE($.orderSuffix);
+      const head: GrammarOrderItem = { expr, ...suffix };
+      let current = head;
+      $.MANY(() => {
+        $.CONSUME(tokens.kw_then);
+        const nextExpr = $.SUBRULE2($.expression);
+        const nextSuffix = $.SUBRULE2($.orderSuffix);
+        const next: GrammarOrderItem = { expr: nextExpr, ...nextSuffix };
+        current.then = next;
+        current = next;
+      });
+      return head;
+    });
+
+    $.RULE("orderSuffix", (): GrammarOrderSuffix => {
       let direction: "asc" | "desc" = "asc";
       $.OPTION(() => $.OR([
         { ALT: () => { $.CONSUME(tokens.kw_asc); direction = "asc"; } },
         { ALT: () => { $.CONSUME(tokens.kw_desc); direction = "desc"; } },
       ]));
-      return { expr, direction };
+      let nullsPosition: "first" | "last" | undefined;
+      $.OPTION2(() => {
+        $.CONSUME(tokens.kw_empty);
+        const position = $.CONSUME(Name);
+        nullsPosition = $.ACTION(() => {
+          const lowered = position.image.toLowerCase();
+          if (lowered !== "first" && lowered !== "last") {
+            throw syntaxError("Expected FIRST or LAST after EMPTY", position.startLine!, position.startColumn!);
+          }
+          return lowered;
+        });
+      });
+      return { direction, nullsPosition };
     });
 
     $.RULE("expression", (): FreeObjectExpr => {
@@ -649,6 +982,16 @@ class GrammarParser extends EmbeddedActionsParser {
         const right = $.SUBRULE2($.additive);
         result = $.ACTION(() => ({ kind: "compare", op: op.image as CompareOp, left, right }));
       });
+      $.OPTION5({ GATE: () => tokenMatcher($.LA(1), tokens.kw_not)
+        && [tokens.kw_like, tokens.kw_ilike].some((kind) => tokenMatcher($.LA(2), kind)), DEF: () => {
+        $.CONSUME3(tokens.kw_not);
+        const like = $.OR3([
+          { ALT: () => $.CONSUME2(tokens.kw_like) },
+          { ALT: () => $.CONSUME2(tokens.kw_ilike) },
+        ]);
+        const right = $.SUBRULE4($.additive);
+        result = $.ACTION(() => ({ kind: "compare", op: `not_${like.image}` as CompareOp, left, right }));
+      } });
       $.OPTION2(() => {
         let op: "in" | "not_in" = "in";
         $.OR2([
@@ -657,6 +1000,19 @@ class GrammarParser extends EmbeddedActionsParser {
         ]);
         const right = $.SUBRULE3($.additive);
         result = $.ACTION(() => ({ kind: "in_expr", op, left, right }));
+      });
+      $.OPTION3(() => {
+        $.CONSUME(tokens.kw_is);
+        let negated = false;
+        $.OPTION4(() => { $.CONSUME2(tokens.kw_not); negated = true; });
+        const typeExpr = $.SUBRULE($.typeExpr);
+        result = $.ACTION(() => {
+          const isType: FreeObjectExpr = {
+            kind: "is_type", expr: left,
+            typeName: simpleTypeName(typeExpr) ?? "", typeExpr,
+          };
+          return negated ? { kind: "not", expr: isType } : isType;
+        });
       });
       return result;
     });
@@ -726,10 +1082,37 @@ class GrammarParser extends EmbeddedActionsParser {
       } },
       { ALT: () => {
         $.CONSUME(tokens.lt);
-        const castType = $.SUBRULE($.qualifiedName);
+        let optional = false;
+        $.OPTION3({ GATE: () => tokenMatcher($.LA(1), tokens.kw_optional), DEF: () => {
+          $.CONSUME(tokens.kw_optional);
+          optional = true;
+        } });
+        $.OPTION4({ GATE: () => tokenMatcher($.LA(1), tokens.kw_required), DEF: () => {
+          $.CONSUME(tokens.kw_required);
+        } });
+        const castType = $.SUBRULE($.castType);
         $.CONSUME(tokens.gt);
         const expr = $.SUBRULE6($.unary);
-        return $.ACTION<FreeObjectExpr>(() => ({ kind: "cast", castType, expr }));
+        return $.ACTION<FreeObjectExpr>(() => ({ kind: "cast", castType, expr, ...(optional ? { optional: true } : {}) }));
+      } },
+      { GATE: () => tokenMatcher($.LA(1), tokens.kw_introspect), ALT: () => {
+        $.CONSUME(tokens.kw_introspect);
+        let typeofForm = false;
+        $.OPTION({ GATE: () => tokenMatcher($.LA(1), tokens.kw_typeof), DEF: () => {
+          $.CONSUME(tokens.kw_typeof);
+          typeofForm = true;
+        } });
+        const expr = $.OR2([
+          { GATE: () => !typeofForm && tokenMatcher($.LA(1), tokens.lparen)
+            && tokenMatcher($.LA(2), Name) && tokenMatcher($.LA(3), tokens.lt), ALT: () => {
+            $.CONSUME(tokens.lparen);
+            const typeName = $.SUBRULE2($.castType);
+            $.CONSUME(tokens.rparen);
+            return { kind: "binding_ref" as const, name: typeName };
+          } },
+          { ALT: () => $.SUBRULE7($.unary) },
+        ]);
+        return $.ACTION<FreeObjectExpr>(() => ({ kind: "introspect_typeof", expr, typeofForm }));
       } },
       { ALT: () => $.SUBRULE($.power) },
     ]));
@@ -753,27 +1136,36 @@ class GrammarParser extends EmbeddedActionsParser {
           $.OPTION(() => {
             $.CONSUME(tokens.lbracket);
             $.CONSUME(tokens.kw_is);
-            const typeName = $.SUBRULE($.qualifiedName);
+            sourceType = $.SUBRULE($.typeExpr);
             $.CONSUME(tokens.rbracket);
-            sourceType = { kind: "type_name", name: typeName };
           });
           expr = $.ACTION(() => ({
             kind: "for_expr", variable: "__gel_backlink_item__", iterator: expr,
-            body: { kind: "backlink_path", link, sourceType: sourceType?.kind === "type_name" ? sourceType.name : undefined,
+            body: { kind: "backlink_path", link, sourceType: simpleTypeName(sourceType),
               sourceTypeExpr: sourceType, optional: false },
           }));
           void backlink;
         } },
         { ALT: () => {
           $.CONSUME(tokens.dot);
-          const field = $.CONSUME2(Name).image;
-          expr = $.ACTION(() => expr.kind === "path_steps"
-            ? { ...expr, steps: [...expr.steps, { kind: "ptr", name: field, direction: "outbound", optional: false }] }
-            : expr.kind === "binding_ref" && $.bindingValues.get(expr.name)?.kind !== "subquery"
-            ? { kind: "path", head: expr.name, tail: field,
-                steps: [{ kind: "object_ref", name: expr.name }, { kind: "ptr", name: field, direction: "outbound" }] }
-            : { kind: "field_access", expr: expr.kind === "field_access" && expr.expr.kind === "current_item"
-                ? { kind: "field_access", expr: expr.expr, field: expr.field, optional: false } : expr, field, optional: false });
+          const member = $.OR3([
+            { GATE: () => tokenMatcher($.LA(1), tokens.number), ALT: () => ({ index: $.CONSUME(tokens.number) }) },
+            { ALT: () => ({ field: $.CONSUME2(Name).image }) },
+          ]);
+          expr = $.ACTION(() => {
+            if ("index" in member) {
+              return tupleAccess(expr, member.index.image);
+            }
+            const field = member.field;
+            return expr.kind === "path_steps"
+              ? { ...expr, steps: [...expr.steps, { kind: "ptr" as const, name: field, direction: "outbound" as const, optional: false }] }
+              : expr.kind === "binding_ref" && $.bindingValues.get(expr.name)?.kind !== "subquery"
+              ? { kind: "path" as const, head: expr.name, tail: field,
+                  steps: [{ kind: "object_ref" as const, name: expr.name }, { kind: "ptr" as const, name: field, direction: "outbound" as const }] }
+              : { kind: "field_access" as const, expr: expr.kind === "field_access" && expr.expr.kind === "current_item"
+                  ? { kind: "field_access" as const, expr: expr.expr, field: expr.field, optional: false } : expr,
+                  field, optional: false };
+          });
         } },
         { ALT: () => {
           $.CONSUME(tokens.at);
@@ -806,12 +1198,11 @@ class GrammarParser extends EmbeddedActionsParser {
           const subscript = $.OR2([
             { GATE: () => tokenMatcher($.LA(1), tokens.kw_is), ALT: () => {
               $.CONSUME2(tokens.kw_is);
-              const typeName = $.SUBRULE2($.qualifiedName);
+              const typeExpr = $.SUBRULE2($.typeExpr);
               $.CONSUME2(tokens.rbracket);
               return $.ACTION<FreeObjectExpr>(() => {
-                const typeExpr: TypeExpr = { kind: "type_name", name: typeName };
-                const steps = expr.kind === "select" ? [{ kind: "object_ref" as const, name: expr.typeName }]
-                  : expr.kind === "path_steps" ? expr.steps : undefined;
+                const typeName = simpleTypeName(typeExpr) ?? "";
+                const steps = pathStepsForExpr(expr);
                 return steps
                   ? { kind: "path_steps", steps: [...steps, { kind: "type_intersection", typeName, typeExpr }],
                       partial: expr.kind === "path_steps" ? expr.partial : undefined }
@@ -850,6 +1241,88 @@ class GrammarParser extends EmbeddedActionsParser {
       return expr;
     });
     $.RULE("subscriptBound", (): FreeObjectExpr => $.SUBRULE($.unary));
+    $.RULE("typeExpr", (): TypeExpr => {
+      let left = $.SUBRULE($.typeIntersectExpr);
+      $.MANY(() => {
+        $.CONSUME(tokens.pipe);
+        const right = $.SUBRULE2($.typeIntersectExpr);
+        left = { kind: "type_union", left, right };
+      });
+      return left;
+    });
+    $.RULE("typeIntersectExpr", (): TypeExpr => {
+      let left = $.SUBRULE($.typeAtom);
+      $.MANY(() => {
+        $.CONSUME(tokens.ampersand);
+        const right = $.SUBRULE2($.typeAtom);
+        left = { kind: "type_intersection", left, right };
+      });
+      return left;
+    });
+    $.RULE("typeAtom", (): TypeExpr => $.OR([
+      { ALT: () => {
+        $.CONSUME(tokens.lparen);
+        const expr = $.SUBRULE($.typeExpr);
+        $.CONSUME(tokens.rparen);
+        return expr;
+      } },
+      { ALT: () => {
+        $.CONSUME(tokens.kw_typeof);
+        const expr = $.SUBRULE($.unary);
+        return { kind: "type_of" as const, expr };
+      } },
+      { ALT: () => ({ kind: "type_name" as const, name: $.SUBRULE($.qualifiedName) }) },
+    ]));
+    $.RULE("castType", (): string => {
+      let left = $.SUBRULE($.castTypeIntersect);
+      $.MANY(() => {
+        $.CONSUME(tokens.pipe);
+        const right = $.SUBRULE2($.castTypeIntersect);
+        left = `${left} | ${right}`;
+      });
+      return left;
+    });
+    $.RULE("castTypeIntersect", (): string => {
+      let left = $.SUBRULE($.castTypeUnit);
+      $.MANY(() => {
+        $.CONSUME(tokens.ampersand);
+        const right = $.SUBRULE2($.castTypeUnit);
+        left = `${left} & ${right}`;
+      });
+      return left;
+    });
+    $.RULE("castTypeUnit", (): string => $.OR([
+      { ALT: () => {
+        $.CONSUME(tokens.lparen);
+        const inner = $.SUBRULE($.castType);
+        $.CONSUME(tokens.rparen);
+        return `(${inner})`;
+      } },
+      { ALT: () => {
+      const name = $.SUBRULE($.qualifiedName);
+      let args: string[] = [];
+      let hasArgs = false;
+      $.OPTION(() => {
+        $.CONSUME(tokens.lt);
+        hasArgs = true;
+        args = [$.SUBRULE($.castTypeArg)];
+        $.MANY(() => {
+          $.CONSUME(tokens.comma);
+          args.push($.SUBRULE2($.castTypeArg));
+        });
+        $.CONSUME(tokens.gt);
+      });
+      return hasArgs ? `${name}<${args.join(", ")}>` : name;
+      } },
+    ]));
+    $.RULE("castTypeArg", (): string => $.OR([
+      { GATE: () => tokenMatcher($.LA(1), Name) && tokenMatcher($.LA(2), tokens.colon), ALT: () => {
+        const name = $.CONSUME(Name).image;
+        $.CONSUME(tokens.colon);
+        return `${name}: ${$.SUBRULE($.castType)}`;
+      } },
+      { ALT: () => $.SUBRULE2($.castType) },
+    ]));
     $.RULE("shape", (): ShapeElement[] => {
       const fields: ShapeElement[] = [];
       $.OPTION(() => {
@@ -862,7 +1335,46 @@ class GrammarParser extends EmbeddedActionsParser {
       });
       return fields;
     });
-    $.RULE("shapeEntry", (): ShapeElement => $.OR([
+    $.RULE("shapeEntry", (): ShapeElement => {
+      let required: boolean | undefined;
+      let cardinality: ShapeElement["cardinality"];
+      const isModifier = (): boolean => {
+        const token = $.LA(1);
+        const terminator = [tokens.comma, tokens.rbrace, tokens.colon, tokens.assign]
+          .some((kind) => tokenMatcher($.LA(2), kind));
+        return !terminator && [tokens.kw_required, tokens.kw_optional, tokens.kw_multi, tokens.kw_single]
+          .some((kind) => tokenMatcher(token, kind));
+      };
+      $.MANY({ GATE: isModifier, DEF: () => {
+        const modifier = $.OR([
+          { ALT: () => $.CONSUME(tokens.kw_required) },
+          { ALT: () => $.CONSUME(tokens.kw_optional) },
+          { ALT: () => $.CONSUME(tokens.kw_multi) },
+          { ALT: () => $.CONSUME(tokens.kw_single) },
+        ]);
+        $.ACTION(() => {
+          if (modifier.tokenTypeIdx === tokens.kw_required.tokenTypeIdx) required = true;
+          else if (modifier.tokenTypeIdx === tokens.kw_optional.tokenTypeIdx) required = false;
+          else if (modifier.tokenTypeIdx === tokens.kw_multi.tokenTypeIdx) cardinality = "many";
+          else cardinality = "one";
+        });
+      } });
+      const entry = $.SUBRULE($.shapeEntryCore);
+      return $.ACTION(() => ({ ...entry,
+        ...(required !== undefined ? { required } : {}),
+        ...(cardinality !== undefined ? { cardinality } : {}),
+      }));
+    });
+    $.RULE("shapeEntryCore", (): ShapeElement => $.OR([
+      { GATE: () => tokenMatcher($.LA(1), tokens.star) || tokenMatcher($.LA(1), tokens.double_splat), ALT: () => {
+        const splat = $.OR3([
+          { ALT: () => $.CONSUME(tokens.star) },
+          { ALT: () => $.CONSUME(tokens.double_splat) },
+        ]);
+        const depth = splat.tokenTypeIdx === tokens.star.tokenTypeIdx ? 1 as const : 2 as const;
+        return { kind: "splat" as const, depth,
+          operation: "assign" as const, origin: "explicit" as const };
+      } },
       { GATE: () => tokenMatcher($.LA(1), tokens.backward_link), ALT: () => {
         $.CONSUME(tokens.backward_link);
         const name = $.CONSUME(Name).image;
@@ -870,7 +1382,7 @@ class GrammarParser extends EmbeddedActionsParser {
         $.OPTION(() => {
           $.CONSUME(tokens.lbracket);
           $.CONSUME(tokens.kw_is);
-          sourceType = { kind: "type_name", name: $.SUBRULE($.qualifiedName) };
+          sourceType = $.SUBRULE($.typeExpr);
           $.CONSUME(tokens.rbracket);
         });
         let nestedShape: ShapeElement[] | undefined;
@@ -880,7 +1392,7 @@ class GrammarParser extends EmbeddedActionsParser {
           $.CONSUME(tokens.rbrace);
         });
         return $.ACTION(() => ({ kind: "backlink" as const, name,
-          expr: { link: name, sourceType: sourceType?.kind === "type_name" ? sourceType.name : undefined,
+          expr: { link: name, sourceType: simpleTypeName(sourceType),
             sourceTypeExpr: sourceType }, ...(nestedShape ? { shape: nestedShape } : {}),
           operation: "assign" as const, origin: "explicit" as const }));
       } },
@@ -895,6 +1407,23 @@ class GrammarParser extends EmbeddedActionsParser {
         return $.ACTION(() => ({ kind: "computed" as const, name: `@${property}`, expr,
           operation: "assign" as const, origin: "explicit" as const }));
       } },
+      { GATE: () => tokenMatcher($.LA(1), tokens.lbracket) && tokenMatcher($.LA(2), tokens.kw_is), ALT: () => {
+        $.CONSUME2(tokens.lbracket);
+        $.CONSUME2(tokens.kw_is);
+        const sourceTypeExpr = $.SUBRULE2($.typeExpr);
+        $.CONSUME2(tokens.rbracket);
+        $.CONSUME(tokens.dot);
+        const name = $.CONSUME4(Name).image;
+        return $.ACTION(() => ({
+          kind: "computed" as const, name,
+          expr: { kind: "polymorphic_field_ref" as const,
+            sourceType: simpleTypeName(sourceTypeExpr) ?? "", sourceTypeExpr, field: name },
+          operation: "assign" as const, origin: "explicit" as const,
+        }));
+      } },
+      { GATE: () => tokenMatcher($.LA(1), Name)
+        && tokenMatcher($.LA(2), tokens.assign)
+        && tokenMatcher($.LA(3), tokens.backward_link), ALT: () => $.SUBRULE($.computedBacklinkShapeEntry) },
       { ALT: () => {
         const name = $.CONSUME2(Name).image;
         let result: ShapeElement | undefined;
@@ -912,8 +1441,23 @@ class GrammarParser extends EmbeddedActionsParser {
             $.CONSUME2(tokens.lbrace);
             const shape = $.SUBRULE2($.shape);
             $.CONSUME2(tokens.rbrace);
+            let filter: FilterExpr | undefined;
+            $.OPTION5({ GATE: () => tokenMatcher($.LA(1), tokens.kw_filter), DEF: () => {
+              $.CONSUME(tokens.kw_filter);
+              const predicate = $.SUBRULE4($.expression);
+              filter = $.ACTION(() => filterFromExpr(predicate));
+            } });
+            let orderBy: OrderExpr | undefined;
+            $.OPTION6(() => {
+              $.CONSUME(tokens.kw_order);
+              $.CONSUME(tokens.kw_by);
+              const order = $.SUBRULE($.orderItem);
+              orderBy = $.ACTION(() => orderExprForSelect(order, ""));
+            });
             result = $.ACTION(() => ({
-              kind: "link", name, shape, clauses: {}, operation: "assign", origin: "explicit",
+              kind: "link", name, shape,
+              clauses: { ...(filter ? { filter } : {}), ...(orderBy ? { orderBy } : {}) },
+              operation: "assign", origin: "explicit",
             }));
           } },
         ]));
@@ -921,6 +1465,28 @@ class GrammarParser extends EmbeddedActionsParser {
           operation: "assign" as const, origin: "explicit" as const });
       } },
     ]));
+    $.RULE("computedBacklinkShapeEntry", (): ShapeElement => {
+      const name = $.CONSUME(Name).image;
+      $.CONSUME(tokens.assign);
+      $.CONSUME(tokens.backward_link);
+      const link = $.CONSUME2(Name).image;
+      let sourceTypeExpr: TypeExpr | undefined;
+      $.OPTION(() => {
+        $.CONSUME(tokens.lbracket);
+        $.CONSUME(tokens.kw_is);
+        sourceTypeExpr = $.SUBRULE($.typeExpr);
+        $.CONSUME(tokens.rbracket);
+      });
+      let shape: ShapeElement[] | undefined;
+      $.OPTION2(() => {
+        $.CONSUME(tokens.lbrace);
+        shape = $.SUBRULE($.shape);
+        $.CONSUME(tokens.rbrace);
+      });
+      return $.ACTION(() => ({ kind: "backlink" as const, name,
+        expr: { link, sourceType: simpleTypeName(sourceTypeExpr), sourceTypeExpr },
+        ...(shape ? { shape } : {}), operation: "assign" as const, origin: "explicit" as const }));
+    });
     $.RULE("forExpr", (): FreeObjectExpr => {
       const binders: Array<{ variable: string; iterator: FreeObjectExpr; optional: boolean }> = [];
       $.AT_LEAST_ONE(() => {
@@ -929,7 +1495,7 @@ class GrammarParser extends EmbeddedActionsParser {
         $.OPTION(() => { $.CONSUME(tokens.kw_optional); optional = true; });
         const variable = $.CONSUME(Name).image;
         $.CONSUME(tokens.kw_in);
-        const iterator = $.SUBRULE($.expression);
+        const iterator = $.SUBRULE($.orExpr);
         binders.push({ variable, iterator, optional });
         $.ACTION(() => { $.bindings.add(variable); });
       });
@@ -951,6 +1517,15 @@ class GrammarParser extends EmbeddedActionsParser {
       });
     });
     $.RULE("atom", (): FreeObjectExpr => $.OR([
+      { GATE: () => tokenMatcher($.LA(1), tokens.str_interp_start), ALT: () => $.SUBRULE($.stringInterpolation) },
+      { GATE: () => tokenMatcher($.LA(1), tokens.lbracket) && tokenMatcher($.LA(2), tokens.kw_is), ALT: () => {
+        $.CONSUME(tokens.lbracket);
+        $.CONSUME(tokens.kw_is);
+        const typeExpr = $.SUBRULE($.typeExpr);
+        $.CONSUME(tokens.rbracket);
+        return { kind: "path_steps" as const, steps: [{ kind: "type_intersection" as const,
+          typeName: simpleTypeName(typeExpr) ?? "", typeExpr }], partial: true };
+      } },
       { ALT: () => {
         const literal = $.CONSUME(tokens.number);
         return $.ACTION(() => numberLiteral(literal.image, literal.startLine!, literal.startColumn!));
@@ -981,28 +1556,56 @@ class GrammarParser extends EmbeddedActionsParser {
       { ALT: () => { $.CONSUME(tokens.kw_null); return $.ACTION<FreeObjectExpr>(() => ({ kind: "literal", value: null })); } },
       { ALT: () => {
         $.CONSUME(tokens.kw_detached);
-        const typeName = $.SUBRULE2($.qualifiedName);
-        return $.ACTION<FreeObjectExpr>(() => ({ ...typeSource(inModule(typeName, $.defaultModule)), detached: true }));
+        const expr = $.SUBRULE($.unary);
+        return $.ACTION<FreeObjectExpr>(() => {
+          if (expr.kind === "select" || expr.kind === "select_expr_subquery"
+              || expr.kind === "free_object_constructor") return { ...expr, detached: true };
+          return expr;
+        });
       } },
       { GATE: () => tokenMatcher($.LA(1), tokens.kw_for), ALT: () => $.SUBRULE($.forExpr) },
+      { GATE: () => tokenMatcher($.LA(1), tokens.backward_link), ALT: () => {
+        $.CONSUME(tokens.backward_link);
+        const link = $.CONSUME2(Name).image;
+        let sourceType: TypeExpr | undefined;
+        $.OPTION5(() => {
+          $.CONSUME2(tokens.lbracket);
+          $.CONSUME2(tokens.kw_is);
+          sourceType = $.SUBRULE2($.typeExpr);
+          $.CONSUME2(tokens.rbracket);
+        });
+        return { kind: "backlink_path" as const, link,
+          sourceType: simpleTypeName(sourceType), sourceTypeExpr: sourceType, optional: false };
+      } },
       { ALT: () => {
         $.CONSUME(tokens.dot);
-        const field = $.CONSUME(Name).image;
-        return $.ACTION<FreeObjectExpr>(() => ({ kind: "field_access", expr: { kind: "current_item" }, field, optional: false }));
+        const member = $.OR2([
+          { GATE: () => tokenMatcher($.LA(1), tokens.number), ALT: () => ({ index: $.CONSUME2(tokens.number) }) },
+          { ALT: () => ({ field: $.CONSUME(Name).image }) },
+        ]);
+        return $.ACTION<FreeObjectExpr>(() => "index" in member
+          ? tupleAccess({ kind: "current_item" }, member.index.image)
+          : { kind: "field_access", expr: { kind: "current_item" }, field: member.field, optional: false });
       } },
       { ALT: () => {
         const name = $.SUBRULE($.qualifiedName);
         let result: FreeObjectExpr | undefined;
         $.OPTION(() => {
-          $.CONSUME(tokens.lparen);
-          const args: FreeObjectExpr[] = [];
-          $.OPTION2(() => $.AT_LEAST_ONE_SEP({ SEP: tokens.comma, DEF: () => {
-            args.push($.SUBRULE($.expression));
-          } }));
+          const lparen = $.CONSUME(tokens.lparen);
+          const args: FunctionCallArgExpr[] = [];
+          $.OPTION2(() => {
+            args.push($.SUBRULE($.functionCallArg));
+            $.MANY3(() => {
+              $.CONSUME2(tokens.comma);
+              args.push($.SUBRULE2($.functionCallArg));
+            });
+            $.OPTION3(() => $.CONSUME3(tokens.comma));
+          });
           $.CONSUME(tokens.rparen);
-          result = $.ACTION(() => ({
-            kind: "function_call", call: { name, args: args.map((arg) => functionArg(arg, $.bindings)) },
-          }));
+          result = $.ACTION(() => {
+            validateFunctionCallArgs(args, lparen.startLine ?? 1, lparen.startColumn ?? 1);
+            return { kind: "function_call", call: { name, args } };
+          });
         });
         return $.ACTION<FreeObjectExpr>(() => {
           if (name.startsWith("__") && name.endsWith("__")) {
@@ -1018,8 +1621,38 @@ class GrammarParser extends EmbeddedActionsParser {
       { ALT: () => $.SUBRULE($.braces) },
       { ALT: () => $.SUBRULE($.array) },
     ]));
+    $.RULE("functionCallArg", (): FunctionCallArgExpr => $.OR([
+      { GATE: () => (tokenMatcher($.LA(1), Name) || tokenMatcher($.LA(1), tokens.kw_empty))
+        && tokenMatcher($.LA(2), tokens.assign), ALT: () => {
+        const name = $.OR2([
+          { ALT: () => $.CONSUME(Name).image },
+          { ALT: () => $.CONSUME(tokens.kw_empty).image },
+        ]);
+        $.CONSUME(tokens.assign);
+        const expr = $.SUBRULE($.expression);
+        return $.ACTION<FunctionCallArgExpr>(() => ({ kind: "named_arg", name, arg: functionArg(expr, $.bindings) }));
+      } },
+      { ALT: () => {
+        const expr = $.SUBRULE2($.expression);
+        let order: GrammarOrderItem | undefined;
+        $.OPTION({ GATE: () => tokenMatcher($.LA(1), tokens.kw_order), DEF: () => {
+          $.CONSUME(tokens.kw_order);
+          $.CONSUME(tokens.kw_by);
+          order = $.SUBRULE($.orderItem);
+        } });
+        return $.ACTION(() => functionArg(order
+          ? { kind: "select_expr_subquery", expr, orderBy: orderExprChain(order) }
+          : expr, $.bindings));
+      } },
+    ]));
     $.RULE("innerSelect", (): FreeObjectExpr => {
       $.CONSUME(tokens.kw_select);
+      let alias: string | undefined;
+      $.OPTION4({ GATE: () => tokenMatcher($.LA(1), Name) && tokenMatcher($.LA(2), tokens.assign), DEF: () => {
+        alias = $.CONSUME(Name).image;
+        $.CONSUME(tokens.assign);
+        $.ACTION(() => { if (alias !== undefined) $.bindings.add(alias); });
+      } });
       const expr = $.SUBRULE($.expression);
       let filterExpr: FreeObjectExpr | undefined;
       $.OPTION(() => {
@@ -1039,25 +1672,49 @@ class GrammarParser extends EmbeddedActionsParser {
       });
       return $.ACTION(() => {
         const filter = filterExpr && expr.kind === "select" ? filterFromExpr(filterExpr) : undefined;
-        const sortField = order?.expr.kind === "field_access" && order.expr.expr.kind === "current_item"
-          ? order.expr.field : undefined;
         const sortInShape = order && expr.kind === "select" && $.explicitShapes.has(expr)
-          && sortField !== undefined;
+          && orderUsesOnlyCurrentItemFields(order);
         const inner: FreeObjectExpr = expr.kind === "select" && (filter || sortInShape)
           ? { ...expr, clauses: { ...expr.clauses, ...(filter ? { filter } : {}),
-              ...(sortInShape ? { orderBy: { field: sortField, direction: order!.direction } } : {}) } }
+              ...(sortInShape && order ? { orderBy: orderExprForSelect(order, expr.typeName) } : {}) } }
           : expr;
-        return { kind: "select_expr_subquery", expr: inner,
+        return { kind: "select_expr_subquery", ...(alias ? { alias } : {}), expr: inner,
           filter: filterExpr && expr.kind !== "select" ? filterExpr : undefined,
-          orderBy: order && !sortInShape ? { expr: order.expr, direction: order.direction } : undefined,
+          orderBy: order && !sortInShape ? orderExprChain(order) : undefined,
           limit, offset: undefined, limitExpr: undefined, offsetExpr: undefined };
       });
     });
-    $.RULE("objectEntry", (): { name: string; expr: FreeObjectExpr } => {
+    $.RULE("objectEntry", (): {
+      name: string; expr: FreeObjectExpr;
+      cardinality?: "one" | "many"; required?: boolean;
+    } => {
+      let required: boolean | undefined;
+      let cardinality: "one" | "many" | undefined;
+      const isModifier = (): boolean => {
+        const terminator = [tokens.comma, tokens.rbrace, tokens.rparen, tokens.colon, tokens.assign]
+          .some((kind) => tokenMatcher($.LA(2), kind));
+        return !terminator && [tokens.kw_required, tokens.kw_optional, tokens.kw_multi, tokens.kw_single]
+          .some((kind) => tokenMatcher($.LA(1), kind));
+      };
+      $.MANY({ GATE: isModifier, DEF: () => {
+        const modifier = $.OR([
+          { ALT: () => $.CONSUME(tokens.kw_required) },
+          { ALT: () => $.CONSUME(tokens.kw_optional) },
+          { ALT: () => $.CONSUME(tokens.kw_multi) },
+          { ALT: () => $.CONSUME(tokens.kw_single) },
+        ]);
+        $.ACTION(() => {
+          if (modifier.tokenTypeIdx === tokens.kw_required.tokenTypeIdx) required = true;
+          else if (modifier.tokenTypeIdx === tokens.kw_optional.tokenTypeIdx) required = false;
+          else if (modifier.tokenTypeIdx === tokens.kw_multi.tokenTypeIdx) cardinality = "many";
+          else cardinality = "one";
+        });
+      } });
       const name = $.CONSUME(Name).image;
       $.CONSUME(tokens.assign);
       const expr = $.SUBRULE($.expression);
-      return { name, expr };
+      return { name, expr, ...(required !== undefined ? { required } : {}),
+        ...(cardinality !== undefined ? { cardinality } : {}) };
     });
     $.RULE("tupleEntries", (): Array<{ name: string; expr: FreeObjectExpr }> => {
       const entries = [$.SUBRULE($.objectEntry)];
@@ -1078,10 +1735,14 @@ class GrammarParser extends EmbeddedActionsParser {
         { GATE: () => tokenMatcher($.LA(1), tokens.kw_with), ALT: () => {
           $.CONSUME(tokens.kw_with);
           const bindings = [$.SUBRULE($.binding)];
-          $.MANY2(() => {
+          $.MANY2({ GATE: () => tokenMatcher($.LA(1), tokens.comma)
+            && ![tokens.kw_select, tokens.kw_group, tokens.kw_for].some((kind) => tokenMatcher($.LA(2), kind)), DEF: () => {
             $.CONSUME3(tokens.comma);
             bindings.push($.SUBRULE2($.binding));
-          });
+          } });
+          $.OPTION4({ GATE: () => tokenMatcher($.LA(1), tokens.comma)
+            && [tokens.kw_select, tokens.kw_group, tokens.kw_for].some((kind) => tokenMatcher($.LA(2), kind)),
+          DEF: () => $.CONSUME5(tokens.comma) });
           const expr = $.OR2([
             { GATE: () => tokenMatcher($.LA(1), tokens.kw_select), ALT: () => $.SUBRULE2($.innerSelect) },
             { GATE: () => tokenMatcher($.LA(1), tokens.kw_group), ALT: () => $.SUBRULE($.groupExpr) },
@@ -1137,10 +1798,40 @@ class GrammarParser extends EmbeddedActionsParser {
       ]);
       return result;
     });
+    $.RULE("stringInterpolation", (): FreeObjectExpr => {
+      const start = $.CONSUME(tokens.str_interp_start);
+      const expressions = [$.SUBRULE($.expression)];
+      const continuations: Array<{ text: string; expr: FreeObjectExpr }> = [];
+      $.MANY({ GATE: () => tokenMatcher($.LA(1), tokens.str_interp_cont), DEF: () => {
+        const text = $.CONSUME(tokens.str_interp_cont).image;
+        continuations.push({ text, expr: $.SUBRULE2($.expression) });
+      } });
+      const end = $.CONSUME(tokens.str_interp_end);
+      return $.ACTION(() => {
+        const parts: FreeObjectExpr[] = [];
+        if (start.image.length) parts.push({ kind: "literal", value: start.image });
+        parts.push({ kind: "cast", castType: "str", expr: expressions[0] });
+        for (const continuation of continuations) {
+          if (continuation.text.length) parts.push({ kind: "literal", value: continuation.text });
+          parts.push({ kind: "cast", castType: "str", expr: continuation.expr });
+        }
+        if (end.image.length) parts.push({ kind: "literal", value: end.image });
+        if (parts.length === 0) return { kind: "literal", value: "" };
+        return parts.length === 1 ? parts[0] : { kind: "concat", parts };
+      });
+    });
     $.RULE("braces", (): FreeObjectExpr => {
       $.CONSUME(tokens.lbrace);
+      const isObjectEntryAhead = (): boolean => {
+        let offset = 1;
+        while ([tokens.kw_required, tokens.kw_optional, tokens.kw_multi, tokens.kw_single]
+          .some((kind) => tokenMatcher($.LA(offset), kind))
+          && ![tokens.comma, tokens.rbrace, tokens.colon, tokens.assign]
+            .some((kind) => tokenMatcher($.LA(offset + 1), kind))) offset++;
+        return tokenMatcher($.LA(offset), Name) && tokenMatcher($.LA(offset + 1), tokens.assign);
+      };
       const result = $.OR([
-        { GATE: () => tokenMatcher($.LA(1), Name) && tokenMatcher($.LA(2), tokens.assign), ALT: () => {
+        { GATE: isObjectEntryAhead, ALT: () => {
           const entries = [$.SUBRULE($.objectEntry)];
           $.MANY(() => {
             $.CONSUME(tokens.comma);
@@ -1183,7 +1874,8 @@ class GrammarParser extends EmbeddedActionsParser {
       return $.ACTION(() => ({ kind: "array_literal_expr", values }));
     });
     $.RULE("qualifiedName", (): string => {
-      let name = $.CONSUME(Name).image;
+      const first = $.CONSUME(Name);
+      let name = first.tokenTypeIdx === tokens.kw_object.tokenTypeIdx ? "Object" : first.image;
       $.MANY(() => {
         $.CONSUME(tokens.coloncolon);
         const part = $.CONSUME2(Name).image;
@@ -1584,7 +2276,8 @@ export function parseEdgeQLGrammar(source: string, defaultModule?: string): Stat
       : lexical[0]?.kind === "kw_insert" ? grammar.insertStatement()
       : lexical[0]?.kind === "kw_update" ? grammar.updateStatement()
       : lexical[0]?.kind === "kw_delete" ? grammar.deleteStatement()
-      : lexical[0]?.kind === "kw_for" ? grammar.forStatement() : grammar.statement();
+      : lexical[0]?.kind === "kw_for" ? grammar.forStatement()
+      : lexical[0]?.kind === "kw_if" ? grammar.ifStatement() : grammar.statement();
     if (grammar.errors.length) {
       const error = grammar.errors[0];
       const token = error.token;
@@ -1600,12 +2293,12 @@ export function parseEdgeQLGrammar(source: string, defaultModule?: string): Stat
 /** Parse a script of supported statements. Separators inside nested forms or
  * strings are not statement boundaries; the production tokenizer identifies
  * both. Each statement is parsed through the same grammar (no legacy retry). */
-export function parseEdgeQLGrammarScript(source: string): Statement[] {
+export function parseEdgeQLGrammarScript(source: string, defaultModule?: string): Statement[] {
   const { tokens: lexical, lineStarts } = tokenizeWithStarts(source);
   const statements: Statement[] = [];
   let depth = 0;
   let start = 0;
-  let activeModule: string | undefined;
+  let activeModule = defaultModule;
   const parsePiece = (end: number): void => {
     const piece = source.slice(start, end);
     const first = lexical.find((token) => token.offset >= start && token.offset < end && token.kind !== "semi");
