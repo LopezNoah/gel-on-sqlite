@@ -7,6 +7,7 @@ import { tableNameForType } from "../src/codegen/sql.js";
 import { parseEdgeQLGrammar, parseEdgeQLGrammarScript } from "../src/edgeql/grammar_parser.js";
 import { parseGelGrammarStatement } from "../src/edgeql/gel_lr_ast_reducer.js";
 import { parseEdgeQLScript } from "../src/edgeql/parser.js";
+import { extractSuiteQueries } from "../scripts/grammar-query-corpus.js";
 import {
   acceptsGelGrammarBlock,
   parseGelGrammarCST,
@@ -808,5 +809,19 @@ describe("grammar-backed SELECT parser", () => {
     } finally {
       database.close();
     }
+  });
+
+  it("accepts every literal success query in the EdgeQL conformance suite", () => {
+    const { queries } = extractSuiteQueries();
+    const failures: string[] = [];
+    for (const { file, query } of queries) {
+      try {
+        parseEdgeQLGrammarScript(query);
+      } catch (error) {
+        const message = error instanceof Error ? error.message.split("\n", 1)[0] : String(error);
+        failures.push(`${file}: ${message}: ${query.replace(/\s+/g, " ").slice(0, 120)}`);
+      }
+    }
+    expect(failures).toEqual([]);
   });
 });

@@ -532,6 +532,7 @@ export const compileGelIRToSQL = (
               target,
               options.resolveEnumMembers,
               options.resolveFieldEnumMembers,
+              pathIdKey(statement.expr),
             ) ||
               null);
           if (!orderSql) {
@@ -1134,6 +1135,14 @@ const compileDmlAssignments = (
   for (const element of shape) {
     const ptr = resolveShapeElementPointer(element);
     if (!ptr || ptr.isLinkProperty) {
+      continue;
+    }
+    // UPDATE's runtime write path resolves every object link assignment and
+    // applies it after the base row update. Keep those links out of this SQL
+    // statement: compiling a link target as a scalar expression can produce a
+    // value from the update's snapshot relation rather than the target set
+    // (notably for DETACHED subqueries), and would also duplicate the write.
+    if (mode === "update" && !ptr.outTarget.isScalar) {
       continue;
     }
     if (
@@ -5763,11 +5772,20 @@ const tryCompileScalarPointerPathSelectSQL = (
   const aliasColumns = pointerPathAliasColumns(path);
   const rootAlias = POINTER_ROOT_ALIAS;
   const rootNamespace = path.root.pathId?.namespace ?? [];
+  const isNarrowedRoot =
+    (path.root as { typeIntersectionNarrowed?: boolean }).typeIntersectionNarrowed === true;
+  const pathRootType = path.root.pathId?.steps[0]?.type;
+  // A leading `[IS T]` changes the admitted concrete types but keeps the path
+  // rooted in the original source set. Scan/correlate that physical source and
+  // apply the narrowed extent as a discriminator predicate; scanning T's table
+  // directly loses the source-row identity for partial paths in a shape.
+  const sourceType = isNarrowedRoot && pathRootType ? pathRootType : path.root.typeref;
+  const admittedSourceTypes = isNarrowedRoot ? concreteSourceTypeNames(path.root.typeref) : [];
   const outerAlias =
-    options.relation?.correlateScope(scopeKeyOf(path.root.typeref, rootNamespace)) ?? null;
+    options.relation?.correlateScope(scopeKeyOf(sourceType, rootNamespace)) ?? null;
   let fromSql = outerAlias
     ? "(SELECT 1) __correlated_root"
-    : compilePolymorphicSource(path.root.typeref, false, rootAlias, aliasColumns[0], options);
+    : compilePolymorphicSource(sourceType, false, rootAlias, aliasColumns[0], options);
   let previousAlias = outerAlias ?? rootAlias;
 
   path.links.forEach((link, index) => {
@@ -5792,9 +5810,23 @@ const tryCompileScalarPointerPathSelectSQL = (
   });
 
   const leafSql = `${previousAlias}.${quoteIdent(columnForPointer(path.leaf))}`;
-  const valueSql = scalarResultValueSQL(leafSql, path.leaf.ptrref.outTarget);
+  // A correlated scalar is embedded into its enclosing projection, whose JSON
+  // encoder owns string quoting. Standalone rows still use the JSON scalar
+  // representation expected by the top-level result codec.
+  const valueSql = outerAlias ? leafSql : scalarResultValueSQL(leafSql, path.leaf.ptrref.outTarget);
+  const sourceTypePredicate =
+    admittedSourceTypes.length > 0
+      ? `${outerAlias ?? rootAlias}.${quoteIdent("__source_type")} IN (` +
+        `${admittedSourceTypes.map(quoteLiteral).join(", ")})`
+      : undefined;
+  const predicates = [sourceTypePredicate, `${leafSql} IS NOT NULL`].filter(
+    (predicate): predicate is string => predicate !== undefined,
+  );
   params.length = checkpoint;
-  return `SELECT ${quoteIdent("value")} FROM (SELECT DISTINCT ${previousAlias}.${quoteIdent("id")} AS ${quoteIdent("__identity")}, ${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${leafSql} IS NOT NULL)`;
+  const sql =
+    `SELECT DISTINCT ${previousAlias}.${quoteIdent("id")} AS ${quoteIdent("__identity")}, ` +
+    `${valueSql} AS ${quoteIdent("value")} FROM ${fromSql} WHERE ${predicates.join(" AND ")}`;
+  return `SELECT ${quoteIdent("value")} FROM (${sql})`;
 };
 
 // Pick the SQL alias for an outer iteration scope that matches the type
@@ -7301,12 +7333,26 @@ const materializeVisibleBindingSet = (
     const nextSeen = new globalThis.Set(seen);
     nextSeen.add(visible.bindingId);
     const materialized = materializeVisibleBindingSet(definition.source, options, nextSeen);
+    const isTypeIntersectionNarrowed = (set as { typeIntersectionNarrowed?: boolean })
+      .typeIntersectionNarrowed;
+    const resolved = isTypeIntersectionNarrowed
+      ? {
+          ...materialized,
+          pathId: set.pathId,
+          typeref: set.typeref,
+          typeIntersectionNarrowed: true,
+          expr:
+            materialized.expr.kind === "type_root"
+              ? { ...materialized.expr, typeref: set.typeref }
+              : materialized.expr,
+        }
+      : { ...materialized, pathId: set.pathId };
     // A visible object binding can carry a use-site shape (GROUP adds hidden
     // BY fields here). Resolve its identity to the definition's source for SQL,
     // but merge that projection with the source shape so identity columns and
     // fields selected by the binding remain available to the consumer.
-    if (!set.shape || set.shape.length === 0) return materialized;
-    const shape = [...(materialized.shape ?? [])];
+    if (!set.shape || set.shape.length === 0) return resolved;
+    const shape = [...(resolved.shape ?? [])];
     for (const rawElement of set.shape) {
       const element = {
         ...rawElement,
@@ -7318,7 +7364,7 @@ const materializeVisibleBindingSet = (
       if (existing >= 0) shape[existing] = element;
       else shape.push(element);
     }
-    return { ...materialized, shape };
+    return { ...resolved, shape };
   }
 
   const rewrite = (child: Set): Set => materializeVisibleBindingSet(child, options, seen);
@@ -10004,6 +10050,7 @@ const compileValueSortExprs = (
   target: RuntimeTarget = "sqlite",
   enumMembersByName?: (name: string) => string[] | undefined,
   fieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined,
+  valuePathId?: string,
 ): string => {
   return (orderBy ?? [])
     .map((entry) => {
@@ -10031,6 +10078,7 @@ const compileValueSortExprs = (
         target,
         enumMembersByName,
         fieldEnumMembers,
+        valuePathId,
       );
       return expr ? `${expr} ${entry.direction.toUpperCase()}${sortNullsClause(entry)}` : "";
     })
@@ -10157,6 +10205,7 @@ const compileValueSortPath = (
   target: RuntimeTarget = "sqlite",
   enumMembersByName?: (name: string) => string[] | undefined,
   fieldEnumMembers?: (typeName: string, fieldName: string) => string[] | undefined,
+  valuePathId?: string,
 ): string | null => {
   // `ORDER BY _` where `_` is the SELECT's result alias (`SELECT _ := EXPR
   // ORDER BY _`): the IR binds `_` to the whole (select_expr-wrapped) result
@@ -10170,7 +10219,14 @@ const compileValueSortPath = (
     // `$[0]` to the scalar slot. Sort by the column directly.
     if (inner.expr.kind === "index_expr") return valueSql;
     return (
-      compileValueSortPath(inner, valueSql, target, enumMembersByName, fieldEnumMembers) ?? valueSql
+      compileValueSortPath(
+        inner,
+        valueSql,
+        target,
+        enumMembersByName,
+        fieldEnumMembers,
+        valuePathId,
+      ) ?? valueSql
     );
   }
   if (set.expr.kind === "index_expr") {
@@ -10193,7 +10249,14 @@ const compileValueSortPath = (
     const enumName = qualifyTypeName(cast.toType);
     const members = enumMembersByName?.(enumName);
     if (members && members.length > 0) {
-      const innerSql = compileValueSortPath(cast.expr, valueSql, target, enumMembersByName);
+      const innerSql = compileValueSortPath(
+        cast.expr,
+        valueSql,
+        target,
+        enumMembersByName,
+        fieldEnumMembers,
+        valuePathId,
+      );
       if (innerSql) {
         const branches = members.map((member, idx) => `WHEN ${quoteLiteral(member)} THEN ${idx}`);
         return `CASE ${innerSql} ${branches.join(" ")} ELSE NULL END`;
@@ -10225,7 +10288,14 @@ const compileValueSortPath = (
     const argSqls: string[] = [];
     for (const arg of args) {
       const argInnerKind = arg.expr.expr.kind;
+      // A WITH reference can stand for the current row source; substitute the
+      // projected value only when its path identity matches that source.
+      const isCurrentVisibleBinding =
+        argInnerKind === "visible_binding_expr" &&
+        valuePathId !== undefined &&
+        pathIdKey(arg.expr) === valuePathId;
       if (
+        isCurrentVisibleBinding ||
         argInnerKind === "operator_call" ||
         argInnerKind === "string_constant" ||
         argInnerKind === "integer_constant" ||
@@ -10671,6 +10741,13 @@ const compileProjectedSourceColumnRef = (set: Set, allowLimitedSource = false): 
   }
   const sourceExpr: Expr = cursor.expr;
   if (sourceExpr.kind === "type_root") {
+    return columnForPointer(pointer);
+  }
+  // The projected source can already have been materialized from a WITH
+  // binding while the shape expression intentionally retains its binding
+  // identity for correlation. Its scalar field is still a column of the
+  // underlying source row and must be included in that row's projection.
+  if (sourceExpr.kind === "visible_binding_expr") {
     return columnForPointer(pointer);
   }
   if (sourceExpr.kind === "pointer") {

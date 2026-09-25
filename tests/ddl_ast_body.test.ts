@@ -39,6 +39,13 @@ describe("parseDDL — CREATE TYPE body on the AST (Stage D1b)", () => {
   });
 });
 
+describe("parseDDL — alias expression source", () => {
+  it("keeps a string semicolon inside the parsed assignment", () => {
+    const stmt = ddl("CREATE ALIAS semicolon_value := 'left;right';");
+    expect(stmt.valueText).toBe("'left;right'");
+  });
+});
+
 describe("parseDDL — ALTER TYPE ops on the AST (Stage D1d)", () => {
   it("populates alterTypeOps for a braced ALTER TYPE", () => {
     const stmt = ddl("ALTER TYPE Foo { CREATE CONSTRAINT exclusive ON (.name); };");

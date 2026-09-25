@@ -56,13 +56,20 @@ the _plan_ (which tables/columns/values, the casefold flag, the multi-set
 items), and the DB-coupled half is the introspection-gated execution. The plan
 is the part every constraint kind crosses, and it tests without a DB.
 
-**Ownership.** The module owns the exclusivity primitives. `engine.ts`'s
-WITH-DML-chain exclusivity snapshot also uses `exclusiveChecksFor` /
-`typeAncestorsOf` / `constraintIsExclusiveLike`, so those are exported and engine
-imports them back — one-directional (this module imports nothing from engine), no
-cycle. (The agent review's "only imports quoteIdent + schema types" undersold
-this: the helpers are shared with the snapshot machinery, so the right move is
-single-ownership-with-import-back, not duplication.)
+**Ownership.** `conflict_detection.ts` owns probe planning/running and conflict
+handling. A follow-up deepening moved the schema interpretation shared with
+physical exclusivity materialization to `schema/exclusive_constraints.ts`:
+`exclusiveConstraintFactsForType` describes inheritance coverage, delegated
+per-type scope, storage columns, case folding, and the supported single-field
+`except` form. Both `exclusiveChecksFor` and `schema_materialize.ts` consume
+those facts. `engine.ts`'s WITH-DML-chain snapshot still imports
+`exclusiveChecksFor` / `typeAncestorsOf` / `constraintIsExclusiveLike` from the
+conflict module; the latter two are re-exported from the schema module so the
+dependency remains one-directional and there is no engine cycle.
+
+The shared-facts test surface pins delegated coverage and rejects partial
+`except` matches; the existing conflict planner tests continue to exercise the
+probe behavior without a DB write.
 
 ## Test surface
 

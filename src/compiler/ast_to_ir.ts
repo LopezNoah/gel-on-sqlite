@@ -2219,6 +2219,13 @@ const resolveConstTupleIndexElement = (source: Set, index: number): Set | undefi
   return elements[index].val;
 };
 
+const pathRootTypeRef = (set: Set): TypeRef => {
+  const rootType = set.pathId.steps[0]?.type;
+  return rootType && !rootType.id.startsWith("sig:") && !rootType.id.startsWith("unknown:")
+    ? rootType
+    : set.typeref;
+};
+
 const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set => {
   if (steps.length === 0) {
     return literalToSet(null);
@@ -2237,6 +2244,9 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
     let out = current;
     let intersectionConcrete: globalThis.Set<string> | undefined;
     for (let i = 0; i < steps.length; i += 1) {
+      if (out.expr.kind === "string_constant" && (out.expr as BaseConstant).value === null) {
+        continue;
+      }
       const step = steps[i];
       if (step.kind === "ptr") {
         const groupStepSet = tryExtendGroupRowFieldPath(out, step.name, step.direction);
@@ -2264,21 +2274,22 @@ const compilePathSteps = (steps: EdgeQLPathStep[], ctx: IRCompileContext): Set =
         continue;
       }
       if (step.kind === "type_intersection") {
-        const baseTypeId = out.typeref.id;
+        const baseType = intersectionConcrete ? out.typeref : pathRootTypeRef(out);
+        const baseTypeId = baseType.id;
         const intersected = resolveTypeRef(ctx, step.typeName);
-        validateTypeIntersectionOperand(ctx, out.typeref, intersected);
+        validateTypeIntersectionOperand(ctx, baseType, intersected);
         const next = steps[i + 1];
         if (next && next.kind === "ptr") {
           validateTypeIntersectionPointer(ctx, baseTypeId, intersected.id, next.name);
         }
-        const narrowed = narrowTypeIntersectionStep(ctx, out.typeref, intersectionConcrete, step);
+        const narrowed = narrowTypeIntersectionStep(ctx, baseType, intersectionConcrete, step);
         if (narrowed) {
           intersectionConcrete = narrowed.concrete;
-          out = { ...out, typeref: narrowed.typeref };
+          out = { ...out, typeref: narrowed.typeref, typeIntersectionNarrowed: true } as Set;
         } else if (narrowed === null) {
-          out = { ...out, typeref: intersected };
+          out = { ...literalToSet(null), typeref: intersected };
         } else if (narrowed === undefined) {
-          out = { ...out, typeref: intersected };
+          out = { ...out, typeref: intersected, typeIntersectionNarrowed: true } as Set;
         }
         continue;
       }
@@ -4815,19 +4826,30 @@ export const compileFreeObjectExpr = (
 
     case "polymorphic_field_ref": {
       const subject = resolveBinding(ctx, "__current__") ?? resolveBinding(ctx, "__subject__");
+      const baseTyperef = subject?.typeref ?? resolveTypeRef(ctx, "std::BaseObject");
+      if (subject && expr.sourceType) {
+        const intersectTyperef = resolveTypeRef(ctx, expr.sourceType);
+        validateTypeIntersectionOperand(ctx, baseTyperef, intersectTyperef);
+        validateTypeIntersectionPointer(ctx, baseTyperef.id, intersectTyperef.id, expr.field);
+      }
+      const narrowed = narrowTypeIntersectionStep(ctx, baseTyperef, undefined, {
+        typeName: expr.sourceType ?? "",
+        typeExpr: expr.sourceTypeExpr,
+      });
+      if (narrowed === null) return literalToSet(null);
+
       // `[is Bb & Bc].bb` / `[is (CBaBc | Bb) & Bc].bc` — a compound `[is …]`
-      // type expression (no single `sourceType`). Evaluate the `&`/`|` tree to
-      // the concrete types it admits and narrow to their `|`-union, so pointer
-      // resolution probes every branch and the SQL layer gates the column by
-      // `__source_type` (a row contributes only when its concrete type is in
-      // the intersection). An empty intersection narrows to the empty set.
+      // type expression can admit several concrete types. Narrow against the
+      // subject's extent so disjoint branches stay empty and the source row's
+      // identity is retained for computed-shape correlation.
       let narrowedTyperef: TypeRef;
-      if (!expr.sourceType && expr.sourceTypeExpr) {
+      if (narrowed) {
+        narrowedTyperef = narrowed.typeref;
+      } else if (!expr.sourceType && expr.sourceTypeExpr) {
         const concrete = evalTypeExprConcreteNames(ctx, expr.sourceTypeExpr);
         if (concrete && concrete.size === 0) {
           return literalToSet(null);
         }
-        const baseTyperef = subject?.typeref ?? resolveTypeRef(ctx, "std::BaseObject");
         narrowedTyperef = concrete
           ? { ...baseTyperef, id: [...concrete].join(" | "), isScalar: false, isAbstract: false }
           : baseTyperef;
@@ -4835,7 +4857,7 @@ export const compileFreeObjectExpr = (
         narrowedTyperef = resolveTypeRef(ctx, expr.sourceType);
       }
       const narrowedSubject = subject
-        ? { ...subject, typeref: narrowedTyperef }
+        ? ({ ...subject, typeref: narrowedTyperef, typeIntersectionNarrowed: true } as Set)
         : setFromTypeRoot(narrowedTyperef);
       const ptrref = resolvePointerRef(ctx, narrowedSubject.typeref, expr.field);
       return ptrref ? extendPathSet(narrowedSubject, ptrref) : literalToSet(null);

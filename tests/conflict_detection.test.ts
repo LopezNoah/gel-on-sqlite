@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseDeclarativeSchema } from "../src/schema/sdl_adapter.js";
 import { schemaSnapshotFromDeclarative } from "../src/schema/uiSchema.js";
-import type { SchemaSnapshot } from "../src/schema/schema.js";
-import type { ScalarValue } from "../src/types.js";
+import { SchemaSnapshot, type SchemaSnapshot as SchemaSnapshotType } from "../src/schema/schema.js";
+import type { ScalarValue, TypeDef } from "../src/types.js";
 import {
   type ExclusiveCheck,
   exclusiveChecksFor,
@@ -26,7 +26,7 @@ const SDL = `module default {
   type PremiumAccount extending Account;
 }`;
 
-const loadSchema = (): SchemaSnapshot =>
+const loadSchema = (): SchemaSnapshotType =>
   schemaSnapshotFromDeclarative(parseDeclarativeSchema(SDL, { legacySyntaxCompat: true }));
 
 describe("conflict_detection — parseExclusivityViolation", () => {
@@ -175,6 +175,81 @@ describe("conflict_detection — exclusiveChecksFor (every constraint kind, no D
     const premium = schema.getType("default::PremiumAccount")!;
     const checks = exclusiveChecksFor(schema, premium, undefined);
     const emailCheck = checks.find((c) => c.fields.length === 1 && c.fields[0] === "email");
-    expect(emailCheck?.fromParent).toBe(true);
+    expect(emailCheck).toMatchObject({
+      fromParent: true,
+      tables: ["default__account", "default__premiumaccount"],
+    });
+  });
+
+  it("uses the same delegated scope and except-field interpretation for probing", () => {
+    const delegated = {
+      name: "code",
+      type: "str" as const,
+      constraints: [
+        {
+          name: "exclusive",
+          annotations: [],
+          delegated: true,
+          exceptExpr: "(.deleted)",
+          onExpr: "str_lower(__subject__)",
+        },
+      ],
+    };
+    const schema = new SchemaSnapshot([
+      {
+        name: "Base",
+        module: "default",
+        abstract: true,
+        fields: [delegated],
+      },
+      {
+        name: "First",
+        module: "default",
+        extends: ["default::Base"],
+        fields: [delegated],
+      },
+      {
+        name: "Second",
+        module: "default",
+        extends: ["default::Base"],
+        fields: [delegated],
+      },
+    ] satisfies TypeDef[]);
+
+    const first = schema.getType("default::First")!;
+    const code = exclusiveChecksFor(schema, first, undefined).find(
+      (check) => check.fields[0] === "code",
+    );
+    expect(code).toMatchObject({
+      tables: ["default__first"],
+      fromParent: true,
+      exceptColumn: "deleted",
+      lower: true,
+    });
+  });
+
+  it("does not infer an except field from a larger expression", () => {
+    const typeDef: TypeDef = {
+      name: "Scoped",
+      module: "default",
+      fields: [
+        {
+          name: "code",
+          type: "str",
+          constraints: [
+            {
+              name: "exclusive",
+              annotations: [],
+              exceptExpr: ".deleted OR .archived",
+            },
+          ],
+        },
+      ],
+    };
+    const schema = new SchemaSnapshot([typeDef]);
+    const code = exclusiveChecksFor(schema, schema.getType("default::Scoped")!, undefined).find(
+      (check) => check.fields[0] === "code",
+    );
+    expect(code?.exceptColumn).toBeUndefined();
   });
 });

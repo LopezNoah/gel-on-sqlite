@@ -995,6 +995,10 @@ export interface DDLStatement {
     | "operator";
   name: string;
   value?: FreeObjectExpr;
+  // Original source for an assigned alias/global expression. The runtime uses
+  // this only where the expression must remain text-backed; syntax and DDL
+  // dispatch come from `value` and the enclosing statement fields.
+  valueText?: string;
   functionDecl?: FunctionDecl;
   // DDL modifier keywords preceding the object kind, in source order
   // (`abstract`, `required`, `infix`, `pseudo`, …). Used by validators that

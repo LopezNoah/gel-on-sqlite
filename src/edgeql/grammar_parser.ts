@@ -72,6 +72,20 @@ const kinds = [
   "kw_current_reserved_specified",
   "kw_current_reserved_default",
   "kw_object",
+  "kw_annotation",
+  "kw_function",
+  "kw_index",
+  "kw_policy",
+  "kw_trigger",
+  "kw_link",
+  "kw_property",
+  "kw_abstract",
+  "kw_scalar",
+  "kw_constraint",
+  "kw_database",
+  "kw_branch",
+  "kw_role",
+  "kw_extension",
   "number",
   "string",
   "bytes_string",
@@ -161,8 +175,24 @@ const tokens = Object.fromEntries(
       categories:
         ["identifier", "backtick_name", "kw_unreserved"].includes(kind) ||
         kind.startsWith("kw_current_reserved") ||
-        kind === "kw_object" ||
-        kind === "kw_schema" ||
+        [
+          "kw_object",
+          "kw_schema",
+          "kw_annotation",
+          "kw_function",
+          "kw_index",
+          "kw_policy",
+          "kw_trigger",
+          "kw_link",
+          "kw_property",
+          "kw_abstract",
+          "kw_scalar",
+          "kw_constraint",
+          "kw_database",
+          "kw_branch",
+          "kw_role",
+          "kw_extension",
+        ].includes(kind) ||
         kind === "kw_type" ||
         ["kw_optional", "kw_single", "kw_multi", "kw_required"].includes(kind)
           ? [Name]
@@ -421,6 +451,38 @@ type GrammarOrderItem = {
   then?: GrammarOrderItem;
 };
 type GrammarOrderSuffix = Pick<GrammarOrderItem, "direction" | "nullsPosition">;
+type GrammarSelectTail = {
+  filter?: FreeObjectExpr;
+  order?: GrammarOrderItem;
+  offset?: number;
+  offsetExpr?: FreeObjectExpr;
+  limit?: number;
+  limitExpr?: FreeObjectExpr;
+};
+
+function hasGrammarSelectTail(tail: GrammarSelectTail): boolean {
+  return Boolean(
+    tail.filter ||
+    tail.order ||
+    tail.offset !== undefined ||
+    tail.offsetExpr ||
+    tail.limit !== undefined ||
+    tail.limitExpr,
+  );
+}
+
+function wrapWithGrammarSelectTail(expr: FreeObjectExpr, tail: GrammarSelectTail): FreeObjectExpr {
+  return {
+    kind: "select_expr_subquery",
+    expr,
+    ...(tail.filter ? { filter: tail.filter } : {}),
+    ...(tail.order ? { orderBy: orderExprChain(tail.order) } : {}),
+    ...(tail.offset !== undefined ? { offset: tail.offset } : {}),
+    ...(tail.offsetExpr ? { offsetExpr: tail.offsetExpr } : {}),
+    ...(tail.limit !== undefined ? { limit: tail.limit } : {}),
+    ...(tail.limitExpr ? { limitExpr: tail.limitExpr } : {}),
+  };
+}
 
 function orderExprForSelect(item: GrammarOrderItem, typeName: string): OrderExpr {
   const orderField =
@@ -549,6 +611,7 @@ class GrammarParser extends EmbeddedActionsParser {
   declare computedBacklinkShapeEntry: () => ShapeElement;
   declare orderItem: () => GrammarOrderItem;
   declare orderSuffix: () => GrammarOrderSuffix;
+  declare selectTail: () => GrammarSelectTail;
   declare braces: () => FreeObjectExpr;
   declare objectEntry: () => {
     name: string;
@@ -585,6 +648,7 @@ class GrammarParser extends EmbeddedActionsParser {
   declare functionCallArg: () => FunctionCallArgExpr;
   declare qualifiedName: () => string;
   declare typeExpr: () => TypeExpr;
+  declare optionalTypeFilter: () => TypeExpr | undefined;
   declare typeIntersectExpr: () => TypeExpr;
   declare typeAtom: () => TypeExpr;
   declare castType: () => string;
@@ -826,23 +890,32 @@ class GrammarParser extends EmbeddedActionsParser {
     $.RULE("insertStatement", (): Statement => {
       const start = $.CONSUME(tokens.kw_insert);
       const typeName = $.SUBRULE($.qualifiedName);
-      $.CONSUME(tokens.lbrace);
       const values: Record<string, InsertValue> = {};
       $.OPTION(() => {
-        const entry = $.SUBRULE($.insertEntry);
-        $.ACTION(() => {
-          values[entry.name] = entry.value;
-        });
-        $.MANY(() => {
-          $.CONSUME(tokens.comma);
-          const next = $.SUBRULE2($.insertEntry);
+        $.CONSUME(tokens.lbrace);
+        $.OPTION2(() => {
+          const entry = $.SUBRULE($.insertEntry);
           $.ACTION(() => {
-            values[next.name] = next.value;
+            values[entry.name] = entry.value;
+          });
+          $.MANY(() => {
+            $.CONSUME(tokens.comma);
+            $.OR3([
+              {
+                GATE: () => !tokenMatcher($.LA(1), tokens.rbrace),
+                ALT: () => {
+                  const next = $.SUBRULE2($.insertEntry);
+                  $.ACTION(() => {
+                    values[next.name] = next.value;
+                  });
+                },
+              },
+              { ALT: () => undefined },
+            ]);
           });
         });
-        $.OPTION2(() => $.CONSUME2(tokens.comma));
+        $.CONSUME(tokens.rbrace);
       });
-      $.CONSUME(tokens.rbrace);
       let conflict = false;
       let onFields: string[] | undefined;
       let conflictElse: NonNullable<InsertConflict["else"]> | undefined;
@@ -887,6 +960,31 @@ class GrammarParser extends EmbeddedActionsParser {
             parenthesized = true;
           });
           const alternative = $.OR2([
+            {
+              GATE: () => tokenMatcher($.LA(1), tokens.kw_detached),
+              ALT: () => {
+                $.CONSUME(tokens.kw_detached);
+                let nested = false;
+                $.OPTION8({
+                  GATE: () => tokenMatcher($.LA(1), tokens.lparen),
+                  DEF: () => {
+                    $.CONSUME3(tokens.lparen);
+                    nested = true;
+                  },
+                });
+                const statement = $.SUBRULE($.insertStatement);
+                $.OPTION9({
+                  GATE: () => nested,
+                  DEF: () => $.CONSUME3(tokens.rparen),
+                });
+                return $.ACTION(() => {
+                  if (statement.kind !== "insert") {
+                    throw syntaxError("Expected INSERT in detached conflict alternative");
+                  }
+                  return { kind: "type_name" as const, name: statement.typeName };
+                });
+              },
+            },
             {
               GATE: () => tokenMatcher($.LA(1), tokens.kw_update),
               ALT: () => ({
@@ -1116,9 +1214,10 @@ class GrammarParser extends EmbeddedActionsParser {
           ALT: () => {
             const select = $.CONSUME(tokens.kw_select);
             const expr = $.SUBRULE2($.expression);
+            const tail = $.SUBRULE($.selectTail);
             return $.ACTION(() => ({
               kind: "select_expr" as const,
-              expr,
+              expr: hasGrammarSelectTail(tail) ? wrapWithGrammarSelectTail(expr, tail) : expr,
               pos: { line: select.startLine ?? 1, column: select.startColumn ?? 1 },
             }));
           },
@@ -1129,9 +1228,14 @@ class GrammarParser extends EmbeddedActionsParser {
             const next = $.LA(1);
             const inner = $.LA(2);
             const expr = $.SUBRULE3($.expression);
+            const tail = $.SUBRULE2($.selectTail);
             return $.ACTION(() => ({
               kind: "select_expr" as const,
-              expr: expr.kind === "select_expr_subquery" ? expr.expr : expr,
+              expr: hasGrammarSelectTail(tail)
+                ? wrapWithGrammarSelectTail(expr, tail)
+                : expr.kind === "select_expr_subquery"
+                  ? expr.expr
+                  : expr,
               pos:
                 next.tokenTypeIdx === tokens.lparen.tokenTypeIdx &&
                 inner.tokenTypeIdx === tokens.kw_select.tokenTypeIdx
@@ -1437,6 +1541,47 @@ class GrammarParser extends EmbeddedActionsParser {
         });
       });
       return { direction, nullsPosition };
+    });
+
+    $.RULE("selectTail", (): GrammarSelectTail => {
+      let filter: FreeObjectExpr | undefined;
+      $.OPTION(() => {
+        $.CONSUME(tokens.kw_filter);
+        filter = $.SUBRULE($.expression);
+      });
+      let order: GrammarOrderItem | undefined;
+      $.OPTION2(() => {
+        $.CONSUME(tokens.kw_order);
+        $.CONSUME(tokens.kw_by);
+        order = $.SUBRULE($.orderItem);
+      });
+      let offset: number | undefined;
+      let offsetExpr: FreeObjectExpr | undefined;
+      $.OPTION3(() => {
+        $.CONSUME(tokens.kw_offset);
+        const value = $.SUBRULE2($.expression);
+        if (
+          value.kind === "literal" &&
+          typeof value.value === "number" &&
+          value.numericKind === "integer"
+        ) {
+          offset = value.value;
+        } else offsetExpr = value;
+      });
+      let limit: number | undefined;
+      let limitExpr: FreeObjectExpr | undefined;
+      $.OPTION4(() => {
+        $.CONSUME(tokens.kw_limit);
+        const value = $.SUBRULE3($.expression);
+        if (
+          value.kind === "literal" &&
+          typeof value.value === "number" &&
+          value.numericKind === "integer"
+        ) {
+          limit = value.value;
+        } else limitExpr = value;
+      });
+      return { filter, order, offset, offsetExpr, limit, limitExpr };
     });
 
     $.RULE("expression", (): FreeObjectExpr => {
@@ -1960,9 +2105,37 @@ class GrammarParser extends EmbeddedActionsParser {
             return { kind: "type_of" as const, expr };
           },
         },
-        { ALT: () => ({ kind: "type_name" as const, name: $.SUBRULE($.qualifiedName) }) },
+        {
+          ALT: () => {
+            let name = $.SUBRULE($.qualifiedName);
+            $.OPTION(() => {
+              $.CONSUME(tokens.lt);
+              const args = [$.SUBRULE($.castTypeArg)];
+              $.MANY(() => {
+                $.CONSUME(tokens.comma);
+                args.push($.SUBRULE2($.castTypeArg));
+              });
+              $.CONSUME(tokens.gt);
+              name = `${name}<${args.join(", ")}>`;
+            });
+            return { kind: "type_name" as const, name };
+          },
+        },
       ]),
     );
+    $.RULE("optionalTypeFilter", (): TypeExpr | undefined => {
+      let typeExpr: TypeExpr | undefined;
+      $.OPTION({
+        GATE: () => tokenMatcher($.LA(1), tokens.lbracket) && tokenMatcher($.LA(2), tokens.kw_is),
+        DEF: () => {
+          $.CONSUME(tokens.lbracket);
+          $.CONSUME(tokens.kw_is);
+          typeExpr = $.SUBRULE($.typeExpr);
+          $.CONSUME(tokens.rbracket);
+        },
+      });
+      return typeExpr;
+    });
     $.RULE("castType", (): string => {
       let left = $.SUBRULE($.castTypeIntersect);
       $.MANY(() => {
@@ -2069,11 +2242,39 @@ class GrammarParser extends EmbeddedActionsParser {
         },
       });
       const entry = $.SUBRULE($.shapeEntryCore);
-      return $.ACTION(() => ({
-        ...entry,
-        ...(required !== undefined ? { required } : {}),
-        ...(cardinality !== undefined ? { cardinality } : {}),
-      }));
+      const tail = $.SUBRULE($.selectTail);
+      return $.ACTION(() => {
+        const orderBy: OrderExpr[] = [];
+        let order = tail.order;
+        while (order) {
+          orderBy.push(orderExprForSelect({ ...order, then: undefined }, ""));
+          order = order.then;
+        }
+        const modifiers = {
+          ...(required !== undefined ? { required } : {}),
+          ...(cardinality !== undefined ? { cardinality } : {}),
+          ...(tail.filter ? { where: tail.filter } : {}),
+          ...(orderBy.length ? { orderBy } : {}),
+          ...(tail.offset !== undefined ? { offset: tail.offset } : {}),
+          ...(tail.offsetExpr ? { offsetExpr: tail.offsetExpr } : {}),
+          ...(tail.limit !== undefined ? { limit: tail.limit } : {}),
+          ...(tail.limitExpr ? { limitExpr: tail.limitExpr } : {}),
+        };
+        if (entry.kind !== "link") return { ...entry, ...modifiers };
+        return {
+          ...entry,
+          ...modifiers,
+          clauses: {
+            ...entry.clauses,
+            ...(tail.filter ? { filter: filterFromExpr(tail.filter) } : {}),
+            ...(tail.order ? { orderBy: orderExprForSelect(tail.order, "") } : {}),
+            ...(tail.offset !== undefined ? { offset: tail.offset } : {}),
+            ...(tail.offsetExpr ? { offsetExpr: tail.offsetExpr } : {}),
+            ...(tail.limit !== undefined ? { limit: tail.limit } : {}),
+            ...(tail.limitExpr ? { limitExpr: tail.limitExpr } : {}),
+          },
+        };
+      });
     });
     $.RULE("shapeEntryCore", (): ShapeElement =>
       $.OR([
@@ -2154,19 +2355,75 @@ class GrammarParser extends EmbeddedActionsParser {
             const sourceTypeExpr = $.SUBRULE2($.typeExpr);
             $.CONSUME2(tokens.rbracket);
             $.CONSUME(tokens.dot);
-            const name = $.CONSUME4(Name).image;
-            return $.ACTION(() => ({
-              kind: "computed" as const,
-              name,
-              expr: {
-                kind: "polymorphic_field_ref" as const,
-                sourceType: simpleTypeName(sourceTypeExpr) ?? "",
-                sourceTypeExpr,
-                field: name,
+            const member = $.OR4([
+              {
+                GATE: () =>
+                  tokenMatcher($.LA(1), tokens.star) || tokenMatcher($.LA(1), tokens.double_splat),
+                ALT: () => {
+                  const splat = $.OR5([
+                    { ALT: () => $.CONSUME2(tokens.star) },
+                    { ALT: () => $.CONSUME2(tokens.double_splat) },
+                  ]);
+                  return {
+                    kind: "splat" as const,
+                    depth:
+                      splat.tokenTypeIdx === tokens.star.tokenTypeIdx ? (1 as const) : (2 as const),
+                    sourceType: simpleTypeName(sourceTypeExpr),
+                    sourceTypeExpr,
+                    intersection: true,
+                    operation: "assign" as const,
+                    origin: "explicit" as const,
+                  };
+                },
               },
-              operation: "assign" as const,
-              origin: "explicit" as const,
-            }));
+              {
+                ALT: () => {
+                  const name = $.CONSUME5(Name).image;
+                  let typeFilterExpr = $.SUBRULE($.optionalTypeFilter);
+                  $.OPTION6({
+                    GATE: () => tokenMatcher($.LA(1), tokens.colon),
+                    DEF: () => $.CONSUME3(tokens.colon),
+                  });
+                  const colonTypeFilterExpr = $.SUBRULE2($.optionalTypeFilter);
+                  typeFilterExpr ??= colonTypeFilterExpr;
+                  let shape: ShapeElement[] | undefined;
+                  $.OPTION7({
+                    GATE: () => tokenMatcher($.LA(1), tokens.lbrace),
+                    DEF: () => {
+                      $.CONSUME3(tokens.lbrace);
+                      shape = $.SUBRULE3($.shape);
+                      $.CONSUME3(tokens.rbrace);
+                    },
+                  });
+                  return $.ACTION<ShapeElement>(() =>
+                    shape
+                      ? {
+                          kind: "link",
+                          name,
+                          typeFilter: simpleTypeName(typeFilterExpr),
+                          typeFilterExpr,
+                          shape,
+                          clauses: {},
+                          operation: "assign",
+                          origin: "explicit",
+                        }
+                      : {
+                          kind: "computed",
+                          name,
+                          expr: {
+                            kind: "polymorphic_field_ref",
+                            sourceType: simpleTypeName(sourceTypeExpr) ?? "",
+                            sourceTypeExpr,
+                            field: name,
+                          },
+                          operation: "assign",
+                          origin: "explicit",
+                        },
+                  );
+                },
+              },
+            ]);
+            return member;
           },
         },
         {
@@ -2180,11 +2437,11 @@ class GrammarParser extends EmbeddedActionsParser {
           ALT: () => {
             const name = $.CONSUME2(Name).image;
             let recursionDepth: number | undefined;
-            $.OPTION7({
+            $.OPTION9({
               GATE: () =>
                 tokenMatcher($.LA(1), tokens.star) && tokenMatcher($.LA(2), tokens.number),
               DEF: () => {
-                $.CONSUME2(tokens.star);
+                $.CONSUME3(tokens.star);
                 const depth = $.CONSUME(tokens.number);
                 recursionDepth = $.ACTION(() => {
                   const value = Number(depth.image.replace(/_/g, ""));
@@ -2199,6 +2456,7 @@ class GrammarParser extends EmbeddedActionsParser {
                 });
               },
             });
+            const typeFilterExpr = $.SUBRULE3($.optionalTypeFilter);
             let result: ShapeElement | undefined;
             $.OPTION3(() =>
               $.OR2([
@@ -2216,33 +2474,22 @@ class GrammarParser extends EmbeddedActionsParser {
                   },
                 },
                 {
-                  GATE: () => tokenMatcher($.LA(2), tokens.lbrace),
+                  GATE: () =>
+                    tokenMatcher($.LA(2), tokens.lbrace) ||
+                    (tokenMatcher($.LA(2), tokens.lbracket) && tokenMatcher($.LA(3), tokens.kw_is)),
                   ALT: () => {
                     $.CONSUME(tokens.colon);
+                    const colonTypeFilterExpr = $.SUBRULE4($.optionalTypeFilter);
                     $.CONSUME2(tokens.lbrace);
                     const shape = $.SUBRULE2($.shape);
                     $.CONSUME2(tokens.rbrace);
-                    let filter: FilterExpr | undefined;
-                    $.OPTION5({
-                      GATE: () => tokenMatcher($.LA(1), tokens.kw_filter),
-                      DEF: () => {
-                        $.CONSUME(tokens.kw_filter);
-                        const predicate = $.SUBRULE4($.expression);
-                        filter = $.ACTION(() => filterFromExpr(predicate));
-                      },
-                    });
-                    let orderBy: OrderExpr | undefined;
-                    $.OPTION6(() => {
-                      $.CONSUME(tokens.kw_order);
-                      $.CONSUME(tokens.kw_by);
-                      const order = $.SUBRULE($.orderItem);
-                      orderBy = $.ACTION(() => orderExprForSelect(order, ""));
-                    });
                     result = $.ACTION(() => ({
                       kind: "link",
                       name,
+                      typeFilter: simpleTypeName(typeFilterExpr ?? colonTypeFilterExpr),
+                      typeFilterExpr: typeFilterExpr ?? colonTypeFilterExpr,
                       shape,
-                      clauses: { ...(filter ? { filter } : {}), ...(orderBy ? { orderBy } : {}) },
+                      clauses: {},
                       operation: "assign",
                       origin: "explicit",
                     }));
@@ -2323,6 +2570,7 @@ class GrammarParser extends EmbeddedActionsParser {
       });
       $.OR([{ ALT: () => $.CONSUME(tokens.kw_select) }, { ALT: () => $.CONSUME(tokens.kw_union) }]);
       const body = $.SUBRULE2($.expression);
+      const tail = $.SUBRULE($.selectTail);
       return $.ACTION(() => {
         let result = body;
         for (let i = binders.length - 1; i >= 0; i--) {
@@ -2337,7 +2585,7 @@ class GrammarParser extends EmbeddedActionsParser {
           $.bindings.delete(binder.variable);
           $.bindingValues.delete(binder.variable);
         }
-        return result;
+        return hasGrammarSelectTail(tail) ? wrapWithGrammarSelectTail(result, tail) : result;
       });
     });
     $.RULE("atom", (): FreeObjectExpr =>
@@ -2442,6 +2690,19 @@ class GrammarParser extends EmbeddedActionsParser {
           },
         },
         { GATE: () => tokenMatcher($.LA(1), tokens.kw_for), ALT: () => $.SUBRULE($.forExpr) },
+        {
+          GATE: () => tokenMatcher($.LA(1), tokens.at),
+          ALT: () => {
+            $.CONSUME(tokens.at);
+            const property = $.CONSUME3(Name).image;
+            return {
+              kind: "field_access" as const,
+              expr: { kind: "current_item" as const },
+              field: `@${property}`,
+              optional: false,
+            };
+          },
+        },
         {
           GATE: () => tokenMatcher($.LA(1), tokens.backward_link),
           ALT: () => {
@@ -2552,20 +2813,10 @@ class GrammarParser extends EmbeddedActionsParser {
         {
           ALT: () => {
             const expr = $.SUBRULE2($.expression);
-            let order: GrammarOrderItem | undefined;
-            $.OPTION({
-              GATE: () => tokenMatcher($.LA(1), tokens.kw_order),
-              DEF: () => {
-                $.CONSUME(tokens.kw_order);
-                $.CONSUME(tokens.kw_by);
-                order = $.SUBRULE($.orderItem);
-              },
-            });
+            const tail = $.SUBRULE($.selectTail);
             return $.ACTION(() =>
               functionArg(
-                order
-                  ? { kind: "select_expr_subquery", expr, orderBy: orderExprChain(order) }
-                  : expr,
+                hasGrammarSelectTail(tail) ? wrapWithGrammarSelectTail(expr, tail) : expr,
                 $.bindings,
               ),
             );
@@ -2587,30 +2838,15 @@ class GrammarParser extends EmbeddedActionsParser {
         },
       });
       const expr = $.SUBRULE($.expression);
-      let filterExpr: FreeObjectExpr | undefined;
-      $.OPTION(() => {
-        $.CONSUME(tokens.kw_filter);
-        filterExpr = $.SUBRULE2($.expression);
-      });
-      let order: ReturnType<GrammarParser["orderItem"]> | undefined;
-      $.OPTION2(() => {
-        $.CONSUME(tokens.kw_order);
-        $.CONSUME(tokens.kw_by);
-        order = $.SUBRULE($.orderItem);
-      });
-      let limit: number | undefined;
-      $.OPTION3(() => {
-        $.CONSUME(tokens.kw_limit);
-        limit = Number($.CONSUME(tokens.number).image);
-      });
+      const tail = $.SUBRULE($.selectTail);
       return $.ACTION(() => {
         const filter =
-          filterExpr && expr.kind === "select" ? filterFromExpr(filterExpr) : undefined;
+          tail.filter && expr.kind === "select" ? filterFromExpr(tail.filter) : undefined;
         const sortInShape =
-          order &&
+          tail.order &&
           expr.kind === "select" &&
           $.explicitShapes.has(expr) &&
-          orderUsesOnlyCurrentItemFields(order);
+          orderUsesOnlyCurrentItemFields(tail.order);
         const inner: FreeObjectExpr =
           expr.kind === "select" && (filter || sortInShape)
             ? {
@@ -2618,8 +2854,8 @@ class GrammarParser extends EmbeddedActionsParser {
                 clauses: {
                   ...expr.clauses,
                   ...(filter ? { filter } : {}),
-                  ...(sortInShape && order
-                    ? { orderBy: orderExprForSelect(order, expr.typeName) }
+                  ...(sortInShape && tail.order
+                    ? { orderBy: orderExprForSelect(tail.order, expr.typeName) }
                     : {}),
                 },
               }
@@ -2628,12 +2864,12 @@ class GrammarParser extends EmbeddedActionsParser {
           kind: "select_expr_subquery",
           ...(alias ? { alias } : {}),
           expr: inner,
-          filter: filterExpr && expr.kind !== "select" ? filterExpr : undefined,
-          orderBy: order && !sortInShape ? orderExprChain(order) : undefined,
-          limit,
-          offset: undefined,
-          limitExpr: undefined,
-          offsetExpr: undefined,
+          filter: tail.filter && expr.kind !== "select" ? tail.filter : undefined,
+          orderBy: tail.order && !sortInShape ? orderExprChain(tail.order) : undefined,
+          limit: tail.limit,
+          offset: tail.offset,
+          limitExpr: tail.limitExpr,
+          offsetExpr: tail.offsetExpr,
         };
       });
     });
@@ -2713,7 +2949,28 @@ class GrammarParser extends EmbeddedActionsParser {
           GATE: () => tokenMatcher($.LA(1), tokens.kw_with),
           ALT: () => {
             $.CONSUME(tokens.kw_with);
-            const bindings = [$.SUBRULE($.binding)];
+            let moduleName: string | undefined;
+            $.OPTION6({
+              GATE: () => tokenMatcher($.LA(1), tokens.kw_module),
+              DEF: () => {
+                $.CONSUME(tokens.kw_module);
+                moduleName = $.SUBRULE($.qualifiedName);
+              },
+            });
+            const bindings: WithBinding[] = [];
+            if (!moduleName) bindings.push($.SUBRULE($.binding));
+            else {
+              $.OPTION7({
+                GATE: () =>
+                  tokenMatcher($.LA(1), tokens.comma) &&
+                  tokenMatcher($.LA(2), Name) &&
+                  tokenMatcher($.LA(3), tokens.assign),
+                DEF: () => {
+                  $.CONSUME3(tokens.comma);
+                  bindings.push($.SUBRULE2($.binding));
+                },
+              });
+            }
             $.MANY2({
               GATE: () =>
                 tokenMatcher($.LA(1), tokens.comma) &&
@@ -2721,11 +2978,11 @@ class GrammarParser extends EmbeddedActionsParser {
                   tokenMatcher($.LA(2), kind),
                 ),
               DEF: () => {
-                $.CONSUME3(tokens.comma);
-                bindings.push($.SUBRULE2($.binding));
+                $.CONSUME6(tokens.comma);
+                bindings.push($.SUBRULE3($.binding));
               },
             });
-            $.OPTION4({
+            $.OPTION5({
               GATE: () =>
                 tokenMatcher($.LA(1), tokens.comma) &&
                 [tokens.kw_select, tokens.kw_group, tokens.kw_for].some((kind) =>
@@ -2752,7 +3009,10 @@ class GrammarParser extends EmbeddedActionsParser {
             return {
               kind: "select_expr_subquery" as const,
               expr,
-              clauses: { _withBindings: bindings },
+              clauses: {
+                _withBindings: bindings,
+                ...(moduleName ? { _withModule: moduleName } : {}),
+              },
             };
           },
         },
@@ -3204,6 +3464,7 @@ function parseDdlGrammar(
 
   const afterName = source.slice(nameEnd);
   let value: DDLStatement["value"];
+  let valueText: DDLStatement["valueText"];
   if (action === "create" && (objectKind === "alias" || objectKind === "global")) {
     const assign = input.find((token) => token.kind === "assign" && token.offset >= nameEnd);
     if (assign) {
@@ -3211,6 +3472,7 @@ function parseDdlGrammar(
         .slice(assign.offset + assign.lexeme.length)
         .replace(/;\s*$/, "")
         .trim();
+      valueText = expressionSource;
       const parsed = parseEdgeQLGrammar(
         /^select\b/i.test(expressionSource) ? expressionSource : `SELECT ${expressionSource}`,
       );
@@ -3273,6 +3535,7 @@ function parseDdlGrammar(
     objectKind,
     name,
     ...(value ? { value } : {}),
+    ...(valueText !== undefined ? { valueText } : {}),
     ...(functionDecl ? { functionDecl } : {}),
     ...(modifiers.length ? { modifiers } : {}),
     ...(extendsList ? { extendsList } : {}),
@@ -3400,8 +3663,23 @@ export function parseEdgeQLGrammar(source: string, defaultModule?: string): Stat
     for (let i = 2; i < lexical.length; i++) {
       const token = lexical[i];
       if (depth === 0 && token.kind === "comma") {
-        bindingComma = i;
-        break;
+        const nextKind = lexical[i + 1]?.kind;
+        if (
+          ![
+            "kw_select",
+            "kw_group",
+            "kw_insert",
+            "kw_update",
+            "kw_delete",
+            "kw_for",
+            "kw_create",
+            "kw_alter",
+            "kw_drop",
+          ].includes(nextKind ?? "")
+        ) {
+          bindingComma = i;
+          break;
+        }
       }
       if (
         depth === 0 &&
@@ -3455,7 +3733,10 @@ export function parseEdgeQLGrammar(source: string, defaultModule?: string): Stat
       return { ...parsed, withModule: moduleName } as Statement;
     }
     if (foundBody < 0) throw syntaxError("Expected a statement after WITH MODULE");
-    const moduleName = source.slice(lexical[2].offset, lexical[foundBody].offset).trim();
+    const moduleName = source
+      .slice(lexical[2].offset, lexical[foundBody].offset)
+      .replace(/,\s*$/, "")
+      .trim();
     const parsed = parseEdgeQLGrammar(source.slice(lexical[foundBody].offset));
     const bodyPos = offsetToLineCol(lexical[foundBody].offset, lineStarts);
     parsed.pos = bodyPos;

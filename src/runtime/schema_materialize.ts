@@ -7,8 +7,10 @@
 // materializeSchema for existing callers.
 
 import { AppError } from "../errors.js";
+import { tableNameForType } from "../codegen/sql.js";
 import { normalizeTypeName, qualifiedTypeName, usesLinkTable } from "../schema/schema.js";
 import type { SchemaSnapshot } from "../schema/schema.js";
+import { exclusiveConstraintFactsForType } from "../schema/exclusive_constraints.js";
 import { populateSchemaIntrospection } from "../schema/schema_introspection.js";
 import type {
   MutationRewriteExpr,
@@ -124,12 +126,13 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
 
 // ── Exclusivity constraint enforcement ──────────────────────────────────────
 //
-// Gel exclusive constraints are enforced across an entire inheritance
-// hierarchy: a `constraint exclusive` declared on a base type forbids
-// duplicate values among the base AND every descendant type, even though each
-// type lives in its own SQLite table. To enforce that purely in SQL we build,
-// for each constraint "group" (the topmost type that owns the constraint +
-// the property it covers), a shared bookkeeping table with a UNIQUE index and
+// Non-delegated Gel exclusive constraints are enforced across an entire
+// inheritance hierarchy: a `constraint exclusive` declared on a base type
+// forbids duplicate values among the base AND every descendant type, even
+// though each type lives in its own SQLite table. Delegated constraints keep
+// their concrete-type scope. To enforce the shared constraints in SQL we build,
+// for each constraint group (the owner type + the property it covers), a
+// shared bookkeeping table with a UNIQUE index and
 // AFTER INSERT/UPDATE/DELETE triggers on every participating type's table that
 // mirror the property value into the shared table. A duplicate then trips the
 // shared UNIQUE index regardless of which concrete type wrote the row.
@@ -139,7 +142,7 @@ export const materializeSchema = (db: SQLiteDatabase, schema: SchemaSnapshot): v
 // failed" error into Gel's "<prop> violates exclusivity constraint" wording.
 
 interface ExclusiveGroup {
-  ownerKey: string; // qualified name of the topmost owner type
+  ownerKey: string; // qualified constraint owner and field
   field: string; // property name carrying the constraint
   tables: string[]; // participating type tables
   exceptField?: string; // `except (.flag)` — rows where flag is true are exempt
@@ -147,49 +150,17 @@ interface ExclusiveGroup {
   multi?: boolean; // multi-property: column holds a JSON array; each element must be unique
 }
 
-const constraintIsExclusive = (c: { name?: string }): boolean =>
-  c.name === "std::exclusive" || c.name === "exclusive";
-
-const typeAncestors = (schema: SchemaSnapshot, typeDef: TypeDef): TypeDef[] => {
-  const seen = new Set<string>();
-  const out: TypeDef[] = [];
-  const visit = (td: TypeDef): void => {
-    for (const baseName of td.extends ?? []) {
-      const base = schema.getType(baseName);
-      if (!base) continue;
-      const key = qualifiedTypeName(base);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(base);
-      visit(base);
-    }
-  };
-  visit(typeDef);
-  return out;
-};
-
 const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
   const types = schema.listTypes();
   const groups = new Map<string, ExclusiveGroup>();
 
-  // Parse `except (.flag)` → the bare field name (we only support a single
-  // own-field reference). Returns undefined when the form is unsupported.
-  const exceptFieldFrom = (exceptExpr?: string): string | undefined => {
-    if (!exceptExpr) return undefined;
-    const m = /^\(?\s*\.([A-Za-z_][A-Za-z0-9_]*)\s*\)?$/.exec(exceptExpr);
-    return m ? m[1] : undefined;
-  };
-  // `on (str_lower(__subject__))` → case-insensitive uniqueness on the column.
-  const isLowerExpr = (onExpr?: string): boolean =>
-    onExpr !== undefined && /str_lower\s*\(\s*__subject__\s*\)/.test(onExpr);
-
   const addParticipant = (
-    keyOwner: TypeDef,
+    ownerTypeName: string,
     field: string,
-    member: TypeDef,
+    tables: string[],
     opts: { exceptField?: string; lower?: boolean; multi?: boolean },
   ): void => {
-    const key = `${qualifiedTypeName(keyOwner)}|${field}`;
+    const key = `${ownerTypeName}|${field}`;
     let group = groups.get(key);
     if (!group) {
       group = {
@@ -202,118 +173,32 @@ const collectExclusiveGroups = (schema: SchemaSnapshot): ExclusiveGroup[] => {
       };
       groups.set(key, group);
     }
-    const tbl = tableName(member);
-    if (!group.tables.includes(tbl)) group.tables.push(tbl);
+    for (const table of tables) {
+      if (!group.tables.includes(table)) group.tables.push(table);
+    }
   };
 
   for (const typeDef of types) {
     if (typeDef.abstract) continue;
 
-    // ── Field-level `constraint exclusive` (incl. `on (str_lower(...))`) ──
-    for (const field of typeDef.fields) {
-      if (field.name === "id") continue;
-      const constraints =
-        (
-          field as {
-            constraints?: Array<{
-              name: string;
-              delegated?: boolean;
-              onExpr?: string;
-              exceptExpr?: string;
-            }>;
-          }
-        ).constraints ?? [];
-      const excl = constraints.find(constraintIsExclusive);
-      if (!excl) continue;
-      // Delegated constraints are enforced per-type only — the same-table
-      // UNIQUE index in materializeSchema already covers them, so no shared
-      // cross-type bookkeeping is needed (and adding it would be incorrect).
-      if (excl.delegated === true) continue;
-      let owner = typeDef;
-      for (const anc of typeAncestors(schema, typeDef)) {
-        const ancField = anc.fields.find((f) => f.name === field.name) as
-          | { constraints?: Array<{ name: string }> }
-          | undefined;
-        if (ancField?.constraints?.some(constraintIsExclusive)) owner = anc;
-      }
-      addParticipant(owner, field.name, typeDef, {
-        exceptField: exceptFieldFrom(excl.exceptExpr),
-        lower: isLowerExpr(excl.onExpr),
-        // A `multi property` with `constraint exclusive` requires every element
-        // (across the whole type hierarchy) to be unique. The column stores a
-        // JSON array, so the shared-table mirror must expand its elements.
-        multi: field.multi === true,
-      });
-    }
-
-    // ── Type-level single-field `constraint exclusive on (.field) [except …]` ──
-    // (e.g. ExceptTest's `exclusive on (.name) except (.deleted)`). A type-level
-    // constraint applies to the declaring type AND all of its descendants, so
-    // we register every concrete type whose lineage carries the constraint.
-    // Tuple constraints (fieldRefs.length > 1) are not handled here.
-    const lineageTypeConstraint = (
-      field: string,
-    ): { exceptExpr?: string; exprText: string } | undefined => {
-      const own = (typeDef.typeConstraints ?? []).find(
-        (c) =>
-          constraintIsExclusive(c) &&
-          !c.delegated &&
-          c.fieldRefs.length === 1 &&
-          c.fieldRefs[0] === field,
+    for (const fact of exclusiveConstraintFactsForType(schema, typeDef)) {
+      // Delegated constraints remain local to the concrete type. Plain forms
+      // are covered by its same-table UNIQUE index; `on`/`except`/multi forms
+      // still need their local shared-table representation.
+      if (fact.fields.length !== 1) continue;
+      const [field] = fact.fields;
+      const fieldDef = typeDef.fields.find((candidate) => candidate.name === field);
+      if (!fieldDef || (fact.kind === "type" && fieldDef.multi)) continue;
+      addParticipant(
+        fact.ownerTypeName,
+        field,
+        fact.typeNames.map((name) => tableNameForType(name)),
+        {
+          exceptField: fact.exceptField,
+          lower: fact.lower,
+          multi: fact.multiProp !== undefined,
+        },
       );
-      if (own) return own;
-      for (const anc of typeAncestors(schema, typeDef)) {
-        const inherited = (anc.typeConstraints ?? []).find(
-          (c) =>
-            constraintIsExclusive(c) &&
-            !c.delegated &&
-            c.fieldRefs.length === 1 &&
-            c.fieldRefs[0] === field,
-        );
-        if (inherited) return inherited;
-      }
-      return undefined;
-    };
-    // Candidate fields: those referenced by any single-field type constraint in
-    // this type's lineage.
-    const candidateFields = new Set<string>();
-    for (const tc of typeDef.typeConstraints ?? []) {
-      if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1)
-        candidateFields.add(tc.fieldRefs[0]);
-    }
-    for (const anc of typeAncestors(schema, typeDef)) {
-      for (const tc of anc.typeConstraints ?? []) {
-        if (constraintIsExclusive(tc) && !tc.delegated && tc.fieldRefs.length === 1)
-          candidateFields.add(tc.fieldRefs[0]);
-      }
-    }
-    for (const field of candidateFields) {
-      const tc = lineageTypeConstraint(field);
-      if (!tc) continue;
-      const fieldDef = typeDef.fields.find((f) => f.name === field) as
-        | { multi?: boolean }
-        | undefined;
-      if (!fieldDef || fieldDef.multi) continue;
-      // Owner: topmost ancestor declaring the same single-field type constraint
-      // (or this type itself).
-      let owner = typeDef;
-      for (const anc of typeAncestors(schema, typeDef)) {
-        if (
-          (anc.typeConstraints ?? []).some(
-            (c) =>
-              constraintIsExclusive(c) &&
-              !c.delegated &&
-              c.fieldRefs.length === 1 &&
-              c.fieldRefs[0] === field,
-          )
-        ) {
-          owner = anc;
-        }
-      }
-      addParticipant(owner, field, typeDef, {
-        exceptField: exceptFieldFrom(tc.exceptExpr),
-        lower: isLowerExpr(tc.exprText),
-      });
     }
   }
   return [...groups.values()];

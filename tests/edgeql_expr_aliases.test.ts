@@ -1529,6 +1529,12 @@ describe("TestEdgeQLExprAliases", () => {
     );
   });
 
+  it("keeps semicolons inside parsed alias expressions", () => {
+    h.script("create type AliasCarrier; create alias semicolon_value := 'left;right';");
+    assertQueryResult(h, "select semicolon_value;", ["left;right"]);
+    h.script("drop alias semicolon_value;");
+  });
+
   it("test_edgeql_aliases_schema_types_02", () => {
     h.script(
       `

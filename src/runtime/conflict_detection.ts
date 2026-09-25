@@ -15,17 +15,20 @@
 // The planner is the test surface every constraint kind crosses without a DB
 // write; the runner replays it byte-identically to the old `findExclusiveConflictId`.
 //
-// OWNERSHIP: this module owns the exclusivity primitives. `engine.ts`'s
-// WITH-DML-chain exclusivity snapshot also uses `exclusiveChecksFor` /
-// `typeAncestorsOf` / `constraintIsExclusiveLike`, so they are exported and
-// engine imports them back — one-directional (this module imports nothing from
-// engine). Pinned by `tests/conflict_detection.test.ts`.
+// OWNERSHIP: schema/exclusive_constraints.ts owns the shared schema facts;
+// this module owns conflict planning/running and conflict-specific checks.
+// `engine.ts`'s WITH-DML-chain snapshot imports `exclusiveChecksFor` plus the
+// re-exported schema helpers — one-directional, with no engine cycle. Pinned by
+// `tests/conflict_detection.test.ts`.
 
 import type { SchemaSnapshot } from "../schema/schema.js";
 import { qualifiedTypeName } from "../schema/schema.js";
 import type { ScalarValue, TypeDef } from "../types.js";
 import { quoteIdent, tableNameForType } from "../codegen/sql.js";
 import type { SQLiteDatabase } from "./database.js";
+import { exclusiveConstraintFactsForType } from "../schema/exclusive_constraints.js";
+
+export { constraintIsExclusiveLike, typeAncestorsOf } from "../schema/exclusive_constraints.js";
 
 // Parse a SQLite UNIQUE-failure message back to the violated EdgeQL property.
 const SHARED_COL_RE = /__col__([A-Za-z0-9_]+?)(?:__excl__|\.|$)/;
@@ -76,47 +79,6 @@ export interface ExclusiveCheck {
   exceptColumn?: string;
 }
 
-// Parse `except (.flag)` → the bare flag column name.
-const EXCEPT_COL_RE = /\(?\s*\.([A-Za-z_][A-Za-z0-9_]*)\s*\)?/;
-const exceptColumnFrom = (exceptExpr?: string): string | undefined => {
-  if (!exceptExpr) return undefined;
-  const m = EXCEPT_COL_RE.exec(exceptExpr);
-  return m ? m[1] : undefined;
-};
-
-export const typeAncestorsOf = (schema: SchemaSnapshot, typeDef: TypeDef): TypeDef[] => {
-  const seen = new Set<string>();
-  const out: TypeDef[] = [];
-  const visit = (name: string): void => {
-    const t = schema.getType(name);
-    if (!t || seen.has(qualifiedTypeName(t))) return;
-    seen.add(qualifiedTypeName(t));
-    out.push(t);
-    for (const base of t.extends ?? []) visit(base);
-  };
-  for (const base of typeDef.extends ?? []) visit(base);
-  return out;
-};
-
-export const constraintIsExclusiveLike = (c: { name: string }): boolean =>
-  c.name === "std::exclusive" || c.name === "exclusive";
-
-// All concrete tables that share `field`'s exclusive constraint with `typeDef`
-// — the declaring type's whole subtree (so a Person/DerivedPerson name clash is
-// caught), mirroring materializeExclusivity's shared bookkeeping table.
-const tablesSharingFieldConstraint = (
-  schema: SchemaSnapshot,
-  typeDef: TypeDef,
-  ownerName: string,
-): string[] => {
-  const tables = new Set<string>();
-  for (const concrete of schema.listConcreteTypesAssignableTo(ownerName)) {
-    tables.add(tableNameForType(qualifiedTypeName(concrete)));
-  }
-  tables.add(tableNameForType(qualifiedTypeName(typeDef)));
-  return [...tables];
-};
-
 // Enumerate the exclusive constraints to test for an INSERT under UNLESS
 // CONFLICT. `targetFields` restricts the set to those that exactly cover the
 // `ON (...)` target; a bare UNLESS CONFLICT (undefined) tests every exclusive
@@ -126,90 +88,17 @@ export const exclusiveChecksFor = (
   typeDef: TypeDef,
   targetFields: string[] | undefined,
 ): ExclusiveCheck[] => {
-  const checks: ExclusiveCheck[] = [];
-  const ancestors = typeAncestorsOf(schema, typeDef);
-
-  const linkColumn = (name: string): { column: string; isLink: boolean } => {
-    const link = (typeDef.links ?? []).find((l) => l.name === name);
-    return link ? { column: `${name}_id`, isLink: true } : { column: name, isLink: false };
-  };
-
-  // ── Field-level single-property exclusive constraints ──
-  for (const field of typeDef.fields) {
-    if (field.name === "id") continue;
-    const constraints =
-      (
-        field as {
-          constraints?: Array<{
-            name: string;
-            delegated?: boolean;
-            onExpr?: string;
-            exceptExpr?: string;
-          }>;
-        }
-      ).constraints ?? [];
-    const excl = constraints.find(constraintIsExclusiveLike);
-    if (!excl) continue;
-    // Locate the topmost ancestor declaring the same field constraint to find
-    // the shared-table owner + whether it's inherited.
-    let owner = typeDef;
-    for (const anc of ancestors) {
-      const ancField = anc.fields.find((f) => f.name === field.name) as
-        | { constraints?: Array<{ name: string }> }
-        | undefined;
-      if (ancField?.constraints?.some(constraintIsExclusiveLike)) owner = anc;
-    }
-    const lower =
-      excl.onExpr !== undefined && /str_lower\s*\(\s*__subject__\s*\)/.test(excl.onExpr);
-    checks.push({
-      fields: [field.name],
-      columns: [field.name],
-      lower,
-      multiProp: (field as { multi?: boolean }).multi ? field.name : undefined,
-      tables: tablesSharingFieldConstraint(schema, typeDef, qualifiedTypeName(owner)),
-      fromParent: qualifiedTypeName(owner) !== qualifiedTypeName(typeDef),
-      exceptColumn: exceptColumnFrom(excl.exceptExpr),
-    });
-  }
-
-  // ── Type-level exclusive constraints (single- or multi-field tuples) ──
-  // Recover the field references a type-level constraint covers. Most carry an
-  // explicit `fieldRefs`, but the `(__subject__.first, __subject__.last)` form
-  // leaves it empty — derive the names from the expression text instead.
-  const fieldRefsOf = (tc: { fieldRefs: string[]; exprText?: string }): string[] => {
-    if (tc.fieldRefs.length > 0) return tc.fieldRefs;
-    const text = tc.exprText ?? "";
-    const refs: string[] = [];
-    const re = /(?:__subject__|)\s*\.([A-Za-z_][A-Za-z0-9_]*)/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) refs.push(m[1]);
-    return refs;
-  };
-
-  const collectTypeConstraints = (t: TypeDef, parent: boolean): void => {
-    for (const tc of t.typeConstraints ?? []) {
-      if (!constraintIsExclusiveLike(tc)) continue;
-      const fields = fieldRefsOf(tc);
-      if (fields.length === 0) continue;
-      const columns = fields.map((f) => linkColumn(f).column);
-      const lower = /str_lower\s*\(\s*__subject__\s*\)/.test(tc.exprText ?? "");
-      const tables = new Set<string>();
-      for (const concrete of schema.listConcreteTypesAssignableTo(qualifiedTypeName(t))) {
-        tables.add(tableNameForType(qualifiedTypeName(concrete)));
-      }
-      tables.add(tableNameForType(qualifiedTypeName(typeDef)));
-      checks.push({
-        fields,
-        columns,
-        lower,
-        tables: [...tables],
-        fromParent: parent,
-        exceptColumn: exceptColumnFrom((tc as { exceptExpr?: string }).exceptExpr),
-      });
-    }
-  };
-  collectTypeConstraints(typeDef, false);
-  for (const anc of ancestors) collectTypeConstraints(anc, true);
+  const checks: ExclusiveCheck[] = exclusiveConstraintFactsForType(schema, typeDef)
+    .filter((fact) => !fact.fields.includes("id"))
+    .map((fact) => ({
+      fields: fact.fields,
+      columns: fact.columns,
+      lower: fact.lower,
+      multiProp: fact.multiProp,
+      tables: fact.typeNames.map(tableNameForType),
+      fromParent: fact.fromParent,
+      exceptColumn: fact.exceptField,
+    }));
 
   // The implicit `id` PRIMARY KEY is exclusive on every type. It only matters
   // under `allow_user_specified_id` (otherwise ids are server-generated and

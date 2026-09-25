@@ -2703,6 +2703,7 @@ class Parser {
       }
     }
     let value: DDLStatement["value"];
+    let valueText: DDLStatement["valueText"];
     let functionDecl: DDLStatement["functionDecl"];
     let createTypeBody: DDLStatement["createTypeBody"];
     let alterTypeOps: DDLStatement["alterTypeOps"];
@@ -2713,7 +2714,9 @@ class Parser {
       this.peek().kind === "assign"
     ) {
       this.expect("assign", "Expected ':=' in DDL definition");
+      const valueStart = this.peek().offset;
       value = this.parseFreeObjectExpr();
+      valueText = this.sliceSource(valueStart, this.peek().offset).trim();
     } else if (action === "create" && objectKind === "function") {
       const volatilityOut: { value?: string } = {};
       functionDecl = this.parseCreateFunctionTail(setCommands, volatilityOut);
@@ -2751,6 +2754,7 @@ class Parser {
       objectKind,
       name,
       value,
+      valueText,
       functionDecl,
       modifiers: modifiers.length > 0 ? modifiers : undefined,
       extendsList,
@@ -10200,6 +10204,9 @@ const parseSetModuleStatementFromTokens = (tokens: Token[]): string | undefined 
 
   return i === tokens.length ? parts.join("::") : undefined;
 };
+
+export const isSetModuleCommand = (input: string): boolean =>
+  parseSetModuleStatementFromTokens(tokenizeWithStarts(input).tokens) !== undefined;
 
 export const parseEdgeQL = (input: string, options: ParseEdgeQLOptions = {}): Statement => {
   if (process.env.VITEST_FORCE_GRAMMAR_PARSER === "1") return parseEdgeQLGrammar(input);

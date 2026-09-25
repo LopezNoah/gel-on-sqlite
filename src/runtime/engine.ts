@@ -12,7 +12,12 @@ import {
 } from "../compiler/dml_lowering.js";
 import { AppError, asAppError, isQueryFailure, tryProbe, tryResult } from "../errors.js";
 import { decorateErrorWithUnsupportedTag } from "../diagnostics/unsupported.js";
-import { parseEdgeQL, parseEdgeQLScript, type ParseEdgeQLOptions } from "../edgeql/parser.js";
+import {
+  isSetModuleCommand,
+  parseEdgeQL,
+  parseEdgeQLScript,
+  type ParseEdgeQLOptions,
+} from "../edgeql/parser.js";
 import { offsetToLineCol, tokenize, type Token } from "../edgeql/tokenizer.js";
 import type {
   BacklinkExpr,
@@ -1286,21 +1291,17 @@ const registerDynamicTypeDDL = (
   return true;
 };
 
-const maybeRegisterDynamicDDLScript = (
+const maybeRegisterDynamicDDLStatements = (
   db: SQLiteDatabase,
   schema: SchemaSnapshot,
-  script: string,
+  statements: Statement[],
   defaultModule = "default",
 ): boolean => {
-  // Parse the script once and drive the CREATE TYPE / ALTER TYPE / CREATE
-  // FUTURE pre-registration off the DDL AST nodes — the parser already produced
-  // `createTypeBody` / `alterTypeOps`. A parse failure means there's nothing to
-  // pre-register; the main execution path reports the real error. See
-  // docs/adr/0032.
-  const parsed = tryResult(() => parseEdgeQLScript(script));
-  if (!parsed.ok) return false;
+  // Drive CREATE TYPE / ALTER TYPE / CREATE FUTURE pre-registration from the
+  // already-parsed DDL AST nodes. The parser produced `createTypeBody` /
+  // `alterTypeOps`; see docs/adr/0032.
   let registeredType = false;
-  for (const stmt of parsed.value) {
+  for (const stmt of statements) {
     if (stmt.kind !== "ddl") continue;
     registeredType = registerDynamicTypeDDL(schema, stmt, defaultModule) || registeredType;
     registeredType = applyAlterTypeDDL(schema, stmt, defaultModule) || registeredType;
@@ -1316,163 +1317,139 @@ const maybeRegisterDynamicDDLScript = (
   return registeredType;
 };
 
-const maybeHandleAliasDDLScript = (schema: SchemaSnapshot, script: string): boolean => {
-  const trimmed = script.trim().replace(/;\s*$/, "");
-  if (!trimmed) {
+type RuntimeAliasSelect = {
+  select: Extract<FreeObjectExpr, { kind: "select" }>;
+  hasFilter: boolean;
+  limit?: number;
+};
+
+const selectInAliasValue = (value: FreeObjectExpr | undefined): RuntimeAliasSelect | undefined => {
+  if (!value) return undefined;
+  if (value.kind === "select") {
+    return {
+      select: value,
+      hasFilter: value.clauses.filter !== undefined,
+      limit: value.clauses.limit,
+    };
+  }
+  if (value.kind === "select_expr_subquery") {
+    const nested = selectInAliasValue(value.expr);
+    if (!nested) return undefined;
+    return {
+      select: nested.select,
+      hasFilter: nested.hasFilter || value.filter !== undefined,
+      limit: value.limit ?? nested.limit,
+    };
+  }
+  return undefined;
+};
+
+const maybeHandleAliasDDLStatements = (
+  schema: SchemaSnapshot,
+  statements: Statement[],
+): boolean => {
+  if (statements.length === 0) return false;
+  let handledAny = false;
+
+  for (const statement of statements) {
+    if (statement.kind !== "ddl") return false;
+
+    // CREATE TYPE is registered by the preceding AST-driven DDL pre-pass;
+    // these statements remain no-ops here, as they were in the text handler.
+    if (
+      (statement.action === "create" &&
+        (statement.objectKind === "type" || statement.objectKind === "module")) ||
+      (statement.action === "drop" &&
+        (statement.objectKind === "type" ||
+          statement.objectKind === "global" ||
+          statement.objectKind === "module"))
+    ) {
+      handledAny = true;
+      continue;
+    }
+
+    if (statement.action === "create" && statement.objectKind === "alias") {
+      const exprBody = statement.valueText;
+      if (exprBody === undefined || !statement.value) return false;
+      const aliasModuleName = statement.withModule ?? "default";
+      const { module, name: aliasName } = dynamicQualifiedNameParts(
+        statement.name,
+        aliasModuleName,
+      );
+      const aliasKey = statement.name.includes("::") ? statement.name : aliasName;
+      const aliasSelect = selectInAliasValue(statement.value);
+      const select = aliasSelect?.select;
+      const schemaRegistrable =
+        aliasSelect !== undefined &&
+        (aliasSelect.select.shape.some(
+          (el) => "name" in el && el.name !== "id" && el.origin !== "default",
+        ) ||
+          aliasSelect.hasFilter);
+      const hasExplicitShape =
+        select?.shape.some((element) => element.origin === "explicit") ?? false;
+      if (schemaRegistrable) {
+        schema.addAlias({ module, name: aliasName, exprText: exprBody });
+      }
+
+      const typedAliases = getRuntimeTypedAliasMap(schema);
+      const typedAlias = parseRuntimeTypedAliasDef(aliasName, exprBody, module);
+      if (typedAlias) {
+        typedAliases.set(aliasKey, typedAlias);
+        getRuntimeExprAliasMap(schema).delete(aliasKey);
+        handledAny = true;
+        continue;
+      }
+
+      const normalizedExprBody = stripRuntimeAliasOuterParens(exprBody.trim());
+      if (select && hasExplicitShape) {
+        typedAliases.set(aliasKey, {
+          aliasName,
+          moduleName: module,
+          sourceType: qualifyRuntimeTypeName(select.typeName, module),
+          hasShape: true,
+          limit: aliasSelect.limit,
+          computedProperties: parseRuntimeAliasComputedProperties(normalizedExprBody),
+          computedExistsProperties: parseRuntimeAliasComputedExistsProperties(
+            normalizedExprBody,
+            module,
+          ),
+          linkOverrides: parseRuntimeAliasLinkOverrides(normalizedExprBody, module),
+        });
+        getRuntimeExprAliasMap(schema).delete(aliasKey);
+        handledAny = true;
+        continue;
+      }
+
+      const aliases = getRuntimeExprAliasMap(schema);
+      const selectSetMatch = /^select\s+(\{[\s\S]*\})$/i.exec(normalizedExprBody);
+      aliases.set(aliasKey, selectSetMatch ? selectSetMatch[1] : `(${normalizedExprBody})`);
+      typedAliases.delete(aliasKey);
+      handledAny = true;
+      continue;
+    }
+
+    if (statement.action === "drop" && statement.objectKind === "alias") {
+      const { module, name: aliasName } = dynamicQualifiedNameParts(
+        statement.name,
+        statement.withModule ?? "default",
+      );
+      const aliasKey = statement.name.includes("::") ? statement.name : aliasName;
+      schema.removeAlias(`${module}::${aliasName}`);
+      const aliases = getRuntimeExprAliasMap(schema);
+      aliases.delete(aliasKey);
+      aliases.delete(aliasName);
+      const typedAliases = getRuntimeTypedAliasMap(schema);
+      typedAliases.delete(aliasKey);
+      typedAliases.delete(aliasName);
+      handledAny = true;
+      continue;
+    }
+
+    // CREATE GLOBAL and all other DDL continue through the statement executor.
     return false;
   }
 
-  const statements = script
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0);
-  if (statements.length > 1) {
-    let handledAny = false;
-    for (const statement of statements) {
-      if (!maybeHandleAliasDDLScript(schema, `${statement};`)) {
-        return false;
-      }
-      handledAny = true;
-    }
-    return handledAny;
-  }
-
-  if (/^set\s+module\s+/i.test(trimmed)) {
-    return true;
-  }
-
-  // `CREATE GLOBAL` is handled by the per-statement executor (it registers the
-  // global and evaluates computed defaults), so let it fall through rather than
-  // treating it as a handled no-op here. `type`/`module` remain no-ops.
-  if (
-    /^create\s+(?:type|module)\b/i.test(trimmed) ||
-    /^drop\s+(?:type|global|module)\b/i.test(trimmed)
-  ) {
-    return true;
-  }
-
-  const createMatch =
-    /^create\s+alias\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)\s*:=\s*([\s\S]*)$/i.exec(
-      trimmed,
-    );
-  if (createMatch) {
-    const [, rawAliasName, exprBody] = createMatch;
-    const aliasModuleName = rawAliasName.includes("::")
-      ? rawAliasName.split("::").slice(0, -1).join("::")
-      : "default";
-    const aliasName = rawAliasName.split("::").at(-1) ?? rawAliasName;
-    const aliasKey = rawAliasName.includes("::") ? rawAliasName : aliasName;
-    // Register the alias on the schema only when its body parses as a SELECT
-    // statement (the form expandSchemaAliasesInStatement knows how to inline).
-    // Other forms (`SELECT { (name := ...), ... }` free-object sets, scalar
-    // expressions) stay on the runtime-expr-alias path so we don't shadow
-    // their existing handling.
-    const trimmedExprBody = exprBody.trim().replace(/;\s*$/, "");
-    let probeBody = trimmedExprBody;
-    while (probeBody.startsWith("(") && probeBody.endsWith(")")) {
-      const inner = probeBody.slice(1, -1).trim();
-      let depth = 0;
-      let balanced = true;
-      for (const ch of inner) {
-        if (ch === "(") depth += 1;
-        else if (ch === ")") {
-          depth -= 1;
-          if (depth < 0) {
-            balanced = false;
-            break;
-          }
-        }
-      }
-      if (!balanced || depth !== 0) break;
-      probeBody = inner;
-    }
-    let schemaRegistrable = false;
-    for (const candidate of [probeBody, `SELECT ${probeBody}`]) {
-      try {
-        const probe = parseEdgeQL(candidate);
-        if (
-          probe.kind === "select" &&
-          probe.typeName &&
-          (probe.shape?.some(
-            (el) =>
-              "name" in el && el.name !== "id" && (el as { origin?: string }).origin !== "default",
-          ) ||
-            probe.filter)
-        ) {
-          schemaRegistrable = true;
-          break;
-        }
-      } catch (e) {
-        // Probe: try the next candidate form only on genuine parse
-        // failures; engine bugs must not be masked here.
-        if (!isQueryFailure(e)) throw e;
-      }
-    }
-    if (schemaRegistrable) {
-      schema.addAlias({
-        module: aliasModuleName,
-        name: aliasName,
-        exprText: exprBody.trim(),
-      });
-    }
-    const typedAliases = getRuntimeTypedAliasMap(schema);
-    const typedAlias = parseRuntimeTypedAliasDef(aliasName, exprBody, aliasModuleName);
-    if (typedAlias) {
-      typedAliases.set(aliasKey, typedAlias);
-      const aliases = getRuntimeExprAliasMap(schema);
-      aliases.delete(aliasKey);
-      return true;
-    }
-
-    const normalizedExprBody = stripRuntimeAliasOuterParens(exprBody.trim());
-    const genericTypedAlias = /^select\s+([A-Za-z_][\w:]*)\s*\{/i.exec(normalizedExprBody);
-    if (genericTypedAlias) {
-      typedAliases.set(aliasKey, {
-        aliasName,
-        moduleName: aliasModuleName,
-        sourceType: qualifyRuntimeTypeName(genericTypedAlias[1], aliasModuleName),
-        hasShape: true,
-        limit: Number(/\blimit\s+(\d+)/i.exec(normalizedExprBody)?.[1] ?? "0") || undefined,
-        computedProperties: parseRuntimeAliasComputedProperties(normalizedExprBody),
-        computedExistsProperties: parseRuntimeAliasComputedExistsProperties(
-          normalizedExprBody,
-          aliasModuleName,
-        ),
-        linkOverrides: parseRuntimeAliasLinkOverrides(normalizedExprBody, aliasModuleName),
-      });
-      const aliases = getRuntimeExprAliasMap(schema);
-      aliases.delete(aliasKey);
-      return true;
-    }
-
-    const aliases = getRuntimeExprAliasMap(schema);
-    const selectSetMatch = /^select\s+(\{[\s\S]*\})$/i.exec(normalizedExprBody);
-    aliases.set(aliasKey, selectSetMatch ? selectSetMatch[1] : `(${normalizedExprBody})`);
-    typedAliases.delete(aliasKey);
-    return true;
-  }
-
-  const dropMatch = /^drop\s+alias\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)$/i.exec(
-    trimmed,
-  );
-  if (dropMatch) {
-    const [, rawAliasName] = dropMatch;
-    const aliasName = rawAliasName.split("::").at(-1) ?? rawAliasName;
-    const aliasModule = rawAliasName.includes("::")
-      ? rawAliasName.split("::").slice(0, -1).join("::")
-      : "default";
-    const aliasKey = rawAliasName.includes("::") ? rawAliasName : aliasName;
-    schema.removeAlias(`${aliasModule}::${aliasName}`);
-    const aliases = getRuntimeExprAliasMap(schema);
-    aliases.delete(aliasKey);
-    aliases.delete(aliasName);
-    const typedAliases = getRuntimeTypedAliasMap(schema);
-    typedAliases.delete(aliasKey);
-    typedAliases.delete(aliasName);
-    return true;
-  }
-
-  return false;
+  return handledAny;
 };
 
 const injectRuntimeAliasBinding = (schema: SchemaSnapshot, query: string): string => {
@@ -1898,8 +1875,15 @@ export const executeScript = (
   if (registerBareSdlFunctionScript(db, schema, script, securityContext.strictUserDDL ?? false)) {
     return { kind: "insert", changes: 0 };
   }
-  maybeRegisterDynamicDDLScript(db, schema, script);
-  if (maybeHandleAliasDDLScript(schema, script)) {
+  const aliasStatements = tryResult(() => parseEdgeQLScript(script, parserOptions));
+  if (aliasStatements.ok) {
+    maybeRegisterDynamicDDLStatements(db, schema, aliasStatements.value);
+  }
+  if (
+    aliasStatements.ok &&
+    (maybeHandleAliasDDLStatements(schema, aliasStatements.value) ||
+      (aliasStatements.value.length === 0 && isSetModuleCommand(script)))
+  ) {
     // Alias state changed; refresh the schema::* introspection rows so
     // SELECT schema::Type FILTER .name = 'newAlias' picks them up. Both
     // typed (schema.addAlias) and runtime expr aliases (runtimeExprAliases
@@ -6297,14 +6281,14 @@ export const executeQueryUnitWithTrace = (
     // Validate user-DDL accessibility before the pre-pass so read-only
     // module targets (`CREATE TYPE std::Foo`, …) never get registered.
     validateScriptUserDDL(script, parserOptions, securityContext.strictUserDDL ?? false);
-    maybeRegisterDynamicDDLScript(db, schema, script);
+    const statements = parseEdgeQLScript(script, parserOptions);
+    maybeRegisterDynamicDDLStatements(db, schema, statements);
     // Seed the context with session globals stored on this schema (from prior
     // script() calls on the same connection); statements in this script may add
     // more, refreshing `context.globals` as they run.
     const context = withSessionGlobals(schema, normalizeSecurityContext(securityContext));
     const runtimeTarget = resolvedRuntimeTarget(context, db);
     const compilerService = getCompilerService();
-    const statements = parseEdgeQLScript(script, parserOptions);
     if (statements.length === 0) {
       throw new Error("No statements to execute");
     }
