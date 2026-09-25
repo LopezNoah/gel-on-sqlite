@@ -91,8 +91,13 @@ import type {
   ScalarType,
   ScalarValue,
   TypeDef,
+  ComputedLinkPropertyExpr,
 } from "../types.js";
-import { qualifiedTypeName, type SchemaSnapshot } from "../schema/schema.js";
+import {
+  normalizeLinkTargetNames,
+  qualifiedTypeName,
+  type SchemaSnapshot,
+} from "../schema/schema.js";
 import type { GeneratedSchema, GeneratedSchemaType } from "../codegen/schema.js";
 import { resolveSchemaModelForCompile } from "../codegen/schema_loader.js";
 import { astPathExprToQlast } from "./ast_to_qlast.js";
@@ -592,6 +597,19 @@ const scalarTypeRef = (scalar: ScalarType): TypeRef => {
 // (`src/compiler/qlast_setgen.ts`), which reuses the live schema-resolution
 // helpers so its port produces real IR rather than a toy. Behaviour-neutral.
 export const resolveTypeRef = (ctx: IRCompileContext, name: string): TypeRef => {
+  const unionMembers = normalizeLinkTargetNames(name, ctx.module);
+  if (unionMembers.length > 1) {
+    const refs = unionMembers.map((member) => resolveTypeRef(ctx, member));
+    const first = refs[0];
+    if (first && refs.every((ref) => !ref.id.startsWith("unknown:"))) {
+      return {
+        ...first,
+        id: refs.map((ref) => ref.id).join(" | "),
+        isScalar: refs.every((ref) => ref.isScalar),
+        isAbstract: false,
+      };
+    }
+  }
   const typeDef = getSchemaType(ctx, name);
   if (typeDef) {
     return typeRefFromTypeDef(ctx, typeDef);
@@ -1456,6 +1474,7 @@ export const resolvePointerRef = (
       .replace(/^unknown:/, "")
       .split("|")
       .map((part) => part.trim());
+    const unionLinks: PointerRef[] = [];
     for (const componentId of componentIds) {
       const componentDef =
         getResolvedSchemaType(ctx, componentId) ?? ctx.schema?.getType(componentId);
@@ -1472,8 +1491,40 @@ export const resolvePointerRef = (
         "resolvedLinks" in componentDef ? componentDef.resolvedLinks : componentDef.links;
       const cLink = (componentLinks ?? []).find((c) => c.name === field);
       if (cLink) {
-        return pointerRefFromLink(source, resolveTypeRef(ctx, cLink.targetType), cLink);
+        unionLinks.push(
+          pointerRefFromLink(
+            resolveTypeRef(ctx, componentId),
+            resolveTypeRef(ctx, cLink.targetType),
+            cLink,
+          ),
+        );
       }
+    }
+    if (unionLinks.length > 0) {
+      const first = unionLinks[0];
+      const targetIds = [...new globalThis.Set(unionLinks.map((link) => link.outTarget.id))];
+      const outCardinality = unionLinks.some(
+        (link) => link.outCardinality === "many" || link.outCardinality === "at_least_one",
+      )
+        ? "many"
+        : unionLinks.every((link) => link.outCardinality === "one")
+          ? "one"
+          : "at_most_one";
+      return {
+        ...first,
+        id: `${source.id}.link::${field}`,
+        outSource: source,
+        outTarget:
+          targetIds.length === 1
+            ? first.outTarget
+            : { ...first.outTarget, id: targetIds.join(" | "), isAbstract: false },
+        outCardinality,
+        inCardinality: unionLinks.some((link) => link.inCardinality === "many")
+          ? "many"
+          : "at_most_one",
+        hasProperties: unionLinks.some((link) => link.hasProperties),
+        unionComponents: unionLinks,
+      };
     }
   }
 
@@ -5446,7 +5497,9 @@ export const compileFreeObjectExpr = (
           let anyComponentDefinesLink = false;
           for (const comp of components) {
             const linkOwnerTypeRef =
-              linkPointer.direction === "inbound" ? comp.outSource : linkPointer.source.typeref;
+              linkPointer.direction === "inbound" || linkPointer.ptrref.unionComponents?.length
+                ? comp.outSource
+                : linkPointer.source.typeref;
             const linkOwnerResolved = getResolvedSchemaType(ctx, linkOwnerTypeRef.id);
             const linkDef = linkOwnerResolved?.resolvedLinks.find(
               (candidate) => candidate.name === linkPointer.ptrref.shortName,
@@ -8054,6 +8107,27 @@ const tryCompileRootedFieldPath = (
   return out;
 };
 
+const compileBacklinkPropertyRef = (
+  link: string,
+  sourceType: string | undefined,
+  property: string,
+  ctx: IRCompileContext,
+): Set =>
+  compileFreeObjectExpr(
+    {
+      kind: "field_access",
+      expr: {
+        kind: "backlink_path",
+        link,
+        sourceType,
+        optional: false,
+      },
+      field: `@${property}`,
+      optional: false,
+    },
+    ctx,
+  );
+
 const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
   if (
     value === null ||
@@ -8071,7 +8145,21 @@ const compileFilterValue = (value: FilterValue, ctx: IRCompileContext): Set => {
       const rooted = tryCompileRootedFieldPath(value.root, value.field, ctx);
       if (rooted) return rooted;
     }
+    if (value.field.startsWith("@")) {
+      return compileFreeObjectExpr(
+        {
+          kind: "field_access",
+          expr: { kind: "current_item" },
+          field: value.field,
+          optional: false,
+        },
+        ctx,
+      );
+    }
     return compileFreeObjectExpr({ kind: "binding_ref", name: value.field }, ctx);
+  }
+  if (value.kind === "backlink_property_ref") {
+    return compileBacklinkPropertyRef(value.link, value.sourceType, value.property, ctx);
   }
   if (value.kind === "set_literal") {
     return literalToSet(value.values.length);
@@ -8314,12 +8402,19 @@ const compileFilterExpr = (filter: FilterExpr, subject: Set, ctx: IRCompileConte
           ? compileFreeObjectExpr({ kind: "binding_ref", name: filter.values.name }, ctx)
           : filter.values.kind === "select"
             ? setFromTypeRoot(resolveTypeRef(ctx, filter.values.query.typeName))
-            : filter.values.kind === "expr_set"
-              ? compileSetConstructor(
-                  filter.values.values.map((value) => compileFreeObjectExpr(value, ctx)),
-                  "filter:in:expr_set",
+            : filter.values.kind === "backlink_property_ref"
+              ? compileBacklinkPropertyRef(
+                  filter.values.link,
+                  filter.values.sourceType,
+                  filter.values.property,
+                  ctx,
                 )
-              : literalToSet(null);
+              : filter.values.kind === "expr_set"
+                ? compileSetConstructor(
+                    filter.values.values.map((value) => compileFreeObjectExpr(value, ctx)),
+                    "filter:in:expr_set",
+                  )
+                : literalToSet(null);
     return {
       kind: "set",
       expr: {
@@ -9998,7 +10093,8 @@ const compileShape = (
   };
 
   const withShapeModifiers = (expr: Set, el: EdgeQLShapeElement): Set => {
-    const hasFilter = !!el.where;
+    const filterExpr = el.where ?? (el.kind === "link" ? el.clauses.filter : undefined);
+    const hasFilter = filterExpr !== undefined;
     const hasOrder = !!el.orderBy?.length;
     const hasLimit = el.limit !== undefined;
     const hasOffset = el.offset !== undefined;
@@ -10022,7 +10118,7 @@ const compileShape = (
       // Also used to resolve a computed-sibling ORDER BY key against the link
       // target (`stw: { typename := … } ORDER BY .typename`).
       if (
-        (!el.where && !el.orderBy?.length) ||
+        (!filterExpr && !el.orderBy?.length) ||
         expr.typeref.isScalar ||
         expr.expr.kind !== "pointer"
       )
@@ -10039,14 +10135,14 @@ const compileShape = (
     // which builds the operator_call from target/op/value. Routed against the
     // link's target rows (the bound `__subject__`).
     const whereIsFilterExpr =
-      el.where !== undefined &&
+      filterExpr !== undefined &&
       ["predicate", "and", "or", "not", "in_predicate", "free_expr"].includes(
-        (el.where as { kind: string }).kind,
+        (filterExpr as { kind: string }).kind,
       );
-    const where = el.where
+    const where = filterExpr
       ? whereIsFilterExpr
-        ? compileFilterExpr(el.where as unknown as FilterExpr, expr, filterCtx)
-        : compileFreeObjectExpr(el.where, filterCtx)
+        ? compileFilterExpr(filterExpr as unknown as FilterExpr, expr, filterCtx)
+        : compileFreeObjectExpr(filterExpr as FreeObjectExpr, filterCtx)
       : undefined;
     const orderBy = el.orderBy?.map((entry) => {
       // `ORDER BY @prop` — a link-property sort key on the link being shaped
@@ -10154,6 +10250,30 @@ const compileShape = (
     el: Extract<EdgeQLShapeElement, { kind: "field" | "computed" }>,
     propertyName: string = el.name,
   ): ShapeElement | undefined => {
+    const computedPropertyExpr = (expr: ComputedLinkPropertyExpr): FreeObjectExpr => {
+      if (expr.kind === "literal") return { kind: "literal", value: expr.value };
+      if (expr.kind === "field_ref") {
+        return {
+          kind: "field_access",
+          expr: { kind: "current_item" },
+          field: expr.name,
+          optional: false,
+        };
+      }
+      if (expr.kind === "link_property_ref") {
+        return {
+          kind: "field_access",
+          expr: { kind: "current_item" },
+          field: `@${expr.name}`,
+          optional: false,
+        };
+      }
+      const left = computedPropertyExpr(expr.left);
+      const right = computedPropertyExpr(expr.right);
+      if (expr.op === "++") return { kind: "concat", parts: [left, right] };
+      if (expr.op === "??") return { kind: "coalesce", left, right };
+      return { kind: "math", op: expr.op, left, right };
+    };
     const subjectExpr = subject.expr;
     let linkPtrRef: PointerRef | undefined;
     if (subjectExpr.kind === "pointer") {
@@ -10164,9 +10284,9 @@ const compileShape = (
         const linkSourceType = getResolvedSchemaType(ctx, linkPointer.source.typeref.id);
         if (linkSourceType) {
           const linkDef = linkSourceType.resolvedLinks.find((l) => l.name === linkPtr.shortName);
-          if (linkDef?.properties) {
+          if (linkDef) {
             const propName = propertyName.slice(1);
-            const propDef = linkDef.properties.find((p) => p.name === propName);
+            const propDef = linkDef.properties?.find((p) => p.name === propName);
             if (propDef) {
               const propertyPtrRef: PointerRef = {
                 kind: "pointer_ref",
@@ -10193,6 +10313,28 @@ const compileShape = (
                 shapeOrigin: resolveShapeOrigin(el),
                 required: el.required ?? propDef.required ?? false,
                 cardinality: el.cardinality ?? (propDef.required ? "one" : "at_most_one"),
+                name: el.name,
+              };
+            }
+            const computedProperty = linkDef.computedProperties?.find(
+              (candidate) => candidate.name === propName,
+            );
+            if (computedProperty) {
+              const computedContext = childScope(ctx);
+              bindValue(computedContext, "__current__", subject);
+              bindValue(computedContext, "__subject__", subject);
+              const computedExpr = compileFreeObjectExpr(
+                computedPropertyExpr(computedProperty.computedExpr),
+                computedContext,
+              );
+              return {
+                kind: "shape_element",
+                source: subject,
+                expr: withShapeModifiers(computedExpr, el),
+                shapeOp: el.operation,
+                shapeOrigin: resolveShapeOrigin(el),
+                required: el.required ?? false,
+                cardinality: el.cardinality ?? "at_most_one",
                 name: el.name,
               };
             }

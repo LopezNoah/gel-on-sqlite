@@ -1374,6 +1374,25 @@ describe("TestEdgeQLLinkproperties", () => {
     );
   });
 
+  it("test_edgeql_props_nested_insert_01", () => {
+    h.query(`
+      INSERT User {
+        name := 'Nested insert user',
+        deck := (INSERT Card {
+          name := 'Nested insert card',
+          element := 'Air',
+          cost := 2,
+          @count := 7,
+        }),
+      };
+    `);
+    assertQueryResult(
+      h,
+      `SELECT User {deck: {name, @count}} FILTER .name = 'Nested insert user';`,
+      [{ deck: [{ name: "Nested insert card", "@count": 7 }] }],
+    );
+  });
+
   it("test_edgeql_props_back_01", () => {
     assertQueryResult(
       h,

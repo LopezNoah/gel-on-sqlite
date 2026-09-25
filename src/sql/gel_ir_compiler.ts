@@ -5718,6 +5718,24 @@ const linkTableSourceForPointer = (link: Pointer, options?: GelIRCompileOptions)
   return `(${union})`;
 };
 
+const linkPropertyTableSourceForPointer = (
+  link: Pointer,
+  propertyColumn: string,
+  options?: GelIRCompileOptions,
+): string => {
+  const tables = linkStorageTablesForPointer(link, options);
+  if (tables.length <= 1) {
+    return quoteIdent(tables[0] ?? linkTableNameForPointer(link, options));
+  }
+  const union = tables
+    .map(
+      (table) =>
+        `SELECT ${quoteIdent("source")}, ${quoteIdent("target")}, ${quoteIdent(propertyColumn)} FROM ${quoteIdent(table)}`,
+    )
+    .join(" UNION ALL ");
+  return `(${union})`;
+};
+
 // One home for the per-link choice between the two pointer-step join shapes: a
 // link-table step joins through its junction alias, an inline step through the
 // `<name>_id` FK column. The four join shapes themselves live in
@@ -6549,10 +6567,16 @@ const tryCompileLinkPropertyPathSelectSQL = (
   // decided this terminal link is inline-FK only (no properties, single
   // outbound), the property reference is meaningless and we bail.
   if (!shouldUseLinkTable(terminalLink)) return null;
+  const leafShortName = path.leafProperty.ptrref.shortName;
+  const propertyColumn = leafShortName.startsWith("@") ? leafShortName.slice(1) : leafShortName;
 
   const checkpoint = params.length;
   const rootAlias = POINTER_ROOT_ALIAS;
   const rootCols = new Set<string>(["id"]);
+  const firstLink = path.links[0];
+  if (firstLink && firstLink.direction === "outbound" && !shouldUseLinkTable(firstLink)) {
+    rootCols.add(`${firstLink.ptrref.shortName}_id`);
+  }
   let fromSql = compilePolymorphicSource(
     path.root.typeref,
     false,
@@ -6566,15 +6590,17 @@ const tryCompileLinkPropertyPathSelectSQL = (
     const link = path.links[index];
     const isTerminal = index === path.links.length - 1;
     const linkAlias = pointerStepLinkAlias(index);
-    const linkTable = linkTableNameForPointer(link, options);
+    const linkTable = isTerminal
+      ? linkPropertyTableSourceForPointer(link, propertyColumn, options)
+      : linkTableNameForPointer(link, options);
     if (isTerminal) {
       if (link.direction === "inbound") {
         fromSql +=
-          ` JOIN ${quoteIdent(linkTable)} ${linkAlias}` +
+          ` JOIN ${linkTable} ${linkAlias}` +
           ` ON ${linkAlias}.${quoteIdent("target")} = ${previousAlias}.${quoteIdent("id")}`;
       } else {
         fromSql +=
-          ` JOIN ${quoteIdent(linkTable)} ${linkAlias}` +
+          ` JOIN ${linkTable} ${linkAlias}` +
           ` ON ${linkAlias}.${quoteIdent("source")} = ${previousAlias}.${quoteIdent("id")}`;
       }
       previousAlias = linkAlias;
@@ -6588,6 +6614,10 @@ const tryCompileLinkPropertyPathSelectSQL = (
       if (link.direction === "inbound") {
         targetCols.add(inlineColumn);
       }
+    }
+    const nextLink = path.links[index + 1];
+    if (nextLink && nextLink.direction === "outbound" && !shouldUseLinkTable(nextLink)) {
+      targetCols.add(`${nextLink.ptrref.shortName}_id`);
     }
     const targetSource = compilePolymorphicSource(
       targetType,
@@ -6607,8 +6637,6 @@ const tryCompileLinkPropertyPathSelectSQL = (
     previousAlias = nextAlias;
   }
 
-  const leafShortName = path.leafProperty.ptrref.shortName;
-  const propertyColumn = leafShortName.startsWith("@") ? leafShortName.slice(1) : leafShortName;
   const leafSql = `${previousAlias}.${quoteIdent(propertyColumn)}`;
   const valueSql = scalarResultValueSQL(leafSql, path.leafProperty.ptrref.outTarget);
   params.length = checkpoint;
@@ -6631,17 +6659,17 @@ const tryCompileCorrelatedLinkPropertyPathSQL = (
   if (!path || path.links.length !== 1) return null;
   const link = path.links[0];
   if (!shouldUseLinkTable(link)) return null;
-  const linkTable = linkTableNameForPointer(link, options);
+  const leafShortName = path.leafProperty.ptrref.shortName;
+  const propertyColumn = leafShortName.startsWith("@") ? leafShortName.slice(1) : leafShortName;
+  const linkTable = linkPropertyTableSourceForPointer(link, propertyColumn, options);
   const lj = "lpj0";
   // For an inbound backlink the subject is the link's TARGET; for an outbound
   // link it is the SOURCE.
   const correlationColumn = link.direction === "inbound" ? "target" : "source";
-  const leafShortName = path.leafProperty.ptrref.shortName;
-  const propertyColumn = leafShortName.startsWith("@") ? leafShortName.slice(1) : leafShortName;
   const leafSql = `${lj}.${quoteIdent(propertyColumn)}`;
   const valueSql = scalarResultValueSQL(leafSql, path.leafProperty.ptrref.outTarget);
   return (
-    `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${quoteIdent(linkTable)} ${lj}` +
+    `SELECT ${valueSql} AS ${quoteIdent("value")} FROM ${linkTable} ${lj}` +
     ` WHERE ${lj}.${quoteIdent(correlationColumn)} = ${sourceAlias}.${quoteIdent("id")} AND ${leafSql} IS NOT NULL`
   );
 };
@@ -12905,6 +12933,26 @@ const compilePredicateSetSQL = (
       params.length = checkpoint;
       return null;
     }
+    const correlatedLinkProperty = tryCompileCorrelatedLinkPropertyPathSQL(
+      args[1].expr,
+      sourceAlias,
+      options,
+    );
+    if (correlatedLinkProperty) {
+      const left = compileValueSetSQL(
+        args[0].expr,
+        sourceAlias,
+        params,
+        target,
+        options,
+        linkPropertyAlias,
+      );
+      if (!left) {
+        params.length = checkpoint;
+        return null;
+      }
+      return `(${left} ${call.operator === "in" ? "IN" : "NOT IN"} (${correlatedLinkProperty}))`;
+    }
     // Correlated multi-scalar RHS: `'x' IN .tag_set1` where `.tag_set1` is
     // a multi-cardinality scalar property hanging off the outer source row.
     // Emit a correlated `json_each(g0.col)` subquery — a fresh
@@ -13221,9 +13269,16 @@ const compilePredicateSetSQL = (
   for (const swap of [false, true] as const) {
     const multiArgIdx = swap ? 1 : 0;
     const otherIdx = swap ? 0 : 1;
+    const arg = args[multiArgIdx].expr;
+    const isLocalLinkProperty =
+      linkPropertyAlias !== undefined &&
+      arg.expr.kind === "pointer" &&
+      (arg.expr as Pointer).ptrref.isLinkProperty;
     const multiCorrelated =
-      tryCompileCorrelatedMultiScalarRHS(args[multiArgIdx].expr, sourceAlias, options) ??
-      tryCompileCorrelatedLinkPropertyPathSQL(args[multiArgIdx].expr, sourceAlias, options);
+      tryCompileCorrelatedMultiScalarRHS(arg, sourceAlias, options) ??
+      (!isLocalLinkProperty
+        ? tryCompileCorrelatedLinkPropertyPathSQL(arg, sourceAlias, options)
+        : null);
     if (!multiCorrelated) continue;
     // Only emit the EXISTS lowering for equality / inequality / ordering
     // operators where set semantics is well-defined. AND/OR/IN have their
@@ -13704,7 +13759,9 @@ const compileValueSetSQL = (
   }
   if (expr.kind === "pointer") {
     const pointer = expr as Pointer;
-    const col = columnForPointer(pointer);
+    const col = pointer.ptrref.isLinkProperty
+      ? columnForPointer(pointer).replace(/^@/, "")
+      : columnForPointer(pointer);
     // Render this pointer's scalar leaf column, converting a stored bool 0/1
     // back to json('true')/json('false') so it compares equal to bool literals.
     // (Link properties are handled separately below and deliberately excluded.)
@@ -15638,6 +15695,11 @@ const rewriteFilterAgainstPointerChain = (filterSet: Set, outerPointer: Pointer)
         const aPtr = a.expr as Pointer;
         return aPtr.ptrref.id === b.ptrref.id && aPtr.direction === b.direction;
       };
+      // Inside a per-link FILTER, a link-property read from the iterated link
+      // must stay attached to that link so compileLinkedInnerSelect can read it
+      // through the live link-table alias. Re-rooting it at the target object
+      // would turn `@count` into a nonexistent object column.
+      if (ptr.ptrref.isLinkProperty && matches(innerSource, outerPointer)) return s;
       if (matches(innerSource, outerPointer)) {
         const newRoot: Set = {
           ...innerSource,
@@ -16363,7 +16425,14 @@ const compileShapeObjectExpr = (
     const computedExpr = iteratedPointer
       ? rewriteFilterAgainstPointerChain(element.expr, iteratedPointer)
       : element.expr;
-    const computed = compileValueSetSQL(computedExpr, sourceAlias, params, target, options);
+    const computed = compileValueSetSQL(
+      computedExpr,
+      sourceAlias,
+      params,
+      target,
+      options,
+      linkPropertyAlias,
+    );
     if (computed) {
       pairs.push(
         `${quoteLiteral(shapeAliasForElement(element, element.expr, depth))}, ${computed}`,

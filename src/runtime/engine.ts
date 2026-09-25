@@ -11311,6 +11311,62 @@ type LinkTargetAssignment = {
   properties: Record<string, ScalarValue>;
 };
 
+const resolveNestedInsertTargets = (
+  db: SQLiteDatabase,
+  schema: SchemaSnapshot,
+  statement: InsertStatement,
+  context: SecurityContext,
+  outerAst: InsertStatement,
+): LinkTargetAssignment[] => {
+  const linkProperties = Object.entries(statement.values).filter(([name]) => name.startsWith("@"));
+  if (linkProperties.length === 0) {
+    return executeNestedInsert(
+      db,
+      schema,
+      statement as Extract<InsertValue, { kind: "insert" }>,
+      context,
+      outerAst,
+    ).map((id) => ({ id, properties: {} }));
+  }
+
+  const values = { ...statement.values };
+  const shape = linkProperties.map(([name, value]) => {
+    delete values[name];
+    const expr =
+      value !== null && typeof value === "object" && value.kind === "expr"
+        ? value.expr
+        : { kind: "literal" as const, value: value as ScalarValue };
+    return {
+      kind: "computed" as const,
+      name,
+      expr: expr as never,
+      operation: "assign" as const,
+      origin: "explicit" as const,
+    };
+  });
+  const cleaned: InsertStatement = {
+    ...statement,
+    values,
+    with: statement.with ?? outerAst.with,
+    withModule: statement.withModule ?? outerAst.withModule,
+    withModuleAliases: statement.withModuleAliases ?? outerAst.withModuleAliases,
+  };
+  return resolveInsertTargets(
+    db,
+    schema,
+    {
+      kind: "expr",
+      expr: {
+        kind: "shape_projection",
+        expr: { kind: "mutation_expr", statement: cleaned },
+        shape,
+      },
+    },
+    context,
+    outerAst,
+  );
+};
+
 // Compile a link-value projection (`(<select-or-subselect>) { @prop := … }`,
 // possibly with non-literal/volatile linkprop bodies) as a standalone SELECT
 // and read each `@`-prefixed column off the resulting rows. This is the
@@ -11580,10 +11636,7 @@ const resolveInsertTargets = (
   }
 
   if (value.kind === "insert") {
-    return executeNestedInsert(db, schema, value, context, ast).map((id) => ({
-      id,
-      properties: {},
-    }));
+    return resolveNestedInsertTargets(db, schema, value as InsertStatement, context, ast);
   }
 
   // `(insert T { … }){ @a := 2 }` and bare expression wrappers around an
@@ -11606,13 +11659,7 @@ const resolveInsertTargets = (
     if (inner.kind === "mutation_expr") {
       const stmt = (inner as { kind: "mutation_expr"; statement: Statement }).statement;
       if (stmt.kind === "insert") {
-        return executeNestedInsert(
-          db,
-          schema,
-          stmt as Extract<InsertValue, { kind: "insert" }>,
-          context,
-          ast,
-        ).map((id) => ({ id, properties: {} }));
+        return resolveNestedInsertTargets(db, schema, stmt, context, ast);
       }
     }
     if (inner.kind === "shape_projection") {
@@ -11626,13 +11673,7 @@ const resolveInsertTargets = (
       if (innerExpr.kind === "mutation_expr") {
         const stmt = (innerExpr as { kind: "mutation_expr"; statement: Statement }).statement;
         if (stmt.kind === "insert") {
-          targets = executeNestedInsert(
-            db,
-            schema,
-            stmt as Extract<InsertValue, { kind: "insert" }>,
-            context,
-            ast,
-          ).map((id) => ({ id, properties: {} }));
+          targets = resolveNestedInsertTargets(db, schema, stmt, context, ast);
         }
       } else if (innerExpr.kind === "select") {
         targets = resolveInsertTargets(

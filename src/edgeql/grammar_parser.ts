@@ -303,9 +303,10 @@ const insertValue = (expr: FreeObjectExpr): InsertValue => {
   return { kind: "expr", expr };
 };
 const filterFromExpr = (predicate: FreeObjectExpr): FilterExpr => {
-  if (predicate.kind === "and" || predicate.kind === "or") {
+  if (predicate.kind === "and" || predicate.kind === "or" || predicate.kind === "logical") {
+    const kind = predicate.kind === "logical" ? predicate.op : predicate.kind;
     return {
-      kind: predicate.kind,
+      kind,
       left: filterFromExpr(predicate.left),
       right: filterFromExpr(predicate.right),
     };
@@ -318,12 +319,35 @@ const filterFromExpr = (predicate: FreeObjectExpr): FilterExpr => {
   ): Extract<FilterExpr, { kind: "predicate" | "in_predicate" }>["target"] | undefined => {
     if (left.kind === "path") return { kind: "field", field: left.tail, root: left.head };
     if (left.kind !== "field_access") return undefined;
+    const backlinkProperty = backlinkPropertyReference(left);
+    if (backlinkProperty) {
+      return {
+        kind: "backlink_property",
+        link: backlinkProperty.link,
+        sourceType: backlinkProperty.sourceType,
+        property: backlinkProperty.property,
+      };
+    }
     if (left.expr.kind === "current_item") return { kind: "field", field: left.field };
     if (left.expr.kind === "select")
       return { kind: "field", field: left.field, root: left.expr.typeName };
     if (left.expr.kind === "binding_ref")
       return { kind: "field", field: left.field, root: left.expr.name };
     return undefined;
+  };
+  const backlinkPropertyReference = (
+    expr: FreeObjectExpr,
+  ): { link: string; sourceType?: string; property: string } | undefined => {
+    if (expr.kind !== "field_access" || !expr.field.startsWith("@")) return undefined;
+    const backlink =
+      expr.expr.kind === "backlink_path"
+        ? expr.expr
+        : expr.expr.kind === "for_expr" && expr.expr.body.kind === "backlink_path"
+          ? expr.expr.body
+          : undefined;
+    return backlink
+      ? { link: backlink.link, sourceType: backlink.sourceType, property: expr.field.slice(1) }
+      : undefined;
   };
   if (predicate.kind === "in_expr") {
     const target = targetFor(predicate.left);
@@ -344,24 +368,66 @@ const filterFromExpr = (predicate: FreeObjectExpr): FilterExpr => {
               }
             : predicate.right.kind === "binding_ref"
               ? { kind: "name" as const, name: predicate.right.name }
-              : { kind: "expr_set" as const, values: [predicate.right] };
+              : backlinkPropertyReference(predicate.right)
+                ? {
+                    kind: "backlink_property_ref" as const,
+                    ...backlinkPropertyReference(predicate.right)!,
+                  }
+                : { kind: "expr_set" as const, values: [predicate.right] };
     return { kind: "in_predicate", target, op: predicate.op, values };
   }
   if (
     predicate.kind === "compare" &&
-    predicate.right.kind === "literal" &&
     (predicate.left.kind === "path" || predicate.left.kind === "field_access")
   ) {
     const target = targetFor(predicate.left);
     if (!target) return { kind: "free_expr", expr: predicate };
-    return {
-      kind: "predicate",
-      target,
-      op: predicate.op as Extract<FilterExpr, { kind: "predicate" }>["op"],
-      value: predicate.right.value,
-    };
+    const value =
+      predicate.right.kind === "literal"
+        ? predicate.right.value
+        : predicate.right.kind === "binding_ref"
+          ? { kind: "binding_ref" as const, name: predicate.right.name }
+          : predicate.right.kind === "field_access" && predicate.right.expr.kind === "current_item"
+            ? { kind: "field_ref" as const, field: predicate.right.field }
+            : backlinkPropertyReference(predicate.right)
+              ? {
+                  kind: "backlink_property_ref" as const,
+                  ...backlinkPropertyReference(predicate.right)!,
+                }
+              : undefined;
+    if (value !== undefined) {
+      return {
+        kind: "predicate",
+        target,
+        op: predicate.op as Extract<FilterExpr, { kind: "predicate" }>["op"],
+        value,
+      };
+    }
   }
   return { kind: "free_expr", expr: predicate };
+};
+const shapeWhereFromExpr = (expr: FreeObjectExpr): FreeObjectExpr | undefined => {
+  const filter = filterFromExpr(expr);
+  if (filter.kind === "free_expr") return filter.expr;
+  if (
+    filter.kind === "predicate" &&
+    filter.target.kind === "field" &&
+    ["=", "!=", "<", "<=", ">", ">="].includes(filter.op) &&
+    (filter.value === null ||
+      typeof filter.value === "string" ||
+      typeof filter.value === "number" ||
+      typeof filter.value === "boolean")
+  ) {
+    return expr;
+  }
+  if (
+    filter.kind === "in_predicate" &&
+    filter.target.kind === "field" &&
+    (filter.values.kind === "set_literal" || filter.values.kind === "expr_set")
+  ) {
+    return expr;
+  }
+  return undefined;
 };
 const syntaxError = (message: string, line = 1, column = 1): AppError =>
   new AppError("E_SYNTAX", message, line, column);
@@ -484,6 +550,19 @@ function wrapWithGrammarSelectTail(expr: FreeObjectExpr, tail: GrammarSelectTail
   };
 }
 
+function applyGrammarSelectTail(expr: FreeObjectExpr, tail: GrammarSelectTail): FreeObjectExpr {
+  if (expr.kind !== "for_expr") return wrapWithGrammarSelectTail(expr, tail);
+  return {
+    ...expr,
+    ...(tail.filter ? { filter: tail.filter } : {}),
+    ...(tail.order ? { orderBy: { expr: tail.order.expr, direction: tail.order.direction } } : {}),
+    ...(tail.offset !== undefined ? { offset: tail.offset } : {}),
+    ...(tail.offsetExpr ? { offsetExpr: tail.offsetExpr } : {}),
+    ...(tail.limit !== undefined ? { limit: tail.limit } : {}),
+    ...(tail.limitExpr ? { limitExpr: tail.limitExpr } : {}),
+  };
+}
+
 function orderExprForSelect(item: GrammarOrderItem, typeName: string): OrderExpr {
   const orderField =
     item.expr.kind === "field_access" &&
@@ -599,6 +678,7 @@ class GrammarParser extends EmbeddedActionsParser {
   declare orExpr: () => FreeObjectExpr;
   declare andExpr: () => FreeObjectExpr;
   declare comparison: () => FreeObjectExpr;
+  declare comparisonCore: () => FreeObjectExpr;
   declare additive: () => FreeObjectExpr;
   declare multiplicative: () => FreeObjectExpr;
   declare coalescing: () => FreeObjectExpr;
@@ -1038,7 +1118,16 @@ class GrammarParser extends EmbeddedActionsParser {
       }));
     });
     $.RULE("insertEntry", (): { name: string; value: InsertValue } => {
-      const name = $.CONSUME(Name).image;
+      const name = $.OR([
+        {
+          GATE: () => tokenMatcher($.LA(1), tokens.at),
+          ALT: () => {
+            $.CONSUME(tokens.at);
+            return `@${$.CONSUME(Name).image}`;
+          },
+        },
+        { ALT: () => $.CONSUME2(Name).image },
+      ]);
       $.CONSUME(tokens.assign);
       const expr = $.SUBRULE($.expression);
       return $.ACTION(() => ({ name, value: insertValue(expr) }));
@@ -1634,7 +1723,20 @@ class GrammarParser extends EmbeddedActionsParser {
       });
       return left;
     });
-    $.RULE("comparison", (): FreeObjectExpr => {
+    $.RULE("comparison", (): FreeObjectExpr =>
+      $.OR([
+        {
+          GATE: () => tokenMatcher($.LA(1), tokens.kw_not),
+          ALT: () => {
+            $.CONSUME(tokens.kw_not);
+            const expr = $.SUBRULE2($.comparison);
+            return $.ACTION<FreeObjectExpr>(() => ({ kind: "unary", op: "not", expr }));
+          },
+        },
+        { ALT: () => $.SUBRULE($.comparisonCore) },
+      ]),
+    );
+    $.RULE("comparisonCore", (): FreeObjectExpr => {
       const left = $.SUBRULE($.additive);
       let result = left;
       $.OPTION(() => {
@@ -1926,6 +2028,7 @@ class GrammarParser extends EmbeddedActionsParser {
                       ],
                     }
                   : expr.kind === "binding_ref" &&
+                      !$.bindings.has(expr.name) &&
                       $.bindingValues.get(expr.name)?.kind !== "subquery"
                     ? {
                         kind: "path" as const,
@@ -2244,6 +2347,7 @@ class GrammarParser extends EmbeddedActionsParser {
       const entry = $.SUBRULE($.shapeEntryCore);
       const tail = $.SUBRULE($.selectTail);
       return $.ACTION(() => {
+        const where = tail.filter ? shapeWhereFromExpr(tail.filter) : undefined;
         const orderBy: OrderExpr[] = [];
         let order = tail.order;
         while (order) {
@@ -2253,7 +2357,7 @@ class GrammarParser extends EmbeddedActionsParser {
         const modifiers = {
           ...(required !== undefined ? { required } : {}),
           ...(cardinality !== undefined ? { cardinality } : {}),
-          ...(tail.filter ? { where: tail.filter } : {}),
+          ...(where ? { where } : {}),
           ...(orderBy.length ? { orderBy } : {}),
           ...(tail.offset !== undefined ? { offset: tail.offset } : {}),
           ...(tail.offsetExpr ? { offsetExpr: tail.offsetExpr } : {}),
@@ -2585,7 +2689,7 @@ class GrammarParser extends EmbeddedActionsParser {
           $.bindings.delete(binder.variable);
           $.bindingValues.delete(binder.variable);
         }
-        return hasGrammarSelectTail(tail) ? wrapWithGrammarSelectTail(result, tail) : result;
+        return hasGrammarSelectTail(tail) ? applyGrammarSelectTail(result, tail) : result;
       });
     });
     $.RULE("atom", (): FreeObjectExpr =>
@@ -2840,6 +2944,19 @@ class GrammarParser extends EmbeddedActionsParser {
       const expr = $.SUBRULE($.expression);
       const tail = $.SUBRULE($.selectTail);
       return $.ACTION(() => {
+        if (expr.kind === "for_expr" && !alias) {
+          return {
+            ...expr,
+            ...(tail.filter ? { filter: tail.filter } : {}),
+            ...(tail.order
+              ? { orderBy: { expr: tail.order.expr, direction: tail.order.direction } }
+              : {}),
+            ...(tail.limit !== undefined ? { limit: tail.limit } : {}),
+            ...(tail.offset !== undefined ? { offset: tail.offset } : {}),
+            ...(tail.limitExpr ? { limitExpr: tail.limitExpr } : {}),
+            ...(tail.offsetExpr ? { offsetExpr: tail.offsetExpr } : {}),
+          };
+        }
         const filter =
           tail.filter && expr.kind === "select" ? filterFromExpr(tail.filter) : undefined;
         const sortInShape =

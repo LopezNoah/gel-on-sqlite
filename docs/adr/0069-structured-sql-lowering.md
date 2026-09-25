@@ -1,0 +1,32 @@
+# Lower Live IR into a scoped SQL AST before rendering
+
+## Status
+
+Proposed.
+
+## Context
+
+The Live IR is lowered directly into SQL strings by `src/sql/gel_ir_compiler.ts` and its sibling modules. `Relation` already provides a structured, mutable relation and path registry, but its range sources, predicates, projections, and path variables are still SQL text. In particular, its documented design choice is to leave expressions as strings. This makes it possible to compose a fragment containing an alias that is not in scope, to serialize a child query before it has the columns a parent needs, or to compile fragments in a different order from their positional parameters. ADR 0064 made `Relation` the authority for path resolution; ADRs 0058 and 0067 establish owned parameters for migrated SQL fragments. Neither decision by itself makes the resulting SQL structurally valid.
+
+## Decision
+
+Lower migrated Live IR families to a **SQLite SQL AST** and render that AST, rather than assembling their SQL with interpolated strings. The intended pipeline is `Live IR → scoped SQL AST → SQLite renderer → GelIRSQLArtifact { sql, params, loweringMode, … }`. This is a backend representation, not a second EdgeQL semantic IR: the Live IR and its scope-tree/factoring facts still decide set semantics, correlation permission, object identity, cardinality, and which physical link storage to read. `Relation` remains the authority for *which* path/aspect is supplied by *which* range variable; the SQL AST represents and checks the resulting relational and expression structure. Path resolution must not be used as permission to correlate (ADR 0064).
+
+The AST must represent, as typed nodes, the constructs used by each migrated lowering: table and derived-table sources, joins and their predicates, SELECT projections and clauses, UNION ALL and WITH as needed, correlated subqueries, column references, operators, calls, CASE, literals, and bound values. A column reference carries the identity of the range variable that supplies it (and its column), not just a printable alias. A child relation's exported columns have explicit identities; a parent may only refer to those exports. The renderer assigns/prints SQL aliases, quotes identifiers, parenthesizes expressions, and emits `?` placeholders while collecting bound values in **render order**. A parameterized subtree can be rendered in exactly one place; repeated use of an expression must be represented explicitly (for example, by binding it once in a derived table), rather than duplicating its SQL or its bound values.
+
+Rendering validates the structural contract: references resolve to an in-scope range variable or an explicitly permitted enclosing scope, derived-table references resolve to projected columns, and unsupported nodes fail explicitly. It does **not** attempt to infer EdgeQL factoring, prove that every physical table has a column, or make an incorrect logical plan correct merely by rendering it. Schema-backed pointer/link-table selection and scope-tree decisions stay in their existing authorities. `sqlite` and `d1` continue to use SQLite-compatible output; introduce no new dialect abstraction without a concrete need.
+
+This revises the *expressions stay strings* choice in `src/sql/relation.ts` for migrated families, without replacing its path registry. Avoid maintaining a parallel string-based path-resolution mechanism or a generic `raw SQL` node as the normal representation: either would preserve the alias/scope hazards behind an AST-shaped wrapper. A narrow, identified legacy-fragment adapter is permitted at the migration edge, owns its parameters, and cannot claim AST scope validation for its contents.
+
+## Migration and acceptance
+
+1. Add the minimal typed AST and renderer behind the existing `compileGelIRToSQL` interface; preserve `GelIRSQLArtifact` and the SQL gate/compile-inspection contracts. Prove identifier quoting, expression precedence, nested scope/export validation, and render-order parameter binding with focused renderer tests.
+2. Adapt a small relational slice (a simple SELECT with a filter and projection) from `Relation` into the AST. Decide the ownership of range-variable and export identities once, so `Relation`'s recursive column injection updates the still-structured child before rendering. Do not serialize the child early and reparse its SQL.
+3. Move a representative link-property path through the same structure, including its junction-table alias, a correlated predicate or subquery, and a polymorphic/union link-storage case. This is the slice that exercises the proposed seam; semantic correctness is checked against executed results, not only valid SQL.
+4. Migrate further lowering families incrementally. A migrated family emits through one structured path; remove its old string assembly once equivalent. Legacy families may continue to return owned fragments at an explicit outer adaptation seam (ADR 0067). No all-at-once rewrite of the SQL compiler or of runtime DML SQL is required by this decision.
+
+Each migrated slice is accepted when renderer validation rejects a missing or out-of-scope alias/export, nested parameters retain their values and order after composition or branch rejection, compile inspection preserves the intended SQL gate/strategy, and representative SQLite execution tests preserve EdgeQL results (including correlation and link-property multiplicity). Canonical SQL goldens can flag structural changes, but byte-identical SQL is not a requirement: rendering is allowed to change aliases and formatting. Unsupported constructs must keep an explicit legacy route or report unsupported; do not silently route a partly built AST into a second semantic lowering.
+
+## Consequences and alternatives
+
+The backend gains one place to render syntax and bind values, plus a structural test surface for aliases and projections. This costs additional AST node types, a renderer, and a temporary migration seam; it does not eliminate the need to fix incorrect EdgeQL lowering. Merely wrapping SQL strings in nodes was rejected because it cannot check scope or exports. Replacing `Relation` with a second path registry was rejected because it duplicates the authority established by ADR 0064. A wholesale replacement was rejected because the existing SQL compiler and its runtime consumers make incremental, execution-checked migration safer.

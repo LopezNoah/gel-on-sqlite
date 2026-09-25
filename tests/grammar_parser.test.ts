@@ -5,7 +5,10 @@ import { CompilerService } from "../src/compiler/service.js";
 import { schemaFromSdl } from "../src/compiler/inspect.js";
 import { tableNameForType } from "../src/codegen/sql.js";
 import { parseEdgeQLGrammar, parseEdgeQLGrammarScript } from "../src/edgeql/grammar_parser.js";
-import { parseGelGrammarStatement } from "../src/edgeql/gel_lr_ast_reducer.js";
+import {
+  parseGelGrammarScript,
+  parseGelGrammarStatement,
+} from "../src/edgeql/gel_lr_ast_reducer.js";
 import { parseEdgeQLScript } from "../src/edgeql/parser.js";
 import { extractSuiteQueries } from "../scripts/grammar-query-corpus.js";
 import {
@@ -584,10 +587,64 @@ describe("grammar-backed SELECT parser", () => {
     expect(() => parseGelGrammarStatement("SELECT 1; SELECT 2;")).toThrow(
       /simple SELECT statements only/,
     );
-    expect(() => parseGelGrammarStatement("SELECT User {friends: {name}};")).toThrow(
-      /plain field entries only/,
-    );
-    expect(() => parseGelGrammarStatement("SELECT 1 ORDER BY 1;")).toThrow(/SELECT clauses/);
+    expect(parseGelGrammarStatement("SELECT User {friends: {name}};")).toMatchObject({
+      kind: "select",
+      shape: [{ kind: "link", name: "friends", shape: [{ kind: "field", name: "name" }] }],
+    });
+    expect(() => parseGelGrammarStatement("SELECT User {*};")).toThrow(/missing its field name/);
+    expect(parseGelGrammarStatement("SELECT 1 ORDER BY 1;")).toMatchObject({
+      kind: "select_expr",
+      orderBy: { expr: { kind: "literal", value: 1 }, direction: "asc" },
+    });
+  });
+
+  it("reduces aliases and SELECT filter, sort, and pagination clauses", () => {
+    expect(
+      parseGelGrammarStatement(
+        "SELECT result := User {name} FILTER .name = 'Ada' ORDER BY .name DESC EMPTY FIRST THEN .id OFFSET 2 LIMIT 3;",
+      ),
+    ).toMatchObject({
+      kind: "select",
+      typeName: "default::User",
+      resultAlias: "result",
+      shape: [{ kind: "field", name: "name" }],
+      filter: {
+        kind: "predicate",
+        target: { kind: "field", field: "name" },
+        op: "=",
+        value: "Ada",
+      },
+      orderBy: {
+        field: "name",
+        direction: "desc",
+        nullsPosition: "first",
+        then: { field: "id", direction: "asc" },
+      },
+      offset: 2,
+      limit: 3,
+    });
+  });
+
+  it("reduces multiple generated SELECT statements with source positions", () => {
+    const statements = parseGelGrammarScript("SELECT 1; SELECT 2;");
+    expect(statements.map((statement) => statement.kind)).toEqual(["select_expr", "select_expr"]);
+    expect(statements.map((statement) => statement.pos.column)).toEqual([1, 11]);
+    expect(parseGelGrammarScript(";;;")).toEqual([]);
+  });
+
+  it.each([
+    "SELECT User {friends: {name}};",
+    "SELECT User {friends: {name} FILTER .name != 'x' ORDER BY .name};",
+    "SELECT result := User {name} FILTER .name = 'Ada' ORDER BY .name DESC EMPTY FIRST THEN .id OFFSET 2 LIMIT 3;",
+    "SELECT 1 ORDER BY 1 DESC;",
+    "SELECT User OFFSET 2;",
+  ])("matches the production working AST for a reduced slice: %s", (query) => {
+    expect(parseGelGrammarStatement(query, "")).toEqual(parseEdgeQLGrammar(query));
+  });
+
+  it("applies an explicit default module to generated object subjects", () => {
+    const query = "SELECT User {name};";
+    expect(parseGelGrammarStatement(query, "app")).toMatchObject({ typeName: "app::User" });
   });
 
   it("reduces a generated object-shape query and executes its projected field", () => {
@@ -618,6 +675,67 @@ describe("grammar-backed SELECT parser", () => {
     }
   });
 
+  it("executes generated object SELECT aliases with filter, sort, and pagination", () => {
+    const schema = schemaFromSdl("type Foo { required name: str; }");
+    const { db } = openSQLite(":memory:");
+    try {
+      materializeSchema(db, schema);
+      const table = tableNameForType("default::Foo");
+      const insert = db.prepare(`INSERT INTO ${table} (id, name) VALUES (?, ?)`);
+      insert.run("foo-a", "Ada");
+      insert.run("foo-b", "Bea");
+      insert.run("foo-c", "Cleo");
+
+      const statement = parseGelGrammarStatement(
+        "SELECT result := Foo {name} FILTER .name != 'Ada' ORDER BY .name DESC OFFSET 0 LIMIT 1;",
+      );
+      const artifact = new CompilerService().compile(schema, statement);
+      const rows = db.prepare(artifact.sql.sql).all(...artifact.sql.params) as Array<{
+        name: string;
+      }>;
+      expect(rows.map((row) => row.name)).toEqual(["Cleo"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("compiles generated nested link shapes with their own clauses", () => {
+    const schema = schemaFromSdl("type Foo { required name: str; multi friends: Foo; }");
+    const statement = parseGelGrammarStatement(
+      "SELECT Foo {friends: {name} FILTER .name != 'Ada' ORDER BY .name LIMIT 2};",
+    );
+    const artifact = new CompilerService().compile(schema, statement);
+    expect(artifact.sql.sql.trim()).not.toBe("");
+  });
+
+  it("reads link properties from each concrete link table in a union path", () => {
+    const schema = schemaFromSdl(`
+      type Tgt;
+      type Bar { link l: Tgt { property x: str; } }
+      type Foo { link l: Tgt { property x: str; } }
+      type Baz { link fubar: Bar | Foo; }
+    `);
+    const statement = parseEdgeQLGrammar("SELECT Baz.fubar.l@x;");
+    const artifact = new CompilerService().compile(schema, statement);
+
+    expect(artifact.sql.sql).toContain('"default__bar__l"');
+    expect(artifact.sql.sql).toContain('"default__foo__l"');
+    expect(artifact.sql.sql).not.toContain('"default__bar|default__foo__l"');
+  });
+
+  it("lowers schema-computed link properties as expressions", () => {
+    const schema = schemaFromSdl(
+      fs.readFileSync(new URL("./schemas/cards.esdl", import.meta.url), "utf8"),
+    );
+    const statement = parseEdgeQLGrammar(
+      "SELECT User {name, deck: {name, @total_cost} ORDER BY .name} FILTER .name = 'Alice';",
+    );
+    const artifact = new CompilerService().compile(schema, statement);
+
+    expect(artifact.sql.sql).toContain('j1."count" * p1."cost"');
+    expect(artifact.sql.sql).not.toContain('j1."total_cost"');
+  });
+
   it.each(gelAstGoldens)("matches Gel AST golden for $query", ({ query, ast }) => {
     expect(parseEdgeQLGrammar(query)).toEqual(ast);
   });
@@ -645,6 +763,153 @@ describe("grammar-backed SELECT parser", () => {
     expect(parseEdgeQLGrammar("SELECT Issue {multi te := .time_estimate};")).toMatchObject({
       kind: "select",
       shape: [{ kind: "computed", name: "te", cardinality: "many" }],
+    });
+  });
+
+  it("reduces link-property filters and backlink link-property targets", () => {
+    expect(
+      parseEdgeQLGrammar(
+        "SELECT User {deck: {name, cost, @count} FILTER .cost = @count ORDER BY @count DESC};",
+      ),
+    ).toMatchObject({
+      kind: "select",
+      shape: [
+        {
+          kind: "link",
+          name: "deck",
+          clauses: {
+            filter: {
+              kind: "predicate",
+              target: { kind: "field", field: "cost" },
+              op: "=",
+              value: { kind: "field_ref", field: "@count" },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(parseEdgeQLGrammar("SELECT Card FILTER Card.<deck[IS User]@count = 1;")).toMatchObject({
+      kind: "select",
+      filter: {
+        kind: "predicate",
+        target: {
+          kind: "backlink_property",
+          link: "deck",
+          sourceType: "User",
+          property: "count",
+        },
+        op: "=",
+        value: 1,
+      },
+    });
+
+    expect(
+      parseEdgeQLGrammar("SELECT Card FILTER .<deck[IS User]@count = 1 AND .element != 'Fire';"),
+    ).toMatchObject({
+      kind: "select",
+      filter: {
+        kind: "and",
+        left: {
+          kind: "predicate",
+          target: { kind: "backlink_property", link: "deck", property: "count" },
+          op: "=",
+          value: 1,
+        },
+        right: {
+          kind: "predicate",
+          target: { kind: "field", field: "element" },
+          op: "!=",
+          value: "Fire",
+        },
+      },
+    });
+
+    expect(parseEdgeQLGrammar("SELECT Card FILTER .cost IN .<deck[IS User]@count;")).toMatchObject({
+      kind: "select",
+      filter: {
+        kind: "in_predicate",
+        target: { kind: "field", field: "cost" },
+        op: "in",
+        values: {
+          kind: "backlink_property_ref",
+          link: "deck",
+          sourceType: "User",
+          property: "count",
+        },
+      },
+    });
+
+    expect(parseEdgeQLGrammar("SELECT Card FILTER NOT .<deck[IS User]@count = 1;")).toMatchObject({
+      kind: "select",
+      filter: {
+        kind: "not",
+        expr: {
+          kind: "predicate",
+          target: { kind: "backlink_property", link: "deck", property: "count" },
+          op: "=",
+          value: 1,
+        },
+      },
+    });
+  });
+
+  it("resolves link-property paths from bindings in FOR expressions", () => {
+    expect(
+      parseEdgeQLGrammar(
+        "SELECT (FOR Card IN Card FOR owner IN Card.owners SELECT (Card.name, owner.name, owner@count));",
+      ),
+    ).toMatchObject({
+      kind: "select_expr",
+      expr: {
+        kind: "for_expr",
+        body: {
+          kind: "for_expr",
+          iterator: {
+            kind: "field_access",
+            expr: { kind: "binding_ref", name: "Card" },
+            field: "owners",
+          },
+          body: {
+            kind: "tuple",
+            values: [
+              {
+                kind: "field_access",
+                expr: { kind: "binding_ref", name: "Card" },
+                field: "name",
+              },
+              {
+                kind: "field_access",
+                expr: { kind: "binding_ref", name: "owner" },
+                field: "name",
+              },
+              {
+                kind: "field_access",
+                expr: { kind: "binding_ref", name: "owner" },
+                field: "@count",
+              },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it("parses link-property assignments on nested INSERT values", () => {
+    expect(parseEdgeQLGrammar('INSERT Bar {l := (INSERT Tgt2 { @x := "test" })};')).toMatchObject({
+      kind: "insert",
+      values: {
+        l: {
+          kind: "expr",
+          expr: {
+            kind: "mutation_expr",
+            statement: {
+              kind: "insert",
+              values: { "@x": "test" },
+            },
+          },
+        },
+      },
     });
   });
 

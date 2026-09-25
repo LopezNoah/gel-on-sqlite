@@ -508,12 +508,55 @@ export const fieldSequenceName = (schema: SchemaSnapshot, field: FieldDef): stri
  * Splits a (possibly union, e.g. "A | B") link target type string into a list
  * of fully qualified type names, qualifying bare names with `moduleName`.
  */
-export const normalizeLinkTargetNames = (targetType: string, moduleName: string): string[] =>
-  targetType
-    .split("|")
-    .map((part) => part.trim())
+const stripOuterTypeParens = (source: string): string => {
+  let value = source.trim();
+  while (value.startsWith("(") && value.endsWith(")")) {
+    let depth = 0;
+    let enclosesWholeType = true;
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index] === "(") depth += 1;
+      else if (value[index] === ")") depth -= 1;
+      if (depth === 0 && index < value.length - 1) {
+        enclosesWholeType = false;
+        break;
+      }
+    }
+    if (!enclosesWholeType || depth !== 0) break;
+    value = value.slice(1, -1).trim();
+  }
+  return value;
+};
+
+const splitTopLevelTypeUnion = (source: string): string[] => {
+  const parts: string[] = [];
+  let start = 0;
+  let parenDepth = 0;
+  let angleDepth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "(") parenDepth += 1;
+    else if (character === ")") parenDepth -= 1;
+    else if (character === "<") angleDepth += 1;
+    else if (character === ">") angleDepth -= 1;
+    else if (character === "|" && parenDepth === 0 && angleDepth === 0) {
+      parts.push(source.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(source.slice(start));
+  return parts;
+};
+
+export const normalizeLinkTargetNames = (targetType: string, moduleName: string): string[] => {
+  const target = targetType.trim();
+  const moduleWrappedUnion = /^([^()]+::)\((.*)\)$/s.exec(target);
+  const source = moduleWrappedUnion ? moduleWrappedUnion[2] : stripOuterTypeParens(target);
+  const defaultPrefix = moduleWrappedUnion?.[1] ?? `${moduleName}::`;
+  return splitTopLevelTypeUnion(source)
+    .map((part) => stripOuterTypeParens(part).trim())
     .filter((part) => part.length > 0)
-    .map((part) => (part.includes("::") ? part : `${moduleName}::${part}`));
+    .map((part) => (part.includes("::") ? part : `${defaultPrefix}${part}`));
+};
 
 const isUniversalObjectName = (name: string): boolean =>
   name === "default::Object" || name === "std::Object" || name === "Object";
